@@ -40,9 +40,10 @@ import {
 	migrateWelcomeViewCompleted,
 	migrateWorkspaceToGlobalStorage,
 } from "./core/storage/state-migrations"
-import { setBoardViewerOpener } from "./core/webview/board-viewer-hooks"
+import { boardChanged, setBoardViewerOpener } from "./core/webview/board-viewer-hooks"
 import { workspaceResolver } from "./core/workspace"
 import { focusForFile } from "./hosts/vscode/board-viewer/collect"
+import { DraftBoard } from "./hosts/vscode/board-viewer/draft"
 import { type BoardViewerDeps, openBoardViewerPanel } from "./hosts/vscode/board-viewer/panel"
 import { findMatchingNotebookCell, getContextForCommand, showWebview } from "./hosts/vscode/commandUtils"
 import { abortCommitGeneration, generateCommitMsg } from "./hosts/vscode/commit-message-generator"
@@ -78,6 +79,9 @@ export async function reportRolloutActivation(input: RolloutBundleActivation): P
 // This method is called when the VS Code extension is activated.
 // NOTE: This is VS Code specific - services that should be registered
 // for all-platform should be registered in common.ts.
+/** The Board tab's draft board, per workspace: its task events. */
+const DRAFT_BOARD_KEY = "cerebriline.draftBoard"
+
 export async function activate(context: vscode.ExtensionContext) {
 	const activationStartTime = performance.now()
 
@@ -220,17 +224,57 @@ export async function activate(context: vscode.ExtensionContext) {
 	// in an editor-area panel. From the palette, a pipeline file's title bar
 	// (which hands it the file) and the task panel's "Open board".
 	{
+		// With no conversation open, the Board tab builds a draft board that the
+		// next new conversation starts from (kept per workspace across reloads).
+		const draftBoard = new DraftBoard({
+			get: () => context.workspaceState.get<unknown[]>(DRAFT_BOARD_KEY),
+			set: (events) => void context.workspaceState.update(DRAFT_BOARD_KEY, events),
+		})
+		const conversationOpen = () => !!webview.controller.task
 		const boardViewerDeps: BoardViewerDeps = {
 			extensionUri: context.extensionUri,
 			workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
 			boardText: () => {
+				if (!conversationOpen()) return draftBoard.text()
 				const messages = webview.controller.task?.messageStateHandler.getClineMessages() ?? []
 				for (let i = messages.length - 1; i >= 0; i--) {
 					if (messages[i].say === "task_graph" && messages[i].text) return messages[i].text
 				}
 				return undefined
 			},
-			boardEdit: (action: { op: "update"; updates: unknown[] }) => webview.controller.taskGraphAction(action),
+			boardIsDraft: () => !conversationOpen(),
+			boardEdit: (action) =>
+				conversationOpen()
+					? webview.controller.taskGraphAction(action as Parameters<typeof webview.controller.taskGraphAction>[0])
+					: draftBoard.edit(action),
+			draftStart: () => {
+				if (conversationOpen()) {
+					return {
+						ok: false,
+						lines: ["A conversation is open. Start a new one (the + button) to hand it this board."],
+					}
+				}
+				if (draftBoard.isEmpty()) return { ok: false, lines: ["The draft board has no tasks yet."] }
+				webview.controller.useTaskBoard({
+					events: draftBoard.events(),
+					by: "person",
+					keepUpdated: false,
+					about: "the person made it in the Board tab for this conversation",
+					onTaken: () => {
+						draftBoard.clear()
+						boardChanged()
+					},
+				})
+				void vscode.commands.executeCommand("cerebriline.SidebarProvider.focus")
+				return {
+					ok: true,
+					lines: ["Send your first message in the chat: the new conversation starts from this board."],
+				}
+			},
+			draftDiscard: () => {
+				draftBoard.clear()
+				return { ok: true, lines: ["The draft board is discarded."] }
+			},
 			runAction: (action) => webview.controller.pipelineRunAction(action),
 		}
 		setBoardViewerOpener((focus) => openBoardViewerPanel(boardViewerDeps, focus))

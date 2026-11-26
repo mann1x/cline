@@ -28,6 +28,8 @@ export interface CollectInput {
 	workspace: string
 	/** The conversation's latest `task_graph` row text. */
 	boardText?: string
+	/** The board is the draft for the next new conversation. */
+	boardDraft?: boolean
 	focus?: ViewerFocus
 	maxRuns?: number
 	maxEvents?: number
@@ -44,6 +46,7 @@ export function collectViewerData(input: CollectInput): ViewerData {
 	return {
 		workspace,
 		...(input.boardText ? { boardText: input.boardText } : {}),
+		...(input.boardDraft ? { boardDraft: true } : {}),
 		pipelines: readPipelines(workspace),
 		runs: readRuns(workspace, input.maxRuns ?? VIEWER_MAX_RUNS, input.maxEvents ?? VIEWER_MAX_EVENTS),
 		...(input.focus ? { focus: input.focus } : {}),

@@ -956,11 +956,16 @@ export class TaskGraphTracker {
 		if (result === "seeded") {
 			this.boardDue = false;
 			const board = renderBoard(this.store.getState());
+			// A board the person made for this conversation (the Board tab's
+			// draft) has no earlier conversation behind it.
+			const made = seed?.by === "person";
 			this.userNotes.push(
 				[
-					`[SYSTEM] This conversation starts from a task board the person saved earlier${
-						seed?.about ? ` (${seed.about})` : ""
-					}. Its tasks keep their ids, notes and outcomes; the ones closed were closed in the conversation it came from. Work from it as from any board: start, update and close tasks as you go.`,
+					made
+						? "[SYSTEM] This conversation starts from a task board the person made for it: their plan for the work. Work from it as from any board: start, update and close tasks as you go, and tell the person if a task is unclear."
+						: `[SYSTEM] This conversation starts from a task board the person saved earlier${
+								seed?.about ? ` (${seed.about})` : ""
+							}. Its tasks keep their ids, notes and outcomes; the ones closed were closed in the conversation it came from. Work from it as from any board: start, update and close tasks as you go.`,
 					board ? `The board, as it stands:\n${board}` : "",
 				]
 					.filter(Boolean)

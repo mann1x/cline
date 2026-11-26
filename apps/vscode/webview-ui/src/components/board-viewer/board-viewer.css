@@ -141,6 +141,17 @@
 	text-transform: uppercase;
 	padding: 10px 14px 4px;
 }
+.bv-rail-heading:has(.bv-rail-action) {
+	align-items: baseline;
+	display: flex;
+	justify-content: space-between;
+}
+.bv-rail-action {
+	font-size: 11px;
+	font-weight: 400;
+	letter-spacing: 0;
+	text-transform: none;
+}
 .bv-rail-empty {
 	color: var(--bv-muted);
 	padding: 2px 14px 4px;
@@ -730,6 +741,11 @@
 	display: flex;
 	gap: 6px;
 	margin-top: 8px;
+}
+.bv-add-task {
+	flex: 1;
+	margin-top: 0;
+	max-width: 420px;
 }
 .bv-input {
 	background: var(--vscode-input-background, var(--bv-surface));

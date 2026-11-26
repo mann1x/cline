@@ -3,16 +3,22 @@ import { MAIN_MEMORY, memorySelectionFor } from "@cline/shared"
 import { Logger } from "@shared/services/Logger"
 import { readMemorySettings } from "./library-config"
 
-/** A saved board, picked in the Memory panel, waiting for the next new conversation. */
+/**
+ * A board waiting for the next new conversation: one saved in Memory and
+ * picked in the Memory panel, or the Board tab's draft.
+ */
 export interface TaskBoardSeed {
 	events: unknown[]
-	/** The author its events get, as `memory:m12`. */
+	/** The author its events get, as `memory:m12`, or `person` for a draft. */
 	by: string
-	noteId: string
-	memory: string
+	/** The saved board it came from; a draft has none, so nothing is kept updated. */
+	noteId?: string
+	memory?: string
 	keepUpdated: boolean
 	/** Where it came from, for the model: as `m12, "ledger", saved 2026-11-21`. */
 	about?: string
+	/** Called when a new conversation takes it. */
+	onTaken?: () => void
 }
 
 /** Which saved board a session's board is tied to, for keep-updated. */
@@ -85,6 +91,7 @@ export class TaskBoardMemory {
 		if (!seed) return undefined
 		this.armed = undefined
 		this.attaching = seed
+		seed.onTaken?.()
 		return { events: seed.events, by: seed.by, ...(seed.about ? { about: seed.about } : {}) }
 	}
 
@@ -92,7 +99,9 @@ export class TaskBoardMemory {
 	attach(control: CoreTaskGraphControl): void {
 		this.control = control
 		if (this.attaching) {
-			this.link = { sessionId: control.sessionId, noteId: this.attaching.noteId, memory: this.attaching.memory }
+			const { noteId, memory } = this.attaching
+			// A draft came from no saved board: there is nothing to keep updated.
+			this.link = noteId && memory ? { sessionId: control.sessionId, noteId, memory } : undefined
 			this.attaching = undefined
 		} else if (this.link && this.link.sessionId !== control.sessionId) {
 			this.link = undefined

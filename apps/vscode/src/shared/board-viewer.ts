@@ -136,6 +136,11 @@ export interface ViewerData {
 	 * webview reads it with the task panel's own parser.
 	 */
 	boardText?: string
+	/**
+	 * No conversation is open: the board shown is the draft the person is
+	 * building for the next new conversation.
+	 */
+	boardDraft?: boolean
 	pipelines: ViewerPipeline[]
 	/** Newest first. */
 	runs: ViewerRun[]
@@ -163,6 +168,8 @@ export interface ViewerReplyMessage {
 	lines?: string[]
 	/** The run a run action left running: the same one, or a re-run's new one. */
 	run?: string
+	/** The pipeline a request made: the viewer shows it. */
+	pipeline?: string
 }
 
 /** A task from the board, as board → pipeline takes it. */
@@ -194,5 +201,12 @@ export type ViewerRequest =
 	| { type: "boardViewer/toTemplate"; id: number; slug: string }
 	/** A change to the conversation's board, as the task panel sends it (`task_update`'s fields). */
 	| { type: "boardViewer/editTask"; id: number; updates: Record<string, unknown>[] }
+	/** A new task on the board: the conversation's, or the draft when none is open. */
+	| { type: "boardViewer/addTask"; id: number; title: string }
+	/** The draft board goes to the next new conversation. */
+	| { type: "boardViewer/startFromDraft"; id: number }
+	| { type: "boardViewer/discardDraft"; id: number }
+	/** A new pipeline, named by the person and saved as theirs (approved). */
+	| { type: "boardViewer/newPipeline"; id: number }
 	/** The person's Retry, Skip, Re-run from a node, or Stop, on a pipeline run. */
 	| { type: "boardViewer/runAction"; id: number; op: ViewerRunOp; run: string; node?: string }

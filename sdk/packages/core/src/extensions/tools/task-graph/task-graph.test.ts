@@ -1035,6 +1035,35 @@ describe("saved boards (export to memory)", () => {
 		expect(tracker.store.getState().order).toEqual(["T1", "T2", "T3"]);
 	});
 
+	it("a board the person made for the conversation (the Board tab's draft) is told as theirs", () => {
+		const draft = new TaskGraphStore({ planMode: true });
+		draft.plan(
+			{
+				tasks: [
+					{ title: "Write the README" },
+					{ title: "Deploy it", gate: ["use-pipeline:deploy"] },
+				],
+			},
+			{ by: "person" },
+			{ autoStart: false },
+		);
+		const tracker = new TaskGraphTracker();
+		expect(
+			tracker.start([], undefined, {
+				events: [...draft.getEvents()],
+				by: "person",
+			}),
+		).toBe("seeded");
+		const start = tracker.takeRunStartNote() ?? "";
+		expect(start).toContain("starts from a task board the person made for it");
+		expect(start).not.toContain("saved earlier");
+		expect(start).toContain("Write the README");
+		// The pipeline the person gave a task travels with it.
+		expect(task(tracker.store, "T2")?.gates.map((gate) => gate.spec)).toEqual([
+			"use-pipeline:deploy",
+		]);
+	});
+
 	it("a seed is ignored when the session already has a board, and junk events are skipped", () => {
 		const dir = mkdtempSync(join(tmpdir(), "tg-seed-"));
 		try {

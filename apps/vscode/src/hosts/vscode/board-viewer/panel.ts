@@ -27,6 +27,7 @@ import {
 	type ViewerRunOp,
 } from "@/shared/board-viewer"
 import { collectViewerData } from "./collect"
+import type { BoardEditAction } from "./draft"
 
 /**
  * The board viewer (pipelines plan phase 3): an editor-area panel beside the
@@ -54,8 +55,16 @@ export interface BoardViewerDeps {
 	workspaceRoot: () => string | undefined
 	/** The conversation's latest `task_graph` row text, when there is a conversation. */
 	boardText: () => string | undefined
-	/** A change to the conversation's board as the person's, as the task panel sends it. */
-	boardEdit?: (action: { op: "update"; updates: unknown[] }) => { ok: boolean; lines: string[] }
+	/**
+	 * A change to the board as the person's, as the task panel sends it: the
+	 * open conversation's board, or the draft when no conversation is open.
+	 */
+	boardEdit?: (action: BoardEditAction) => { ok: boolean; lines: string[] }
+	/** Whether the board shown is the draft for the next new conversation. */
+	boardIsDraft?: () => boolean
+	/** The draft goes to the next new conversation, or is thrown away. */
+	draftStart?: () => { ok: boolean; lines: string[] }
+	draftDiscard?: () => { ok: boolean; lines: string[] }
 	/** The person's action on a run, through the conversation that started it. */
 	runAction?: (action: { op: ViewerRunOp; run: string; node?: string }) => { ok: boolean; lines: string[]; run?: string }
 }
@@ -163,7 +172,12 @@ class BoardViewer {
 		this.focus = undefined
 		this.stale = false
 		const data = workspace
-			? collectViewerData({ workspace, boardText: this.deps.boardText(), ...(focus ? { focus } : {}) })
+			? collectViewerData({
+					workspace,
+					boardText: this.deps.boardText(),
+					...(this.deps.boardIsDraft?.() ? { boardDraft: true } : {}),
+					...(focus ? { focus } : {}),
+				})
 			: { workspace: "", pipelines: [], runs: [], ...(focus ? { focus } : {}) }
 		void this.panel.webview.postMessage({ type: BOARD_VIEWER_DATA, data })
 	}
@@ -201,7 +215,7 @@ class BoardViewer {
 	/** A request the panel waits on: what it changed, or why it did not. */
 	private async answer(
 		request: ViewerRequest & { id: number },
-	): Promise<{ ok: boolean; errors?: string[]; lines?: string[]; run?: string }> {
+	): Promise<{ ok: boolean; errors?: string[]; lines?: string[]; run?: string; pipeline?: string }> {
 		const root = this.deps.workspaceRoot()
 		switch (request.type) {
 			case "boardViewer/validate": {
@@ -216,6 +230,29 @@ class BoardViewer {
 			}
 			case "boardViewer/runAction":
 				return this.runAction(request.op, request.run, request.node)
+			case "boardViewer/addTask": {
+				if (!this.deps.boardEdit) return { ok: false, errors: ["This editor cannot change the board."] }
+				const title = typeof request.title === "string" ? request.title.trim() : ""
+				if (!title) return { ok: false, errors: ["Give the task a title."] }
+				const outcome = this.deps.boardEdit({ op: "plan", tasks: [{ title }] })
+				return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
+			}
+			case "boardViewer/startFromDraft": {
+				if (!this.deps.draftStart) return { ok: false, errors: ["This editor has no draft board."] }
+				const outcome = this.deps.draftStart()
+				return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
+			}
+			case "boardViewer/discardDraft": {
+				if (!this.deps.draftDiscard) return { ok: false, errors: ["This editor has no draft board."] }
+				const answer = await vscode.window.showWarningMessage(
+					"Discard the draft board? Its tasks are gone for good.",
+					{ modal: true },
+					"Discard",
+				)
+				if (answer !== "Discard") return { ok: false }
+				const outcome = this.deps.draftDiscard()
+				return { ok: outcome.ok, lines: outcome.lines }
+			}
 		}
 		if (!root) return { ok: false, errors: ["Open a folder first: pipelines live in the workspace."] }
 		switch (request.type) {
@@ -229,6 +266,8 @@ class BoardViewer {
 				return this.boardToPipeline(root, request.tasks)
 			case "boardViewer/toTemplate":
 				return this.toTemplate(root, request.slug)
+			case "boardViewer/newPipeline":
+				return this.newPipeline(root)
 			default:
 				return { ok: false, errors: ["Not a request this panel knows."] }
 		}
@@ -254,6 +293,37 @@ class BoardViewer {
 		return outcome.ok
 			? { ok: true, lines: outcome.lines, ...(outcome.run ? { run: outcome.run } : {}) }
 			: { ok: false, errors: outcome.lines }
+	}
+
+	/**
+	 * A new pipeline the person names: one harmless `set` node to start from,
+	 * saved as theirs and so approved. The viewer opens it to edit.
+	 */
+	private async newPipeline(root: string): Promise<{ ok: boolean; errors?: string[]; lines?: string[]; pipeline?: string }> {
+		const name = await vscode.window.showInputBox({
+			title: "New pipeline",
+			prompt: "Its name. It is saved to .cerebriline/pipelines; add its steps in the Board tab.",
+			validateInput: (value) =>
+				!value.trim()
+					? "Give it a name."
+					: findPipeline(root, value)
+						? `There is a pipeline "${value.trim()}" already.`
+						: undefined,
+		})
+		if (!name?.trim()) return { ok: false }
+		const saved = savePipeline(
+			root,
+			{ name: name.trim(), nodes: [{ id: "start", type: "set", fields: {} }] } as PipelineDefinition,
+			undefined,
+			{ by: "person" },
+		)
+		if (!saved.ok) return { ok: false, errors: saved.errors }
+		const slug = pipelineSlug(name.trim())
+		return {
+			ok: true,
+			lines: [`Saved ${name.trim()}. Add its steps from the palette, then Save.`],
+			pipeline: slug,
+		}
 	}
 
 	/** The person's edit: saved and approved, as their own edits are (plan section 7). */

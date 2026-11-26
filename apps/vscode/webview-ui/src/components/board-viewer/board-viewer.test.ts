@@ -183,7 +183,8 @@ describe("the panel's message", () => {
 		expect(initialSource({ ...base, focus: { pipeline: "release" } })).toEqual({ kind: "pipeline", slug: "release" })
 		expect(initialSource({ ...base, focus: { pipeline: "gone" } })).toEqual({ kind: "run", id: "release-3" })
 		expect(initialSource({ ...base, boardText: "{}" })).toEqual({ kind: "board" })
-		expect(initialSource({ workspace: "/w", pipelines: [], runs: [] })).toBeUndefined()
+		// Nothing yet: the board, where the person can start one.
+		expect(initialSource({ workspace: "/w", pipelines: [], runs: [] })).toEqual({ kind: "board" })
 	})
 
 	it("matches a run, and a test run, to its pipeline", () => {

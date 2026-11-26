@@ -104,7 +104,7 @@ const send = (payload: object) =>
 	})
 
 /** The extension's answer to the last request of `type`. */
-const answer = (type: string, payload: { ok: boolean; errors?: string[]; lines?: string[]; run?: string }) => {
+const answer = (type: string, payload: { ok: boolean; errors?: string[]; lines?: string[]; run?: string; pipeline?: string }) => {
 	const request = [...posted].reverse().find((message) => (message as { type?: string }).type === type) as
 		| { id: number }
 		| undefined
@@ -320,5 +320,53 @@ describe("the board viewer", () => {
 				updates: [{ id: "t1", gate: ["use-pipeline:release"] }],
 			}),
 		)
+	})
+
+	it("builds a draft board with no conversation open, and hands it to the next one", async () => {
+		const empty = { workspace: "/home/me/game", pipelines: [], runs: [], boardDraft: true }
+		render(<BoardViewer />)
+		send(empty)
+		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Draft board")
+		expect(screen.getByText("An empty draft board")).toBeTruthy()
+		const start = () => screen.getByRole("button", { name: "Start a conversation with this board" }) as HTMLButtonElement
+		expect(start().disabled).toBe(true)
+		fireEvent.change(screen.getByRole("textbox", { name: "New task" }), { target: { value: "Write the README" } })
+		fireEvent.click(screen.getByRole("button", { name: "Add task" }))
+		expect(sentOf("boardViewer/addTask").at(-1)).toMatchObject({ title: "Write the README" })
+		answer("boardViewer/addTask", { ok: true, lines: ["Created 1: T1."] })
+		await waitFor(() => expect((screen.getByRole("textbox", { name: "New task" }) as HTMLInputElement).value).toBe(""))
+
+		const draftBoard = JSON.parse(data.boardText) as { tasks: Record<string, unknown>[] }
+		send({
+			...empty,
+			boardText: JSON.stringify({ ...draftBoard, tasks: [{ ...draftBoard.tasks[0], claimedBy: undefined }] }),
+		})
+		expect(screen.getByText("for your next conversation", { exact: false })).toBeTruthy()
+		expect(start().disabled).toBe(false)
+		fireEvent.click(start())
+		expect(sentOf("boardViewer/startFromDraft")).toHaveLength(1)
+		answer("boardViewer/startFromDraft", {
+			ok: true,
+			lines: ["Send your first message in the chat: the new conversation starts from this board."],
+		})
+		expect(await screen.findByText(/the new conversation starts from this board/)).toBeTruthy()
+	})
+
+	it("makes a new pipeline and opens it", async () => {
+		render(<BoardViewer />)
+		send(data)
+		fireEvent.click(screen.getByRole("button", { name: "+ New" }))
+		expect(sentOf("boardViewer/newPipeline")).toHaveLength(1)
+		answer("boardViewer/newPipeline", { ok: true, lines: ["Saved Deploy."], pipeline: "deploy" })
+		await screen.findByText("Saved Deploy.")
+		const deploy = {
+			...data.pipelines[0],
+			name: "Deploy",
+			slug: "deploy",
+			path: "/home/me/game/.cerebriline/pipelines/deploy.pipeline.json",
+			definition: { name: "Deploy", nodes: [{ id: "start", type: "set", fields: {} }] },
+		}
+		send({ ...data, pipelines: [...data.pipelines, deploy] })
+		await waitFor(() => expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Deploy"))
 	})
 })

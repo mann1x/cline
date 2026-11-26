@@ -46,6 +46,7 @@ export function readViewerMessage(message: unknown): ViewerData | undefined {
 	return {
 		workspace: typeof data.workspace === "string" ? data.workspace : "",
 		...(typeof data.boardText === "string" ? { boardText: data.boardText } : {}),
+		...(data.boardDraft === true ? { boardDraft: true } : {}),
 		pipelines: Array.isArray(data.pipelines)
 			? (data.pipelines.filter((entry) => isObject(entry) && typeof entry.slug === "string") as ViewerPipeline[]).map(
 					(pipeline) => ({ ...pipeline, errors: Array.isArray(pipeline.errors) ? pipeline.errors : [] }),
@@ -96,7 +97,8 @@ export function initialSource(data: ViewerData): ViewerSource | undefined {
 	if (focus?.board || data.boardText) return { kind: "board" }
 	if (data.runs[0]) return { kind: "run", id: data.runs[0].id }
 	if (data.pipelines[0]) return { kind: "pipeline", slug: data.pipelines[0].slug }
-	return undefined
+	// Nothing yet: the board, where the person can start one.
+	return { kind: "board" }
 }
 
 /** A short duration: 840 ms, 12.4 s, 3 m 05 s, 1 h 02 m. */
@@ -116,6 +118,8 @@ export interface ViewerReply {
 	lines: string[]
 	/** The run a run action left running. */
 	run?: string
+	/** The pipeline a request made. */
+	pipeline?: string
 }
 
 type Asked = Extract<ViewerRequest, { id: number }>
@@ -144,6 +148,7 @@ export function settleReply(message: unknown): boolean {
 		errors: Array.isArray(message.errors) ? message.errors.map(String) : [],
 		lines: Array.isArray(message.lines) ? message.lines.map(String) : [],
 		...(typeof message.run === "string" ? { run: message.run } : {}),
+		...(typeof message.pipeline === "string" ? { pipeline: message.pipeline } : {}),
 	})
 	return true
 }

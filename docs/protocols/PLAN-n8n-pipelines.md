@@ -439,6 +439,14 @@ pandorum as a local vsix, and keeps the feature off by default.
      the node, and the viewer moves to the new run once its journal is
      read. The model is told each action with the next tool result
      (`notePipelineNews`).
+   - Built with it, for the person who starts from nothing: a task can be
+     done by a pipeline (gate `use-pipeline:<name>`, not a wait: starting
+     the task tells the model to run it, and the run's start turns the gate
+     into `pipeline:<run>`); a draft board in the Board tab while no
+     conversation is open (a plan-mode `TaskGraphStore` in the workspace's
+     state, handed to the next new conversation through the same seed as
+     a board saved in Memory, cleared when a conversation takes it); Add
+     task on any board; New pipeline.
 5. **Measured.** A tg-bench-like set of pipeline tasks (write a pipeline from
    a description; run, fix and re-run a failing one; gate a task on a run),
    on qwen3.6 27B dense and on a cloud model. A model that fails it gets the

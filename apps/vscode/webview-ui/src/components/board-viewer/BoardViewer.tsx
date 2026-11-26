@@ -299,21 +299,21 @@ export function BoardViewer() {
 				}
 			: undefined
 
-	// A re-run's new run is shown once its journal has been read.
-	const [pendingRun, setPendingRun] = useState<string>()
+	// What a request made (a re-run's new run, a new pipeline) is shown once the data has it.
+	const [pending, setPending] = useState<ViewerSource>()
 	useEffect(() => {
-		if (pendingRun && data?.runs.some((candidate) => candidate.id === pendingRun)) {
-			setPendingRun(undefined)
-			show({ kind: "run", id: pendingRun })
+		if (pending && data && exists(data, pending)) {
+			setPending(undefined)
+			show(pending)
 		}
-	}, [pendingRun, data, show])
+	}, [pending, data, show])
 	const runAction: RunAction | undefined =
 		source?.kind === "run" && run
 			? (op, node) => {
 					void request(() =>
 						ask(post, { type: "boardViewer/runAction", op, run: run.id, ...(node !== undefined ? { node } : {}) }),
 					).then((reply) => {
-						if (reply.ok && reply.run && reply.run !== run.id) setPendingRun(reply.run)
+						if (reply.ok && reply.run && reply.run !== run.id) setPending({ kind: "run", id: reply.run })
 					})
 				}
 			: undefined
@@ -332,6 +332,13 @@ export function BoardViewer() {
 		}
 	}
 
+	const newPipeline = () =>
+		void request(() => ask(post, { type: "boardViewer/newPipeline" })).then((reply) => {
+			if (reply.ok && reply.pipeline) setPending({ kind: "pipeline", slug: reply.pipeline })
+		})
+	const addTask = async (title: string) => (await request(() => ask(post, { type: "boardViewer/addTask", title }))).ok
+	const boardDraft = data?.boardDraft === true
+
 	const kind = source?.kind
 	const tabList = kind ? TABS[kind] : []
 	const tab: Tab = (kind && tabs[kind] && tabList.includes(tabs[kind] as Tab) ? tabs[kind] : tabList[0]) ?? "workflow"
@@ -340,7 +347,9 @@ export function BoardViewer() {
 
 	const title =
 		kind === "board"
-			? "Conversation board"
+			? boardDraft
+				? "Draft board"
+				: "Conversation board"
 			: kind === "pipeline"
 				? (pipeline?.name ?? "Pipeline")
 				: kind === "run"
@@ -356,7 +365,8 @@ export function BoardViewer() {
 					? `approved, version ${pipeline.hash}`
 					: `version ${pipeline.hash}`
 			: undefined,
-		kind === "board" && board
+		kind === "board" && boardDraft ? "for your next conversation" : undefined,
+		kind === "board" && board && !boardDraft
 			? `${board.tasks.filter((task) => task.status === "done").length} of ${board.tasks.length} done`
 			: undefined,
 		workspaceName,
@@ -383,7 +393,7 @@ export function BoardViewer() {
 					className="bv-source-select"
 					onChange={(event) => show(parseKey(event.target.value))}
 					value={sourceKey(source)}>
-					<option value="board">Conversation board</option>
+					<option value="board">{boardDraft ? "Draft board" : "Conversation board"}</option>
 					{data.pipelines.map((candidate) => (
 						<option key={candidate.slug} value={`pipeline:${candidate.slug}`}>
 							Pipeline {candidate.name}
@@ -411,11 +421,13 @@ export function BoardViewer() {
 			</div>
 			<ActionBar
 				board={board}
+				boardDraft={boardDraft}
 				busy={busy}
 				draft={draft}
 				draftErrors={draftErrors}
 				drafting={drafting}
 				notice={notice}
+				onAddTask={addTask}
 				onApprove={() =>
 					pipeline &&
 					void request(() => ask(post, { type: "boardViewer/approve", slug: pipeline.slug, hash: pipeline.hash }))
@@ -428,12 +440,14 @@ export function BoardViewer() {
 					setDraft(undefined)
 					setNotice(undefined)
 				}}
+				onDiscardBoardDraft={() => void request(() => ask(post, { type: "boardViewer/discardDraft" }))}
 				onReject={() =>
 					pipeline &&
 					void request(() => ask(post, { type: "boardViewer/reject", slug: pipeline.slug, hash: pipeline.hash }))
 				}
 				onSave={() => void save()}
 				onShowDraft={() => draft && show({ kind: "pipeline", slug: draft.slug })}
+				onStartFromBoardDraft={() => void request(() => ask(post, { type: "boardViewer/startFromDraft" }))}
 				onToTemplate={() =>
 					pipeline && void request(() => ask(post, { type: "boardViewer/toTemplate", slug: pipeline.slug }))
 				}
@@ -442,7 +456,7 @@ export function BoardViewer() {
 			/>
 			<div className={`bv-body${withInspector ? " bv-with-inspector" : ""}`}>
 				<nav aria-label="Boards, pipelines and runs" className="bv-rail">
-					<div className="bv-rail-heading">Conversation</div>
+					<div className="bv-rail-heading">{boardDraft ? "Next conversation" : "Conversation"}</div>
 					<button
 						aria-current={kind === "board"}
 						className="bv-source"
@@ -450,10 +464,19 @@ export function BoardViewer() {
 						type="button">
 						<span className="bv-source-name">Board</span>
 						<span className="bv-source-meta">
-							{board ? `${board.tasks.length} task${board.tasks.length === 1 ? "" : "s"}` : "No board yet"}
+							{board
+								? `${board.tasks.length} task${board.tasks.length === 1 ? "" : "s"}${boardDraft ? " · draft" : ""}`
+								: boardDraft
+									? "Add tasks for your next conversation"
+									: "No board yet"}
 						</span>
 					</button>
-					<div className="bv-rail-heading">Pipelines</div>
+					<div className="bv-rail-heading">
+						Pipelines
+						<button className="bv-row-button bv-rail-action" disabled={busy} onClick={newPipeline} type="button">
+							+ New
+						</button>
+					</div>
 					{data.pipelines.length === 0 && <div className="bv-rail-empty">None in .cerebriline/pipelines</div>}
 					{data.pipelines.map((candidate) => {
 						const runs = data.runs.filter((entry) => runBelongsTo(entry, candidate)).length
@@ -502,6 +525,7 @@ export function BoardViewer() {
 				<main className={`bv-main${tab === "workflow" ? " bv-main-canvas" : ""}`}>
 					<TabBody
 						board={board}
+						boardDraft={boardDraft}
 						canvasEdit={canvasEdit}
 						definition={definition}
 						definitionEdit={definitionEdit}
@@ -540,6 +564,7 @@ function TabBody({
 	tab,
 	source,
 	board,
+	boardDraft,
 	graph,
 	fitKey,
 	canvasEdit,
@@ -555,6 +580,7 @@ function TabBody({
 	tab: Tab
 	source: ViewerSource | undefined
 	board: ReturnType<typeof readBoard>
+	boardDraft: boolean
 	graph: ViewerGraph
 	fitKey: string
 	canvasEdit: CanvasEdit | undefined
@@ -580,8 +606,12 @@ function TabBody({
 	if (source.kind === "board" && !board) {
 		return (
 			<div className="bv-empty">
-				<strong>No board yet</strong>
-				<span>The conversation's board appears here once the model plans tasks, or a saved plan is started.</span>
+				<strong>{boardDraft ? "An empty draft board" : "No board yet"}</strong>
+				<span>
+					{boardDraft
+						? "No conversation is open. Add tasks above, give a task a pipeline from its inspector, then start a conversation with this board: the model works from it."
+						: "The conversation's board appears here once the model plans tasks, a saved plan is started, or you add a task above."}
+				</span>
 			</div>
 		)
 	}
@@ -640,6 +670,31 @@ function TabBody({
  * reject a proposal, save a pipeline as a template or the board as a
  * pipeline. Says what the last request answered.
  */
+/** A new task on the board shown: its title; the rest is set from its inspector. */
+function AddTask({ busy, onAdd }: { busy: boolean; onAdd: (title: string) => Promise<boolean> }) {
+	const [title, setTitle] = useState("")
+	return (
+		<form
+			className="bv-form bv-add-task"
+			onSubmit={async (event) => {
+				event.preventDefault()
+				if (!title.trim() || busy) return
+				if (await onAdd(title.trim())) setTitle("")
+			}}>
+			<input
+				aria-label="New task"
+				className="bv-input"
+				onChange={(event) => setTitle(event.target.value)}
+				placeholder="New task…"
+				value={title}
+			/>
+			<button className="bv-button" disabled={busy || !title.trim()} type="submit">
+				Add task
+			</button>
+		</form>
+	)
+}
+
 function ActionBar({
 	source,
 	pipeline,
@@ -657,10 +712,18 @@ function ActionBar({
 	onChanges,
 	onToTemplate,
 	onBoardToPipeline,
+	boardDraft,
+	onAddTask,
+	onStartFromBoardDraft,
+	onDiscardBoardDraft,
 }: {
 	source: ViewerSource | undefined
 	pipeline: ViewerPipeline | undefined
 	board: ReturnType<typeof readBoard>
+	boardDraft: boolean
+	onAddTask: (title: string) => Promise<boolean>
+	onStartFromBoardDraft: () => void
+	onDiscardBoardDraft: () => void
 	draft: Draft | undefined
 	drafting: boolean
 	draftErrors: string[] | undefined
@@ -768,13 +831,27 @@ function ActionBar({
 				</>
 			)
 		}
-	} else if (source?.kind === "board" && board && board.tasks.length > 0) {
-		left = <span className="bv-actionbar-text">Change a task from the inspector: pick its card.</span>
-		right = (
+	} else if (source?.kind === "board") {
+		const tasks = board?.tasks.length ?? 0
+		left = <AddTask busy={busy} onAdd={onAddTask} />
+		right = boardDraft ? (
+			<>
+				<button
+					className="bv-button bv-primary"
+					disabled={busy || tasks === 0}
+					onClick={onStartFromBoardDraft}
+					type="button">
+					Start a conversation with this board
+				</button>
+				<button className="bv-button" disabled={busy || tasks === 0} onClick={onDiscardBoardDraft} type="button">
+					Discard
+				</button>
+			</>
+		) : tasks > 0 ? (
 			<button className="bv-button" disabled={busy} onClick={onBoardToPipeline} type="button">
 				Save as a pipeline
 			</button>
-		)
+		) : null
 	}
 	const errors = drafting && draftErrors && draftErrors.length > 0 ? draftErrors : []
 	if (!left && !right && !notice) return null

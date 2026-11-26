@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { approvePipeline, findPipeline, savePipeline } from "@cline/core"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { BoardEditAction } from "./draft"
 
 /**
  * The board viewer's requests (pipelines phase 4), answered by the panel
@@ -65,7 +66,9 @@ vi.mock("vscode", () => {
 import { openBoardViewerPanel } from "./panel"
 
 let root: string
-const boardEdit = vi.fn((_action: { op: "update"; updates: unknown[] }) => ({ ok: true, lines: ["T1: renamed."] }))
+const boardEdit = vi.fn((_action: BoardEditAction) => ({ ok: true, lines: ["T1: renamed."] }))
+const draftStart = vi.fn(() => ({ ok: true, lines: ["Send your first message in the chat."] }))
+const draftDiscard = vi.fn(() => ({ ok: true, lines: ["The draft board is discarded."] }))
 const runAction = vi.fn((action: { op: string; run: string; node?: string }): { ok: boolean; lines: string[]; run?: string } =>
 	action.op === "rerun"
 		? { ok: true, lines: ["Re-running deploy-1 from up as deploy-2."], run: "deploy-2" }
@@ -80,12 +83,16 @@ beforeEach(() => {
 	ui.input = undefined
 	boardEdit.mockClear()
 	runAction.mockClear()
+	draftStart.mockClear()
+	draftDiscard.mockClear()
 	openBoardViewerPanel({
 		extensionUri: {} as never,
 		workspaceRoot: () => root,
 		boardText: () => undefined,
 		boardEdit,
 		runAction,
+		draftStart,
+		draftDiscard,
 	})
 })
 afterEach(() => {
@@ -231,5 +238,35 @@ describe("the board viewer's requests", () => {
 		const noNode = await request({ type: "boardViewer/runAction", op: "skip", run: "deploy-1" })
 		expect(noNode).toMatchObject({ ok: false, errors: ["Pick a node of the run first."] })
 		expect(runAction).not.toHaveBeenCalled()
+	})
+
+	it("adds a task to the board, and hands the draft on or discards it once confirmed", async () => {
+		const added = await request({ type: "boardViewer/addTask", title: "  Write the README " })
+		expect(boardEdit).toHaveBeenCalledWith({ op: "plan", tasks: [{ title: "Write the README" }] })
+		expect(added).toMatchObject({ ok: true })
+		expect(await request({ type: "boardViewer/addTask", title: " " })).toMatchObject({
+			ok: false,
+			errors: ["Give the task a title."],
+		})
+
+		expect(await request({ type: "boardViewer/startFromDraft" })).toMatchObject({
+			ok: true,
+			lines: ["Send your first message in the chat."],
+		})
+		ui.warning = undefined
+		expect(await request({ type: "boardViewer/discardDraft" })).toMatchObject({ ok: false })
+		expect(draftDiscard).not.toHaveBeenCalled()
+		ui.warning = "Discard"
+		expect(await request({ type: "boardViewer/discardDraft" })).toMatchObject({ ok: true })
+		expect(draftDiscard).toHaveBeenCalledTimes(1)
+	})
+
+	it("makes a new pipeline the person names, saved as theirs, and nothing when the name is cancelled", async () => {
+		ui.input = "Deploy"
+		const made = await request({ type: "boardViewer/newPipeline" })
+		expect(made).toMatchObject({ ok: true, pipeline: "deploy" })
+		expect(findPipeline(root, "deploy")).toMatchObject({ valid: true, isApproved: true, author: "person" })
+		ui.input = undefined
+		expect(await request({ type: "boardViewer/newPipeline" })).toMatchObject({ ok: false })
 	})
 })
