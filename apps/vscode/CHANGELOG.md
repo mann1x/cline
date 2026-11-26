@@ -5,6 +5,183 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.300] — 2026-11-26
+
+### Agents
+
+- **`/agent`, one command to hand work to an agent.** `/agent reviewer
+  inspect the source code of the game` runs the `reviewer` agent the way
+  `/delegate` does. `/agent reviewer /review-website` gives it a skill to
+  run, and is refused before anything runs if that agent's file does not
+  allow the skill (before, the agent got the skill name as text, could not
+  load it, and nothing said why). `/agent launch an agent to inspect the
+  game`, or `/agent /review-website ...` with no agent named, goes to the
+  model as a request to hand the work to an agent, and the model picks one.
+  While you type, the first word offers agents and then skills, and the
+  second word (after an agent) offers only the skills that agent may load.
+  The menu closes when nothing matches, so ordinary words go through as
+  the task. In the extension and the CLI.
+- **The `/` menu showing agents and skills together no longer highlights
+  the wrong row.** Both sections counted from the same row.
+
+### Task board
+
+- **A task can wait on more than other tasks.** `task_update` and
+  `task_plan` take `gate`: what the task waits on besides its dependencies.
+  `human:<what you must decide>` opens when you answer a question that names
+  the task, or the gate, or when it is the only one waiting. `timer:+30m`
+  (or a time) opens when the time passes. `commit:<sha>@<branch>` opens when
+  the branch contains the commit. `run:<agent>` opens when that agent's run
+  ends, and `command:<id>` when a background command exits. `gh-pr:` and
+  `gh-run:` open when a pull request is merged or a GitHub run succeeds; they
+  are checked when the board is looked at, through `gh`. An active task given
+  a gate waits, so the next task can start. When a gate opens, the model is
+  told, with what became ready. A gate that can no longer open (the run
+  failed, the PR was closed) is said once and stays until it is removed.
+- **Links between tasks.** `link` takes "discovered-from T3", "related T4",
+  "caused-by T2", "supersedes T3" and "duplicate-of T3", as well as URLs,
+  commits and files. "supersedes" cancels the old task and moves what waited
+  on it to the new one; "duplicate-of" cancels the duplicate the same way.
+- **One agent's task is not taken by another.** A teammate that starts a task
+  holds it; another agent's change to it is refused while the holder's run
+  is going, unless it sends `force: true`, which is noted on the task. A
+  claim ends with its run. Your own changes from the panel are never
+  refused.
+- **Teammates work the same board.** With agent teams on, `team_task`
+  reads and writes the conversation's task board instead of a list of its
+  own: a task a teammate creates or claims is a `T<n>` in `task_view` and in
+  the task panel, and a task planned with `task_plan` can be claimed with
+  `team_task`. A teammate's run starts by being told the tasks it holds or
+  may claim, and is asked once, before it ends, to complete or block what
+  it still holds; if it does neither, the task goes back on the board and
+  the lead is told. When a close makes a teammate's task ready, the
+  teammate gets a mailbox message. The lead is told when a plan's first
+  tasks can run side by side, and, while waiting on runs, which ready tasks
+  nobody holds. A delegated agent's answer opens `run:<name>` gates; an
+  agent started in the background opens them when its report arrives.
+- **Saved plans (task templates).** A plan worth repeating is a JSON file
+  in `.cerebriline/task-templates/` in the workspace (versioned with it) or
+  in your home folder. `{{name}}` in it is filled when it is used. The model
+  puts one on the board with `task_plan {"template": "release", "vars":
+  {...}}`, and the field is offered only when a template exists, so a
+  workspace without any pays nothing for it. From the task panel you can
+  start from a saved plan, or save the current board as one (cancelled
+  tasks, run ids, timers and commits are left out; `human:` gates are
+  kept).
+- **When a run looks stuck on a task, the model is told which task.** The
+  struggle detector's message now names the active task and asks for what
+  failed to be noted on it, and for the task to be split or given a
+  `human:` gate.
+- **A `task_progress` checklist a model sends out of habit is no longer
+  read.** No model had sent one since 4.100.292: none in the phase 3 test,
+  and none in six days of logs.
+- **`task_view mermaid`** returns the board as a Mermaid flowchart: subtasks
+  inside their parent, dependencies and links as edges, gates as their own
+  nodes. The task panel's Graph tab draws the same chart.
+- **More in the task panel.** A task shows what it waits on, with
+  **Resolve** to open a gate yourself and **Remove** to drop one; its links,
+  with a task link opening that task; its files, which open in the editor;
+  and **Show where it was planned**, which scrolls the chat to the call that
+  created it (for tasks planned from this version on).
+- **`/tasks` in the CLI** prints the conversation's task board.
+- **A plan says what each task needs, not the order of the list.** The
+  board's rules, `task_plan` and the plan-first asks said to give `depends`
+  "for the order", and models chained independent steps one after another.
+  `depends` is now asked for only where a task needs another finished first,
+  so independent tasks show as ready side by side.
+- **With agent teams on, `task_plan` says how to hand tasks to teammates.**
+  Its description gains one sentence, only when a team is attached and not
+  in Plan mode, on giving a teammate a task through `team_task` and leaving
+  the claim to them.
+- **`/tasks` and `/pipelines` in the CLI's command palette** (Option+J and
+  Option+E).
+
+### Pipelines (preview)
+
+- **Workflows the model writes and runs in the background.** Turn on
+  Settings > Features > Pipelines (off by default) and the model gets a
+  `pipeline` tool. It writes a pipeline as a file under
+  `.cerebriline/pipelines/`: steps that call tools or run commands, set
+  values, branch (`if`, `switch`), merge, loop over a list, wait for a time,
+  a commit, a PR check or another task, ask you to approve, or run a check.
+  Steps run in parallel where they do not depend on each other.
+- **Nothing runs until you approve it.** A saved file is a proposal. Run
+  **Cerebriline: Approve Pipeline** from the command palette, read the file
+  it opens and approve that version; any later change to the file needs
+  approving again. The model cannot approve its own pipeline. Each command
+  and tool inside a run is still asked for under your auto-approve
+  settings, as if the model had called it directly.
+- **Runs live on the task board.** A run holds its task until it ends and
+  the model is told when it does. An approval step shows as a gate on that
+  task: **Resolve** approves and removing the gate rejects. A run is
+  journalled under `.cerebriline/pipeline-runs/`. A run cut off by a reload,
+  a stopped run or a failed one can be resumed (`pipeline resume`) from where
+  it was, rather than started over. A reload does not resume runs by itself
+  yet.
+- **`pipeline test`** runs a pipeline without approval but refuses any step
+  with a side effect, such as a push or a write, unless that step is pinned
+  to a stand-in result. Waits open at once.
+- **Per model.** Each provider's Tools section has a `pipeline` switch (on
+  by default) for models that cannot handle pipelines. It shows as off, with
+  the reason, while the feature is off.
+- **CLI:** `--pipelines` or `CLINE_PIPELINES=1` turns it on, and
+  `/pipelines` lists pipelines, approves one (`/pipelines approve <name>`)
+  and lists runs (`/pipelines runs`).
+- **Not in this version:** steps that start agents, call HTTP endpoints or
+  run another pipeline are recognised but refused, and there is no viewer
+  for a pipeline's graph yet. Pipelines suit cloud models or a 27B-class
+  local model; a small model writes them poorly.
+
+### Settings
+
+- **Maximum terminals (default 5).** Cerebriline closed terminals it could
+  not use, but a command that keeps running, such as a dev server or a
+  watcher, holds its terminal until it exits, so terminal windows could
+  still pile up over a long session (#56). Settings > Terminal > Maximum
+  terminals now caps how many a window holds; 0 turns the limit off. At the
+  limit, Cerebriline closes its least recently used idle terminal to open a
+  new one. When every terminal is busy, it runs the command as a background
+  process with no terminal, and the result says that it did. It never
+  stops a running command to make room. Terminals that Cerebriline stopped
+  following but left open (an ssh session, a command you took over) count
+  towards the limit.
+
+### Fixes
+
+- **A long line no longer blocks every edit through it.** `read_files`
+  shows at most 2,000 characters of a line, and the editor refuses an edit
+  that would overwrite characters the model was never shown, so that a
+  model retyping a long line cannot silently lose its end. But every read
+  cut the line in the same place, and the refusal offered only a column
+  edit or `old_text`, neither of which fits a rewrite of a whole block.
+  In one session a model rewrote lines 29-768 of a file, re-read the file
+  in chunks, and was refused four times over one 3,745-character line.
+  Now a line read by itself (`start_line` and `end_line` both its number)
+  is shown whole, up to 20,000 characters. The read that cut the line and
+  the editor's refusal both name that read, and the edit goes through after
+  it. A line longer than that is still cut, and the message says to grep
+  for the rest.
+- **When one edit fixes a file's brackets, the scan now says so first, and
+  it finds the right one more often.** After an edit leaves a script that
+  does not parse, Cerebriline scans the brackets and offers an edit that the
+  parser has checked. When that edit makes the whole script parse, the
+  scan's first line now says so and gives the exact `editor` call. In one
+  session a model quoted the error on either side of that offer twice,
+  missed the offer, and broke a correct line by hand. The search also used
+  to look only three lines above where the parser stopped. When the parser
+  stops on a closing `}` that lines up with the line that opened its block,
+  the spare one is somewhere inside the block, so every line of the block
+  is now searched, and deleting that well-placed `}` is offered last. In
+  the same session the scan had offered deleting the `}` that ended
+  `function update()`. The script would have parsed, with six lines of
+  `update` left outside it.
+- **An `editor` call that asks for a revision now points to
+  `restore_file`.** A model that sent `editor` with `revision: "original"`
+  to put a file back was told only that `text` was missing, and its run
+  ended there. The refusal now says that `editor` takes no revision, and
+  that `restore_file` with that revision puts the file back (or
+  `read_files` with it, to look first).
+
 ## [4.100.298] — 2026-11-25
 
 ### Fixes
