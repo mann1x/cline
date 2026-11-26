@@ -3,8 +3,9 @@
 Status 2026-11-26: phases 0-5 built and measured. Phase 3 shipped in
 4.100.292; phases 4 and 5 and the phase 3 leftovers are on main for
 4.100.299 (deployed to pandorum 2026-11-26). Arm D (teams) ran 2026-11-26:
-unprompted, qwen36 27B never handed work to a teammate; D2 (`/team`) and D3
-(the instruction in `task_plan`) test it when asked (below).
+unprompted, qwen36 27B never handed work to a teammate. Asked with `/team`
+(D2) it delegated in every run, at 2-4x the wall time; the same instruction
+only in `task_plan`'s description (D3) moved it once in 10 runs (below).
 Tracked as claude-hooks task ol-162. Sources:
 
 - claude-hooks' task system as of `f81e77e` (`docs/tasks.md`,
@@ -573,6 +574,25 @@ runtime held before is moved onto the board once.
     attached, to hand each task without dependencies to a teammate) run on
     textkit and ledger, 5 each. Whether a cloud model hands work out
     unprompted stays open for a cloud arm.
+  - **Results** (D2 build 2134138654, D3 build 0d1b4e7d73; runs that
+    delegated, score, median wall):
+
+    | arm | delegated | textkit | ledger | median s (textkit / ledger) |
+    |---|---|---|---|---|
+    | D, unprompted | 0 of 10 | 35/35 | 43/45 | 183 / 646 |
+    | D2, `/team` | 10 of 10 | 35/35 | 45/45 | 633 / 1096 |
+    | D3, `task_plan` sentence | 1 of 10 | 34/35 | 45/45 | 197 / 424 |
+
+    D2 delegated through the team tools in 5 runs and through `spawn_agent`
+    in the other 5; median tool calls rose from 16 and 32 to 112 and 98.
+    D3's one delegation (ledger r3, two teammates) took 1,248 s. One D3 run
+    killed to free the machine (0137) is excluded and was re-run (0138).
+  - Reading: a person asking for a team gets one, every time; a sentence in
+    a tool description does not make this model decide to use one. On a
+    one-request server the team costs 2-4x the time for no score gain worth
+    it on tasks this size, since teammates queue behind each other. The
+    sentence stays (it is free and right when a team is attached), and
+    teammates stay off by default. Aggregator: `spool/tg-bench/agg-phaseD.py`.
 
 **5. Gates and views. Built 2026-11-25 (b809049f9e, 7af49c5a4d, 59126097f2).**
 - Gates: `run:`, `command:`, `human:`, `commit:<sha>@<branch>`, `timer:`
