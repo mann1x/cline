@@ -590,6 +590,7 @@ export class TaskGraphTracker {
 			author,
 			{ beforeView: () => this.checkRemoteGates() },
 			() => this.templates(),
+			{ team: this.team !== undefined },
 		) as AgentTool<unknown, unknown>[];
 	}
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AgentTeamsRuntime } from "../team/multi-agent";
 import { TaskGraphStore } from "./store";
 import { createGraphTeamBoard } from "./team-board";
+import { TEAM_PLAN_SENTENCE } from "./tools";
 import { TaskGraphTracker } from "./tracker";
 
 function setup() {
@@ -195,5 +196,24 @@ describe("team nudges on the lead", () => {
 			text: "looks fine",
 		});
 		expect(tracker.store.getState().tasks.get("T1")?.gates[0]?.open).toBe(true);
+	});
+});
+
+describe("task_plan with teammates", () => {
+	const planDescription = (tracker: TaskGraphTracker) =>
+		tracker.tools().find((tool) => tool.name === "task_plan")?.description ??
+		"";
+
+	it("says to hand independent tasks out only when a team is attached, and not in plan mode", () => {
+		const solo = new TaskGraphTracker();
+		expect(planDescription(solo)).not.toContain(TEAM_PLAN_SENTENCE.trim());
+		const team = new TaskGraphTracker();
+		team.attachTeam({ idleReady: () => undefined });
+		expect(planDescription(team)).toContain(
+			"hand each task that does not depend on another to a teammate",
+		);
+		const planning = new TaskGraphTracker({ planMode: true });
+		planning.attachTeam({ idleReady: () => undefined });
+		expect(planDescription(planning)).not.toContain("team_run_task");
 	});
 });

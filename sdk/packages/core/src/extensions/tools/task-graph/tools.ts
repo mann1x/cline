@@ -125,12 +125,22 @@ function withTemplate(
 	};
 }
 
+/** `task_plan`'s description, with teammates on. */
+export const TEAM_PLAN_SENTENCE =
+	" You have teammates: after the plan, hand each task that does not depend on another to a teammate with `team_run_task` (name the task id in the message), and work on one yourself while they run. Do not do them all yourself one after another.";
+
 export function createTaskPlanTool(
 	store: TaskGraphStore,
 	author: () => string = () => "model",
 	templates: () => readonly TaskTemplate[] = () => [],
+	options: { team?: boolean } = {},
 ): AgentTool<unknown, ToolOperationResult[]> {
 	const offered = templates();
+	// With teammates, the plan is also how work is handed out: said where the
+	// plan is written, not only in the system prompt (arm D: 0 of 15 runs used
+	// a teammate with the system-prompt bullet alone).
+	const teamSentence =
+		options.team && !store.planMode ? TEAM_PLAN_SENTENCE : "";
 	const templateExtra = templateFields(offered);
 	return createTool<unknown, ToolOperationResult[]>({
 		name: TASK_PLAN_TOOL_NAME,
@@ -145,6 +155,7 @@ export function createTaskPlanTool(
 				"`depends` is only for a task that needs another one finished first; tasks that do not need each other get none. " +
 				'In `depends` and `parent`, "#2" means the second task of this same call, so the whole plan goes in at once; an existing task is named by its id (T3). ' +
 				"Returns the ids and the order; the first ready task is started for you." +
+				teamSentence +
 				templateExtra.sentence,
 		inputSchema: {
 			type: "object",
@@ -400,9 +411,10 @@ export function createTaskGraphTools(
 	author?: () => string,
 	viewHooks?: TaskViewHooks,
 	templates?: () => readonly TaskTemplate[],
+	options: { team?: boolean } = {},
 ): AgentTool<unknown, ToolOperationResult[]>[] {
 	return [
-		createTaskPlanTool(store, author, templates),
+		createTaskPlanTool(store, author, templates, options),
 		createTaskUpdateTool(store, author),
 		createTaskViewTool(store, viewHooks),
 	];
