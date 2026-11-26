@@ -2,8 +2,9 @@
 
 Status 2026-11-26: phases 0-5 built and measured. Phase 3 shipped in
 4.100.292; phases 4 and 5 and the phase 3 leftovers are on main for
-4.100.299. Arm D (teams) ran 2026-11-26: the machinery works, qwen36 27B does
-not use it (below).
+4.100.299 (deployed to pandorum 2026-11-26). Arm D (teams) ran 2026-11-26:
+unprompted, qwen36 27B never handed work to a teammate; D2 (`/team`) and D3
+(the instruction in `task_plan`) test it when asked (below).
 Tracked as claude-hooks task ol-162. Sources:
 
 - claude-hooks' task system as of `f81e77e` (`docs/tasks.md`,
@@ -549,7 +550,14 @@ runtime held before is moved onto the board once.
   110/110; ledger's two misses were R1 and R7, within its spread in every
   arm). **No team call in any run**: no `team_run_task`, no claim, no
   teammate. T1 fired 4 times, where a plan had independent tasks, and was
-  followed 0 times. Ledger wall median 646 s against P3's 415 s (the 18
+  followed 0 times.
+  - **What arm D asked.** The task prompts were P3's, word for word; none
+    mentions teammates. Teams reached the model only as the system prompt's
+    board bullet, the 18 team tools, and T1. So arm D measures *unprompted*
+    adoption, not whether the model can drive a team: a person who turns
+    teammates on normally asks for them. And shop's prompt says "in this
+    order, since each builds on the one before", so only textkit (six
+    independent bugs) and part of ledger give a teammate anything to do. Ledger wall median 646 s against P3's 415 s (the 18
   team schemas on every request); textkit and shop unchanged.
   - Found on the way: on a one-slot endpoint the CLI withholds the team
     tools whatever `--teammates` says (smoke run 0099). And every channel
@@ -557,9 +565,14 @@ runtime held before is moved onto the board once.
     chained independent tasks and left nothing to hand out; since
     2134138654 `depends` is "only where a task needs another finished
     first" everywhere.
-  - Reading: on this model, teams cost schema and time and are not used.
-    Teammates stay off by default; whether a cloud model hands work out is
-    the open question, for a cloud arm when the account is free.
+  - Reading: unprompted, on this model, teams cost schema and time and are
+    not used. Teammates stay off by default.
+  - **D2** (`/team` before the task prompt, which the CLI rewrites to "spawn
+    a team of agents for the following task: …"; build 2134138654) and **D3**
+    (no prompt instruction; `task_plan`'s description says, with a team
+    attached, to hand each task without dependencies to a teammate) run on
+    textkit and ledger, 5 each. Whether a cloud model hands work out
+    unprompted stays open for a cloud arm.
 
 **5. Gates and views. Built 2026-11-25 (b809049f9e, 7af49c5a4d, 59126097f2).**
 - Gates: `run:`, `command:`, `human:`, `commit:<sha>@<branch>`, `timer:`
