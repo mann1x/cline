@@ -277,6 +277,7 @@ export interface ExtensionState {
 	teammatesEnabled?: boolean
 	/** Whether the model is offered extract_document; see state-keys.ts. */
 	extractDocumentEnabled?: boolean
+	pipelinesEnabled?: boolean
 	/** How the Document Reader reads scanned pages; see state-keys.ts. */
 	extractDocumentOcr?: string
 	/** tesseract languages, comma-separated; see state-keys.ts. */

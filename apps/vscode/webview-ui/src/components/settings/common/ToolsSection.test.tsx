@@ -6,7 +6,15 @@ import { ToolsSection } from "./ToolsSection"
 
 type Config = { tools?: { disabled?: string[]; readLimitEnabled?: boolean; readLimitChars?: number } }
 
-const mocks = vi.hoisted(() => ({ write: vi.fn(), config: { current: {} as Config } }))
+const mocks = vi.hoisted(() => ({
+	write: vi.fn(),
+	config: { current: {} as Config },
+	state: { current: { pipelinesEnabled: true } as { pipelinesEnabled?: boolean } },
+}))
+
+vi.mock("@/context/ExtensionStateContext", () => ({
+	useExtensionState: () => mocks.state.current,
+}))
 
 // The host round trip behind the hook: the panel does not see its own write
 // until the answer comes back, so anything clicked in between is composed from
@@ -30,10 +38,21 @@ vi.mock("@/components/ui/label", () => ({
 	Label: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }))
 vi.mock("@/components/ui/switch", () => ({
-	Switch: ({ checked, onCheckedChange, id }: { checked?: boolean; onCheckedChange?: (v: boolean) => void; id?: string }) => (
+	Switch: ({
+		checked,
+		disabled,
+		onCheckedChange,
+		id,
+	}: {
+		checked?: boolean
+		disabled?: boolean
+		onCheckedChange?: (v: boolean) => void
+		id?: string
+	}) => (
 		<input
 			checked={checked ?? false}
 			data-testid={id}
+			disabled={disabled}
 			onChange={(event) => onCheckedChange?.(event.target.checked)}
 			type="checkbox"
 		/>
@@ -55,6 +74,7 @@ describe("the tools section", () => {
 		mocks.write.mockReset()
 		mocks.write.mockResolvedValue(undefined)
 		mocks.config.current = {}
+		mocks.state.current = { pipelinesEnabled: true }
 	})
 
 	it("offers every tool when the profile names none", () => {
@@ -99,6 +119,9 @@ describe("the tools section", () => {
 
 	it("shows what the selection costs without being opened", () => {
 		mocks.config.current = { tools: { disabled: ["editor"] } }
+		// As a fresh install shows it: Pipelines is off by default, and its
+		// tool is priced only once the feature is on.
+		mocks.state.current = { pipelinesEnabled: false }
 		render(<ToolsSection providerId="ollama" />)
 
 		// The editor is about a fifth of the tokens on offer, so dropping it has
@@ -106,9 +129,10 @@ describe("the tools section", () => {
 		// joins the catalog or its description is reworded: `render_image` and
 		// `transform_image` did, and so did `check_file` at 849 tokens, and so did
 		// read_files, ask_lsp and browser re-measured in 4.100.277, and so did
-		// sed at 686 in 4.100.289.
+		// sed at 686 in 4.100.289, and so did browser at 828 in 4.100.299 (its
+		// browser list).
 		const total = screen.getByTestId("tools-section-total").textContent ?? ""
-		expect(total).toContain("8.5k of 10.5k tokens")
+		expect(total).toContain("8.6k of 10.6k tokens")
 		// On the collapsed header, deliberately: the price is the reason to
 		// open the section, so it cannot be behind it.
 		expect(screen.queryByTestId("tool-editor")).toBeNull()
@@ -185,6 +209,7 @@ describe("the tools section, shut", () => {
 		mocks.write.mockReset()
 		mocks.write.mockResolvedValue(undefined)
 		mocks.config.current = {}
+		mocks.state.current = { pipelinesEnabled: true }
 	})
 
 	it("starts collapsed", () => {
@@ -224,6 +249,7 @@ describe("the tools section, grouped", () => {
 		mocks.write.mockReset()
 		mocks.write.mockResolvedValue(undefined)
 		mocks.config.current = {}
+		mocks.state.current = { pipelinesEnabled: true }
 	})
 
 	it("puts every selectable tool under exactly one heading", () => {
@@ -269,5 +295,34 @@ describe("the tools section, grouped", () => {
 				expect(row.className.includes(stripe), `${tool.name} banding`).toBe(index % 2 === 1)
 			})
 		}
+	})
+
+	it("draws a tool whose feature is off as off and disabled, says why, and leaves it out of the price and the count", () => {
+		const pipeline = SELECTABLE_TOOLS.find((tool) => tool.name === "pipeline")
+		expect(pipeline?.requires?.feature).toBe("pipelinesEnabled")
+		const before = (() => {
+			const { unmount } = render(<ToolsSection providerId="ollama" />)
+			const text = screen.getByTestId("tools-section-total").textContent ?? ""
+			unmount()
+			return text
+		})()
+		mocks.state.current = { pipelinesEnabled: false }
+		renderExpanded()
+
+		const toggle = screen.getByTestId("tool-pipeline") as HTMLInputElement
+		expect(toggle.checked).toBe(false)
+		expect(toggle.disabled).toBe(true)
+		expect(screen.getByTestId("tool-requires-pipeline").textContent).toContain("Needs Features → Pipelines")
+		expect(screen.queryByText(/off\)/)).toBeNull()
+		expect(screen.getByTestId("tools-section-total").textContent).not.toBe(before)
+	})
+
+	it("offers it like any other tool once the feature is on", () => {
+		renderExpanded()
+
+		const toggle = screen.getByTestId("tool-pipeline") as HTMLInputElement
+		expect(toggle.checked).toBe(true)
+		expect(toggle.disabled).toBe(false)
+		expect(screen.queryByTestId("tool-requires-pipeline")).toBeNull()
 	})
 })

@@ -2462,6 +2462,8 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// as well as the lead.
 	const extractDocumentEnabled =
 		input.taskSettings?.extractDocumentEnabled ?? stateManager.getGlobalSettingsKey("extractDocumentEnabled") ?? false
+	const pipelinesEnabled =
+		input.taskSettings?.pipelinesEnabled ?? stateManager.getGlobalSettingsKey("pipelinesEnabled") ?? false
 	// How it reads a scanned page and whether it describes pictures. The vision
 	// model it uses for both is the describer installed below, when the Vision
 	// tab names one.
@@ -2833,6 +2835,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		toolIntentGuard: stateManager.getGlobalSettingsKey("toolIntentGuardEnabled") !== false,
 		enableExtractDocument: extractDocumentEnabled,
 		...(extractDocumentEnabled ? { documentReader } : {}),
+		// Features → Pipelines. The provider's Tools section drops the tool
+		// for one connection through `tools.disabled`, read by core.
+		...(pipelinesEnabled ? { pipelines: { enabled: true } } : {}),
 		// Sent whether or not auto compaction is on. `enabled` is the only thing
 		// that decides whether the transcript gets compacted — the runtime
 		// returns no compaction pass without it — but this object is also where

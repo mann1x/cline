@@ -9,9 +9,11 @@ import {
 	createBuiltinTools,
 	createCheckFileTool,
 	createListFilesTool,
+	createPipelineTool,
 	createRenderImageTool,
 	createTransformImageTool,
 	MAX_READ_REFUSAL_CHARS,
+	PipelineSession,
 } from "../../node_modules/@cline/core/dist/index.js"
 import { DEFAULT_READ_LIMIT_CHARS, SELECTABLE_TOOLS, TOOL_GROUPS } from "./tool-selection"
 
@@ -63,6 +65,8 @@ function buildEveryTool(): WireTool[] {
 			fileExists: async () => true,
 			writeFile: async () => {},
 		}),
+		// Conditional (Features → Pipelines), listed with `requires` by ruling.
+		createPipelineTool(new PipelineSession({ workspaceRoot: stub.cwd, sessionId: "s", tools: () => [] }), stub.cwd),
 	]
 }
 

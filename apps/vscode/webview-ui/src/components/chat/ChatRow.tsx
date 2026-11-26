@@ -135,6 +135,7 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	generate_video: "Cerebriline generated a video:",
 	image_generation: "Cerebriline generated an image:",
 	jev: "Cerebriline asked Jev how sure to be:",
+	pipeline: "Cerebriline worked on a pipeline:",
 	plan: "Cerebriline wrote down the plan:",
 	propose_check: "Cerebriline proposed a check:",
 	render_image: "Cerebriline rendered an image:",

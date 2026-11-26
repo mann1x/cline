@@ -15,6 +15,8 @@ export type CommandPaletteAction =
 	| "undo"
 	| "clear"
 	| "history"
+	| "tasks"
+	| "pipelines"
 	| "help"
 	| "quit";
 
@@ -152,6 +154,22 @@ const ACTION_ITEMS: Array<{
 		shortcut: "Opt+H",
 		description: "Resume a previous session",
 		keywords: ["history", "resume", "sessions"],
+	},
+	// J for jobs and E for execute: the free Option letters, less F (a
+	// terminal's forward-word).
+	{
+		action: "tasks",
+		label: "Show Task Board",
+		shortcut: "Opt+J",
+		description: "Print the conversation's tasks, gates and claims",
+		keywords: ["tasks", "board", "plan", "gates"],
+	},
+	{
+		action: "pipelines",
+		label: "Pipelines",
+		shortcut: "Opt+E",
+		description: "List the workspace's pipelines and whether each may run",
+		keywords: ["pipelines", "workflow", "approve", "runs"],
 	},
 	{
 		action: "help",

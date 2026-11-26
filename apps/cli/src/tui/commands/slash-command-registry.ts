@@ -29,6 +29,7 @@ export type LocalSlashCommandName =
 	| "clear"
 	| "history"
 	| "tasks"
+	| "pipelines"
 	| "quit"
 	| "help";
 
@@ -134,6 +135,11 @@ const TUI_LOCAL_COMMANDS: Array<{
 		description: "Show the conversation's task board",
 	},
 	{
+		name: "pipelines",
+		description: "List, approve or review pipeline runs",
+		preserveInput: true,
+	},
+	{
 		name: "help",
 		description: "Show help",
 	},
@@ -161,6 +167,7 @@ const SYSTEM_COMMAND_ORDER = [
 	"clear",
 	"team",
 	"tasks",
+	"pipelines",
 	"history",
 	"help",
 	"quit",

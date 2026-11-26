@@ -383,6 +383,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		leadSandboxConfine: false,
 		teammatesEnabled: false,
 		extractDocumentEnabled: false,
+		pipelinesEnabled: false,
 		extractDocumentOcr: "tesseract",
 		extractDocumentOcrLanguages: "eng",
 		extractDocumentDescribeImages: false,

@@ -1235,9 +1235,12 @@ export {
 } from "./extensions/lsp/lsp-host";
 export {
 	approvePipeline,
+	createPipelineTool,
 	findPipeline,
+	foldJournal,
 	listPipelines,
 	NODE_TYPES,
+	PIPELINE_RUNS_DIR,
 	PIPELINE_TOOL_DESCRIPTION,
 	PIPELINE_TOOL_NAME,
 	PIPELINES_DIR,
@@ -1247,8 +1250,10 @@ export {
 	PipelineRun,
 	type PipelineRunOptions,
 	type PipelineRunResult,
+	PipelineSession,
 	pipelineHash,
 	RUNNABLE_NODE_TYPES,
+	readJournal,
 	validatePipeline,
 } from "./extensions/pipelines";
 export {

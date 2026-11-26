@@ -492,6 +492,9 @@ const USER_SETTINGS_FIELDS = {
 	// niche reader whose schema every request would otherwise carry. Applies to
 	// the lead and every agent it delegates to.
 	extractDocumentEnabled: { default: false as boolean },
+	// Pipelines (preview): the `pipeline` tool and its runs. Off by default;
+	// a provider's Tools section can still drop it once this is on.
+	pipelinesEnabled: { default: false as boolean },
 	// How the Document Reader reads a scanned PDF page: "tesseract" on this
 	// machine, "vision" through the Vision tab's model (or the session's model
 	// when it can see and there is none), or "off".

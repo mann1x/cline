@@ -253,6 +253,12 @@
 				"icon": "$(cloud-download)"
 			},
 			{
+				"command": "cerebriline.approvePipeline",
+				"title": "Approve Pipeline",
+				"category": "Cerebriline",
+				"icon": "$(pass)"
+			},
+			{
 				"command": "cerebriline.reopenSshFsWithRemoteSsh",
 				"title": "Reopen SSH FS Folder with Remote-SSH",
 				"category": "Cerebriline",

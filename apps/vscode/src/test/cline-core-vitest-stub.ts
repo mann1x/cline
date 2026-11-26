@@ -23,6 +23,12 @@ export {
 } from "../../../../sdk/packages/core/src/extensions/browser/browser-launch"
 export { startBrowserProcess, wasAdopted } from "../../../../sdk/packages/core/src/extensions/browser/browser-process"
 export {
+	approvePipeline,
+	findPipeline,
+	listPipelines,
+	PIPELINES_DIR,
+} from "../../../../sdk/packages/core/src/extensions/pipelines/workspace"
+export {
 	installOcrLanguages,
 	parseOcrLanguages,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"

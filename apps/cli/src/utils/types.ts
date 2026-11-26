@@ -107,6 +107,11 @@ export interface ParsedArgs {
 	 * extension's Document Reader setting.
 	 */
 	documents?: boolean;
+	/**
+	 * `--pipelines`: offer the `pipeline` tool. Off by default, as in the
+	 * extension's Features → Pipelines setting.
+	 */
+	pipelines?: boolean;
 	/** `--ocr`: how extract_document reads scanned pages. */
 	ocr?: string;
 	/** `--ocr-languages`: tesseract languages, such as "eng+deu". */

@@ -44,6 +44,7 @@ import { workspaceResolver } from "./core/workspace"
 import { findMatchingNotebookCell, getContextForCommand, showWebview } from "./hosts/vscode/commandUtils"
 import { abortCommitGeneration, generateCommitMsg } from "./hosts/vscode/commit-message-generator"
 import { registerClineOutputChannel } from "./hosts/vscode/hostbridge/env/debugLog"
+import { approvePipelineCommand } from "./hosts/vscode/pipeline-approve"
 import { registerSshFsBridge } from "./hosts/vscode/remote/sshfs-bridge"
 import {
 	disposeVscodeCommentReviewController,
@@ -210,6 +211,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand(commands.CheckForUpdates, () => checkForUpdates(context, { manual: true })),
 	)
 	registerUpdateChecks(context)
+	// A pipeline the model wrote runs only once the person approves it.
+	context.subscriptions.push(vscode.commands.registerCommand(commands.ApprovePipeline, () => approvePipelineCommand()))
 	// An SSH FS folder is served to this computer, where the tools also run;
 	// offer to reopen it with Remote-SSH so they run on its host instead.
 	registerSshFsBridge(context, commands.ReopenSshFsWithRemoteSsh)

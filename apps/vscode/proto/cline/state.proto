@@ -376,6 +376,7 @@ message Settings {
   optional string tool_result_format = 254;
   optional bool show_cloud_usage_in_task_header = 255;
   optional int32 max_terminals = 256;
+  optional bool pipelines_enabled = 257;
 }
 
 message State {
@@ -495,6 +496,7 @@ message UpdateSettingsRequest {
   optional int32 shell_integration_timeout = 8;
   optional bool terminal_reuse_enabled = 9;
   optional int32 max_terminals = 121;
+  optional bool pipelines_enabled = 122;
   optional bool mcp_responses_collapsed = 10;
   optional McpDisplayMode mcp_display_mode = 11;
   optional PlanActMode mode = 13;

@@ -33,6 +33,11 @@ export function buildToolPolicies(
 	set(["run_commands", "execute_command"])
 	set(["fetch_web_content", "web_fetch", "web_search"])
 	set(["browser", "browser_action", "render_image"])
+	// `pipeline` is deliberately unlisted. A run needs the person's approval of
+	// that version on disk (the Approve Pipeline command), and every command
+	// and tool node inside it is asked for under the same policies and toggles
+	// as a direct call (`PipelineSession`, core). Gating the tool too would ask
+	// twice for one action; `save` writes only a proposal.
 
 	if (mcpHub) {
 		for (const server of mcpHub.getServers()) {

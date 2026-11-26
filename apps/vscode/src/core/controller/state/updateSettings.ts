@@ -332,6 +332,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.teammatesEnabled !== undefined) {
 			controller.stateManager.setGlobalState("teammatesEnabled", !!request.teammatesEnabled)
 		}
+		if (request.pipelinesEnabled !== undefined) {
+			controller.stateManager.setGlobalState("pipelinesEnabled", !!request.pipelinesEnabled)
+		}
 		if (request.extractDocumentEnabled !== undefined) {
 			controller.stateManager.setGlobalState("extractDocumentEnabled", !!request.extractDocumentEnabled)
 		}

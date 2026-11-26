@@ -1,7 +1,8 @@
-import { DEFAULT_READ_LIMIT_CHARS, SELECTABLE_TOOLS, SELECTABLE_TOOLS_TOTAL_TOKENS, TOOL_GROUPS } from "@shared/tool-selection"
+import { DEFAULT_READ_LIMIT_CHARS, SELECTABLE_TOOLS, TOOL_GROUPS } from "@shared/tool-selection"
 import { useRef, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
 import { DebouncedTextField } from "./DebouncedTextField"
 
@@ -44,6 +45,7 @@ interface ToolsPatch {
 
 export const ToolsSection = ({ providerId }: { providerId: string }) => {
 	const { config, write } = useProviderConfig(providerId as never)
+	const extensionState = useExtensionState()
 	const [expanded, setExpanded] = useState(false)
 	// What this panel has sent and not yet seen answered. The list is written
 	// whole, so two switches flipped inside one round trip would otherwise both
@@ -72,9 +74,18 @@ export const ToolsSection = ({ providerId }: { providerId: string }) => {
 
 	const section = current()
 	const disabled = new Set(section.disabled)
-	const offered = SELECTABLE_TOOLS.filter((tool) => !disabled.has(tool.name))
+	// A tool that exists only behind a feature is never sent while the feature
+	// is off, whatever this provider's switch says: it is drawn off and
+	// disabled, with the reason, and it costs nothing.
+	const unavailable = (tool: (typeof SELECTABLE_TOOLS)[number]) =>
+		tool.requires !== undefined && extensionState[tool.requires.feature] !== true
+	const offered = SELECTABLE_TOOLS.filter((tool) => !disabled.has(tool.name) && !unavailable(tool))
 	const offeredTokens = offered.reduce((total, tool) => total + tool.tokens, 0)
-	const offCount = SELECTABLE_TOOLS.length - offered.length
+	// Counted and priced over what this panel can switch on: a tool whose
+	// feature is off is not "off" here and not part of what is on offer.
+	const available = SELECTABLE_TOOLS.filter((tool) => !unavailable(tool))
+	const availableTokens = available.reduce((total, tool) => total + tool.tokens, 0)
+	const offCount = available.length - offered.length
 	const readLimitOn = section.readLimitEnabled !== false
 
 	const writeTools = (next: ToolsPatch) => {
@@ -129,7 +140,7 @@ export const ToolsSection = ({ providerId }: { providerId: string }) => {
 				{/* On the header rather than inside, because the price is the
 				    reason to open the section at all. */}
 				<span className="ml-auto text-xs text-description" data-testid="tools-section-total">
-					{formatTokens(offeredTokens)} of {formatTokens(SELECTABLE_TOOLS_TOTAL_TOKENS)} tokens
+					{formatTokens(offeredTokens)} of {formatTokens(availableTokens)} tokens
 				</span>
 			</button>
 
@@ -149,9 +160,11 @@ export const ToolsSection = ({ providerId }: { providerId: string }) => {
 						if (inGroup.length === 0) {
 							return null
 						}
-						const groupTotal = inGroup.reduce((total, tool) => total + tool.tokens, 0)
+						const groupTotal = inGroup
+							.filter((tool) => !unavailable(tool))
+							.reduce((total, tool) => total + tool.tokens, 0)
 						const groupOffered = inGroup
-							.filter((tool) => !disabled.has(tool.name))
+							.filter((tool) => !disabled.has(tool.name) && !unavailable(tool))
 							.reduce((total, tool) => total + tool.tokens, 0)
 						return (
 							<div className="mt-[14px]" key={group.id}>
@@ -186,14 +199,22 @@ export const ToolsSection = ({ providerId }: { providerId: string }) => {
 												</span>
 											</Label>
 											<Switch
-												checked={!disabled.has(tool.name)}
+												checked={!disabled.has(tool.name) && !unavailable(tool)}
 												className="shrink-0"
+												disabled={unavailable(tool)}
 												id={`tool-${tool.name}`}
 												onCheckedChange={(checked) => setDisabled(tool.name, !checked)}
 												size="default"
 											/>
 										</div>
 										<p className="text-xs mt-0 mb-0 text-description">{tool.summary}</p>
+										{unavailable(tool) && tool.requires && (
+											<p
+												className="text-xs mt-0 mb-0 text-(--vscode-errorForeground)"
+												data-testid={`tool-requires-${tool.name}`}>
+												Needs {tool.requires.label}.
+											</p>
+										)}
 									</div>
 								))}
 							</div>

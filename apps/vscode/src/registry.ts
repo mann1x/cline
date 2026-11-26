@@ -51,6 +51,7 @@ const ClineCommands = {
 	JupyterImproveCell: prefix + ".jupyterImproveCell",
 	CheckForUpdates: prefix + ".checkForUpdates",
 	ReopenSshFsWithRemoteSsh: prefix + ".reopenSshFsWithRemoteSsh",
+	ApprovePipeline: prefix + ".approvePipeline",
 }
 
 /**

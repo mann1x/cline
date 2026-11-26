@@ -89,6 +89,7 @@ export async function getStateToPostToWebview(controller: {
 	const leadSandboxConfine = stateManager.getGlobalSettingsKey("leadSandboxConfine")
 	const teammatesEnabled = stateManager.getGlobalSettingsKey("teammatesEnabled")
 	const extractDocumentEnabled = stateManager.getGlobalSettingsKey("extractDocumentEnabled")
+	const pipelinesEnabled = stateManager.getGlobalSettingsKey("pipelinesEnabled")
 	const extractDocumentOcr = stateManager.getGlobalSettingsKey("extractDocumentOcr")
 	const extractDocumentOcrLanguages = stateManager.getGlobalSettingsKey("extractDocumentOcrLanguages")
 	const extractDocumentDescribeImages = stateManager.getGlobalSettingsKey("extractDocumentDescribeImages")
@@ -255,6 +256,7 @@ export async function getStateToPostToWebview(controller: {
 		leadSandboxConfine,
 		teammatesEnabled,
 		extractDocumentEnabled,
+		pipelinesEnabled,
 		extractDocumentOcr,
 		extractDocumentOcrLanguages,
 		extractDocumentDescribeImages,

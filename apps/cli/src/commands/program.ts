@@ -289,6 +289,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Offer extract_document, which reads PDF, Word, PowerPoint, Excel (current and 97-2003), OpenDocument, RTF and ebooks (EPUB, MOBI, AZW3, FB2), gzipped or not, to text and writes their pictures to files under .cline/extracted/. Off by default; CLINE_DOCUMENTS=1 does the same",
 			)
 			.option(
+				"--pipelines",
+				"Offer the pipeline tool (preview): the model writes workflows of tools, commands, branches, loops and waits as .cerebriline/pipelines/*.pipeline.json, and runs one in the background once you approve that version with /pipelines approve <name>. Off by default; CLINE_PIPELINES=1 does the same",
+			)
+			.option(
 				"--ocr <engine>",
 				'How extract_document reads a scanned PDF page: "tesseract" (the default, on this machine), "vision" (the --vision-model, or the session model when it can see), or "off"',
 			)
@@ -540,6 +544,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.worktree !== undefined) result.worktree = !!opts.worktree;
 	if (opts.teammates !== undefined) result.teammates = !!opts.teammates;
 	if (opts.documents !== undefined) result.documents = !!opts.documents;
+	if (opts.pipelines !== undefined) result.pipelines = !!opts.pipelines;
 	if (opts.ocr !== undefined) result.ocr = String(opts.ocr);
 	if (opts.ocrLanguages !== undefined)
 		result.ocrLanguages = String(opts.ocrLanguages);

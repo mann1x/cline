@@ -100,6 +100,17 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "extractDocumentEnabled",
 	},
 	{
+		// Off by default, like Teammates: a schema on every request, and a
+		// surface only strong models (a cloud model, a 27B dense) use well.
+		// Each provider's Tools section can drop it again once this is on.
+		id: "pipelines",
+		label: "Pipelines (preview)",
+		description:
+			"Let the model write, test and run pipelines: reusable chains of commands, tool calls, checks, waits and approvals, kept as JSON in .cerebriline/pipelines/ and run in the background while you work. Only a version you approve runs. Adds one tool to every request. A provider's Tools section can switch it off for that connection.",
+		stateKey: "pipelinesEnabled",
+		settingKey: "pipelinesEnabled",
+	},
+	{
 		// Default on: it is what every build did before the switch existed, and
 		// inside a coding task it is the right reading -- a turn that called
 		// nothing is nearly always one that should have acted, a needless nudge
@@ -292,6 +303,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		subagentCommandsEnabled,
 		teammatesEnabled,
 		extractDocumentEnabled,
+		pipelinesEnabled,
 		extractDocumentOcr,
 		extractDocumentOcrLanguages,
 		extractDocumentDescribeImages,
@@ -314,6 +326,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		subagentCommandsEnabled,
 		teammatesEnabled,
 		extractDocumentEnabled,
+		pipelinesEnabled,
 		// `?? true` rather than a bare read: the default is on, and an
 		// extension state that predates the key must not render as off.
 		strongNudgesEnabled: strongNudgesEnabled ?? true,

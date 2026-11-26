@@ -41,7 +41,12 @@ describe("command palette", () => {
 			canFork: true,
 		});
 		const slashCommands = getVisibleSystemSlashCommands(registry).filter(
-			(command) => command.source === "tui" && command.name !== "config",
+			// `/agent` is planned from the prompt's text when it is sent; with
+			// no task there is nothing for a palette entry to run.
+			(command) =>
+				command.source === "tui" &&
+				command.name !== "config" &&
+				command.name !== "agent",
 		);
 		const items = buildCommandPaletteItems({
 			canForkSession: true,
@@ -54,7 +59,9 @@ describe("command palette", () => {
 		);
 
 		for (const command of slashCommands) {
-			expect(paletteByCommandName.has(command.name)).toBe(true);
+			expect
+				.soft(paletteByCommandName.has(command.name), command.name)
+				.toBe(true);
 		}
 		expect(paletteByCommandName.get("settings")?.description).toBe(
 			"Review and edit CLI configuration",

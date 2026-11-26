@@ -78,6 +78,14 @@ export interface SelectableTool {
 	readonly tokens: number
 	/** Which heading it appears under. */
 	readonly group: ToolGroup
+	/**
+	 * A Features switch the tool also needs. The one exception to listing only
+	 * unconditional tools (owner's ruling, 2026-11-26): pipelines are switched
+	 * on globally and then off per connection, so the entry is here, and drawn
+	 * disabled with this reason while the feature is off -- never as a switch
+	 * that does nothing.
+	 */
+	readonly requires?: { readonly feature: "pipelinesEnabled"; readonly label: string }
 }
 
 export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
@@ -120,7 +128,7 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "browser",
 		label: "browser",
 		summary: "Drives a real Chrome: loads a page, clicks, types and reads the console.",
-		tokens: 693,
+		tokens: 828,
 		group: "other",
 	},
 	{
@@ -178,6 +186,14 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		summary: "Fetches a URL and returns its text.",
 		tokens: 320,
 		group: "read",
+	},
+	{
+		name: "pipeline",
+		label: "pipeline",
+		summary: "Writes, tests and runs pipelines in the background. Switch it off for a model that cannot handle them.",
+		tokens: 341,
+		group: "other",
+		requires: { feature: "pipelinesEnabled", label: "Features → Pipelines" },
 	},
 ]
 

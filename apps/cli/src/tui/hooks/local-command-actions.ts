@@ -24,6 +24,8 @@ export interface LocalSlashCommandActionInput {
 	openHistory: () => void;
 	/** Print the conversation's task board. */
 	showTasks?: () => void;
+	/** `/pipelines`: list, approve, runs. */
+	runPipelines?: (invocation?: LocalSlashCommandInvocation) => void;
 	exitCline: () => void;
 }
 
@@ -105,6 +107,10 @@ export function runLocalSlashCommandAction(
 	}
 	if (normalized === "tasks") {
 		input.showTasks?.();
+		return true;
+	}
+	if (normalized === "pipelines") {
+		input.runPipelines?.(input.invocation);
 		return true;
 	}
 	if (normalized === "history") {

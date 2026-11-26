@@ -15,6 +15,7 @@ import { withLoadingDialog } from "../components/dialogs/loading-dialog";
 import { useSession } from "../contexts/session-context";
 import type { AppView, TuiProps } from "../types";
 import { hydrateSessionMessages } from "../utils/hydrate-messages";
+import { pipelinesCommand } from "../utils/pipelines-command";
 import type { LocalSlashCommandInvocation } from "../utils/skill-command-input";
 import { HistoryDialogContent } from "../views/history-view";
 import { runLocalSlashCommandAction } from "./local-command-actions";
@@ -44,6 +45,8 @@ export function useLocalCommandActions(input: {
 	onBackgroundDelegationStarted?: () => void;
 	onListAgents: TuiProps["onListAgents"];
 	onShowTasks?: TuiProps["onShowTasks"];
+	/** Where `/pipelines` reads and approves pipeline files. */
+	workspaceRoot?: string;
 	onFork: TuiProps["onFork"];
 	onUndo: () => Promise<void>;
 	onExit: TuiProps["onExit"];
@@ -74,6 +77,7 @@ export function useLocalCommandActions(input: {
 		onBackgroundDelegationStarted,
 		onListAgents,
 		onShowTasks,
+		workspaceRoot,
 		onFork,
 		onUndo,
 		onExit,
@@ -84,6 +88,18 @@ export function useLocalCommandActions(input: {
 			text: onShowTasks?.() ?? "No task board in this session.",
 		});
 	}, [onShowTasks, session]);
+
+	const runPipelines = useCallback(
+		(invocation?: LocalSlashCommandInvocation) => {
+			session.appendEntry({
+				kind: "status",
+				text: workspaceRoot
+					? pipelinesCommand(invocation?.text ?? "/pipelines", workspaceRoot)
+					: "No workspace: pipelines live in a workspace folder.",
+			});
+		},
+		[session, workspaceRoot],
+	);
 
 	const openHistory = useCallback(async () => {
 		const sessionId = await dialog.choice<string>({
@@ -471,6 +487,7 @@ export function useLocalCommandActions(input: {
 				openHelp,
 				openHistory,
 				showTasks,
+				runPipelines,
 				exitCline: onExit,
 			});
 		},
@@ -484,6 +501,7 @@ export function useLocalCommandActions(input: {
 			openHelp,
 			openHistory,
 			showTasks,
+			runPipelines,
 			openModelSelector,
 			openSkills,
 			openThemePicker,

@@ -1395,6 +1395,9 @@ export async function runCli(): Promise<void> {
 			...(documentsRequested(args)
 				? { documentReader: await cliDocumentReader(args, loggerAdapter.core) }
 				: {}),
+			// Pipelines (preview), off unless asked for: `--pipelines` or
+			// CLINE_PIPELINES=1, mirroring the extension's Features → Pipelines.
+			...(pipelinesRequested(args) ? { pipelines: { enabled: true } } : {}),
 			// Let a delegated agent run commands in the overlay sandbox, off by
 			// default (as in the desktop app) and opted into with
 			// CLINE_SUBAGENT_COMMANDS=1. The binaries dir is always resolved: the
@@ -2042,6 +2045,10 @@ export async function runCli(): Promise<void> {
 	} finally {
 		stopUserInstructionService();
 	}
+}
+
+function pipelinesRequested(args: ParsedArgs): boolean {
+	return args.pipelines === true || process.env.CLINE_PIPELINES?.trim() === "1";
 }
 
 function documentsRequested(args: ParsedArgs): boolean {

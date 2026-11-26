@@ -1,6 +1,6 @@
 # Plan: pipelines on the task graph (native, preview, off by default)
 
-Status 2026-11-26: approved by the owner 2026-11-26; phase 0 in progress. Tracked as ol-173.
+Status 2026-11-26: approved by the owner 2026-11-26; phases 0 and 1 built. Tracked as ol-173.
 Replaces the 2026-11-25 draft, which drove a user's n8n server over MCP. The
 owner ruled that out: there is no n8n server and none will be added, and an
 n8n reached through MCP would be a thin slice of n8n at a large price in tool
@@ -285,7 +285,23 @@ pandorum as a local vsix, and keeps the feature off by default.
 1. **The switches and the tool.** Features → Pipelines, the per-provider
    Tools entry (disabled with its reason while the feature is off), the
    `pipeline` tool and its system-prompt paragraph, approval records, CLI
-   `--pipelines` and `/pipelines`. The task panel shows run tasks.
+   `--pipelines` and `/pipelines`. The task panel shows run tasks. **Built
+   2026-11-26.** As built:
+   - Approval is the **Cerebriline: Approve Pipeline** command (quick pick,
+     opens the file, modal confirm) and `/pipelines approve <name>`; never a
+     tool. `/pipelines` also lists files and runs; both are in the CLI's
+     command palette.
+   - The `pipeline` tool has no tool policy of its own: a run needs the
+     approved version, and every node is asked for under the session's
+     policies and approval callback, so gating the tool would ask twice.
+   - A Tools entry behind an off feature is drawn off and disabled with
+     "Needs Features → Pipelines", and is left out of the header's count and
+     token total.
+   - A run's task shows in the task panel as held by `pipeline:<run>`, with
+     its gates; a dedicated run row waits for the viewer (phase 3).
+   - A reload does not resume runs by itself: `pipeline resume <run>` does,
+     from the journal. Automatic pick-up on session start is left for
+     phase 2, with the failure handling.
 2. **Agents and failure handling.** `agent`, `swarm`, `pipeline` (sub-runs)
    and `http` nodes; retries, error routes, `onFailure`; `test` with pins and
    `--until`; partial re-run.
