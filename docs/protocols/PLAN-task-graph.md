@@ -1,6 +1,9 @@
 # Plan: a task graph per conversation (replaces `task_progress`)
 
-Status 2026-11-20: decisions taken (see [Decided](#decided)), not started.
+Status 2026-11-26: phases 0-5 built and measured. Phase 3 shipped in
+4.100.292; phases 4 and 5 and the phase 3 leftovers are on main for
+4.100.299. Arm D (teams) ran 2026-11-26: the machinery works, qwen36 27B does
+not use it (below).
 Tracked as claude-hooks task ol-162. Sources:
 
 - claude-hooks' task system as of `f81e77e` (`docs/tasks.md`,
@@ -511,20 +514,73 @@ keep-updated (section 11).
   board in the Memory panel; asking for one in chat would need the model to
   choose a board, which this phase does not give it.
 
-**3. Switch over.**
-- Templates.
-- The `task_progress` parameter and tool are dropped; a habitual send is read
-  without being advertised.
+**3. Switch over. Shipped 4.100.292 (4f0aeaf585); leftovers e9eb9ba675.**
+- Templates (e9eb9ba675): JSON files in `.cerebriline/task-templates/` (the
+  workspace's, versioned with it) and `~/.cerebriline/task-templates/`.
+  `task_plan {"template", "vars"}` is offered only when one exists, so a
+  workspace without templates pays nothing in schema. The panel starts from
+  one, or saves the board as one (cancelled tasks, run ids, timers and
+  commits left out; `human:` gates kept).
+- The `task_progress` parameter and tool are dropped. The habitual reader was
+  built in 4f0aeaf585 and removed in e9eb9ba675: no `task_progress` send in
+  arm P3 or in six days of pandorum logs (321 files), against 107 nudge lines.
 - Default on.
-- Harness A/B against the phase 0 baseline, on the same metrics plus tool
-  validation failures on the new tools.
-- Ship only if success holds and the fixed price goes down.
+- Arm P3 (4f0aeaf585, 15 runs): 110/110.
+- S6 (e9eb9ba675): the struggle detector's message names the active task and
+  asks for a note, a split or a `human:` gate.
 
-**4. Teams.** `team_task` on the graph's store, claims, `run:` gates, the
-team nudges (T1–T5), "Ready now" to teammates.
+**4. Teams. Built 2026-11-25 (ca40c4690b).** `team_task` keeps its schema;
+its runtime methods read and write the board through a `TeamTaskBoard`
+(`task-graph/team-board.ts`), so a `team_task` task is a `T<n>` and a planned
+task can be claimed. Statuses map pending/in_progress/blocked/completed to
+pending/active/waiting/done (cancelled is said in the summary). A list the
+runtime held before is moved onto the board once.
+- Claims: an agent's start is a claim; another author's change is refused
+  while the holder's run is live, unless `force: true` (noted). The person is
+  never refused. A claim ends with its run (`releaseClaims`; the lead is told).
+- `run:` gates open on a run's end (team events, and delegated agents'
+  answers; a background start waits for its report).
+- T1 a plan's first layer can run side by side; T2 a teammate's run starts
+  with what it holds or may claim; T3 asked once before it ends to close what
+  it holds; T4 while waiting on runs, ready tasks nobody holds; T5 a
+  teammate's task became ready (mailbox).
+- **Arm D, 2026-11-26** (tg-bench, qwen36 27B on eleven2go's 3090, build
+  2134138654, `--teammates --parallel-sessions 2`, 15 runs): 108/110 (P3
+  110/110; ledger's two misses were R1 and R7, within its spread in every
+  arm). **No team call in any run**: no `team_run_task`, no claim, no
+  teammate. T1 fired 4 times, where a plan had independent tasks, and was
+  followed 0 times. Ledger wall median 646 s against P3's 415 s (the 18
+  team schemas on every request); textkit and shop unchanged.
+  - Found on the way: on a one-slot endpoint the CLI withholds the team
+    tools whatever `--teammates` says (smoke run 0099). And every channel
+    told the model to order the plan (`depends` "for the order"), so it
+    chained independent tasks and left nothing to hand out; since
+    2134138654 `depends` is "only where a task needs another finished
+    first" everywhere.
+  - Reading: on this model, teams cost schema and time and are not used.
+    Teammates stay off by default; whether a cloud model hands work out is
+    the open question, for a cloud arm when the account is free.
 
-**5. Gates and views.** `human:` wired to questions and the panel; commit,
-timer and GitHub gates; Mermaid; tuning the decay from live boards.
+**5. Gates and views. Built 2026-11-25 (b809049f9e, 7af49c5a4d, 59126097f2).**
+- Gates: `run:`, `command:`, `human:`, `commit:<sha>@<branch>`, `timer:`
+  (durations made absolute when written), `gh-pr:`, `gh-run:`. A subtask
+  inherits its parent's; an active task given one waits; all open → pending
+  again, "Ready now", auto-start. `human:` opens on an answer naming the task
+  or the gate (or the only one waiting) and from the panel's Resolve; commit
+  and timer gates are checked before each request; GitHub's on `task_view`
+  only. A failed gate is said once.
+- Typed links: discovered-from, related, caused-by, supersedes and
+  duplicate-of (the last two cancel and re-point dependents); attachments as
+  url, commit, message or plan.
+- Views: `task_view mermaid`; the panel's Graph tab draws it. The panel shows
+  gates (Resolve / Remove), links, files (open in the editor) and "Show where
+  it was planned" (the `task_plan` / `team_task` row carries its call id).
+  CLI `/tasks` prints the board.
+- Decay, measured 2026-11-26 on 129 pandorum transcripts (4.100.292-298)
+  replayed call by call: at most 17 tasks and 11 closed, the board at most
+  726 characters (p90 440). More than four were closed in 15 transcripts;
+  the 5 times the model named a closed task, it was among the four shown.
+  The caps stay.
 
 ## Decided
 
