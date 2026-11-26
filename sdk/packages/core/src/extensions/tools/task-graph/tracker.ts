@@ -44,7 +44,7 @@ import {
 	decideTimerGate,
 	humanGatesAnswered,
 } from "./gates";
-import { openWork, parseGate, type Task } from "./model";
+import { isReady, openWork, parseGate, type Task, taskLayers } from "./model";
 import { type ExportedTaskBoard, exportTaskEvents } from "./saved-board";
 import {
 	type GateDecision,
@@ -264,7 +264,7 @@ export const TASK_BOARD_RULES_HEADING = "# Task board";
  * there were obeyed the same morning), and no template carried a word about
  * the board: the checklist's `task_progress` section went with the checklist.
  */
-export function buildTaskBoardRules(planMode = false): string {
+export function buildTaskBoardRules(planMode = false, team = false): string {
 	if (planMode) {
 		return [
 			TASK_BOARD_RULES_HEADING,
@@ -283,6 +283,11 @@ export function buildTaskBoardRules(planMode = false): string {
 		'- Close a task on the call that finishes it: add `task_done: "T1: what was done and how it was checked"` to that call.',
 		"- When the work turns out different from the plan (a new problem, a step it does not have), change the plan: add the task with `task_plan`, or note on the task where it stands with `task_update`.",
 		"- A request that only needs an answer needs no plan.",
+		...(team
+			? [
+					"- Your teammates work the same board: `team_task` shows and claims the same `T<n>` tasks. Tasks in the first layer of `task_view graph` can run side by side: hand them out with `team_run_task`, naming the task id in the message; a teammate claims it and closes it with `team_task complete`. A task that needs a teammate's result can wait on it with the gate `run:<teammate id>`.",
+				]
+			: []),
 	].join("\n");
 }
 
@@ -290,11 +295,12 @@ export function buildTaskBoardRules(planMode = false): string {
 export function withTaskBoardRules(
 	systemPrompt: string | undefined,
 	planMode = false,
+	team = false,
 ): string | undefined {
 	if (!systemPrompt?.trim()) return systemPrompt;
 	if (systemPrompt.includes(`\n${TASK_BOARD_RULES_HEADING}\n`))
 		return systemPrompt;
-	return `${systemPrompt}\n\n${buildTaskBoardRules(planMode)}`;
+	return `${systemPrompt}\n\n${buildTaskBoardRules(planMode, team)}`;
 }
 
 /** What a plan-mode task says: the plan is what the user approves. */
@@ -494,7 +500,7 @@ interface QueuedNudge {
 	from: Set<unknown>;
 }
 
-/** A change from the task panel: \`task_update\`'s or \`task_plan\`'s input, as the person's. */
+/** A change from the task panel: `task_update`'s or `task_plan`'s input, as the person's. */
 export type TaskGraphEdit =
 	| { op: "update"; updates: unknown[] }
 	| { op: "plan"; tasks: unknown[] };
@@ -511,6 +517,8 @@ export class TaskGraphTracker {
 	private readonly planMode: boolean;
 	private readonly onHabitualChecklist: ((count: number) => void) | undefined;
 	private readonly cwd: string | undefined;
+	/** The team, once there is one: T1 and T4 speak only then. */
+	private team: { idleReady: () => string | undefined } | undefined;
 	/** `task_progress` sends this session, read onto the board. */
 	private habitualSends = 0;
 	private calls = 0;
@@ -565,6 +573,59 @@ export class TaskGraphTracker {
 	}
 
 	// -------------------------------------------------------------------------
+	// Teams (phase 4)
+	// -------------------------------------------------------------------------
+
+	/** The conversation has a team: its tasks are on this board. */
+	attachTeam(team: { idleReady: () => string | undefined }): void {
+		this.team = team;
+	}
+
+	/** A teammate's run ended holding tasks; they are back on the board. */
+	noteReleased(agentId: string, ids: readonly string[], reason: string): void {
+		if (ids.length === 0) return;
+		this.doneNotes.push(
+			`[SYSTEM] ${agentId}'s run ended (${reason}) with ${ids.join(", ")} still open. ${ids.length === 1 ? "It is" : "They are"} back on the board, unheld: hand ${ids.length === 1 ? "it" : "them"} out again (team_run_task) or take ${ids.length === 1 ? "it" : "them"} yourself.`,
+		);
+		this.boardDue = true;
+	}
+
+	/** T1: a plan whose first layer has two or more tasks, with a team to run them. */
+	private nudgeParallel(input: unknown): void {
+		if (!this.team || this.planMode) return;
+		const state = this.store.getState();
+		// The lead's own active task counts: it is as free to hand out.
+		const first = (taskLayers(state)[0] ?? []).filter(
+			(task) =>
+				!task.claimedBy && (isReady(state, task) || task.status === "active"),
+		);
+		if (first.length < 2) return;
+		const ids = first.map((task) => task.id);
+		this.nudge(
+			"T1",
+			`parallel:${ids.join(",")}`,
+			() =>
+				`[SYSTEM] ${ids.slice(0, -1).join(", ")} and ${ids.at(-1)} can run side by side: nothing orders them. Hand them to teammates (team_run_task, naming the task id in the message) rather than doing them one after another.`,
+			input,
+			true,
+		);
+	}
+
+	/** T4: the lead waits on runs while ready tasks have nobody on them. */
+	private nudgeIdleReady(input: unknown): void {
+		const idle = this.team?.idleReady();
+		if (!idle) return;
+		this.nudge(
+			"T4",
+			`idle:${idle}`,
+			() =>
+				`[SYSTEM] While you wait, these tasks are ready and nobody holds them: ${idle}. Hand them to an idle teammate (team_run_task) or take one yourself.`,
+			input,
+			true,
+		);
+	}
+
+	// -------------------------------------------------------------------------
 	// Gates
 	// -------------------------------------------------------------------------
 
@@ -616,7 +677,48 @@ export class TaskGraphTracker {
 		this.sayGates(outcome.lines);
 	}
 
-	/** A background command exited: its \`command:\` gates open, or fail on a nonzero exit. */
+	/**
+	 * A delegated agent's answer came back (`spawn_agent`, a configured
+	 * `subagent_*` tool, `await_agents`): `run:` gates naming it open. A call
+	 * that only started agents in the background opens nothing; their report,
+	 * or `await_agents`, does.
+	 */
+	private noteDelegationResult(
+		input: unknown,
+		toolName: string | undefined,
+		result: unknown,
+	): void {
+		if (!toolName) return;
+		const delegation =
+			toolName === "spawn_agent" ||
+			toolName === "spawn_swarm" ||
+			toolName === "await_agents" ||
+			toolName.startsWith("subagent_");
+		if (!delegation) return;
+		let text = "";
+		try {
+			text = typeof result === "string" ? result : JSON.stringify(result);
+		} catch {
+			return;
+		}
+		if (/"background"\s*:\s*true/.test(text)) return;
+		const names = new Set<string>();
+		if (toolName.startsWith("subagent_")) names.add(toolName.slice(9));
+		const read = (value: unknown): void => {
+			if (!value || typeof value !== "object") return;
+			const record = value as Record<string, unknown>;
+			for (const key of ["name", "agent", "round_id", "roundId", "id"]) {
+				const field = record[key];
+				if (typeof field === "string" && field.trim()) names.add(field.trim());
+			}
+		};
+		read(input);
+		const agents = (input as { agents?: unknown } | undefined)?.agents;
+		if (Array.isArray(agents)) agents.forEach(read);
+		this.noteRunEnded([...names], true);
+	}
+
+	/** A background command exited: its `command:` gates open, or fail on a nonzero exit. */
 	noteCommandEnded(id: string, exitCode: number | undefined): void {
 		const outcome = this.store.resolveGates((gate) => {
 			const parsed = parseGate(gate.spec);
@@ -942,6 +1044,9 @@ export class TaskGraphTracker {
 			this.retractFailedWrite(input, toolName);
 			return;
 		}
+		this.noteDelegationResult(input, toolName, result);
+		if (toolName === "task_plan") this.nudgeParallel(input);
+		if (toolName === "team_await_runs") this.nudgeIdleReady(input);
 		if (toolName === "ask_question" && typeof result === "string") {
 			const question =
 				typeof input === "object" && input !== null

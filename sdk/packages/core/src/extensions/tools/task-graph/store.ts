@@ -203,9 +203,9 @@ export type GateDecision = { open: true } | { failed: string } | undefined;
 /** A saved board a new conversation starts from: its events, and who to author them as. */
 export interface TaskGraphSeed {
 	events: readonly unknown[];
-	/** As \`memory:m12\`. */
+	/** As `memory:m12`. */
 	by: string;
-	/** Where it came from, for the model: as \`m12, "ledger", saved 2026-11-21\`. */
+	/** Where it came from, for the model: as `m12, "ledger", saved 2026-11-21`. */
 	about?: string;
 }
 
@@ -588,7 +588,7 @@ export class TaskGraphStore {
 	plan(
 		input: unknown,
 		origin: TaskChangeOrigin = {},
-		options: { silent?: boolean } = {},
+		options: { silent?: boolean; autoStart?: boolean } = {},
 	): TaskOperationOutcome {
 		const { items, ignored } = readPlanInput(input);
 		const lines: string[] = [];
@@ -707,7 +707,7 @@ export class TaskGraphStore {
 		const readyNow = readyTasks(this.state)
 			.map((task) => task.id)
 			.filter((taskId) => !readyBefore.has(taskId));
-		this.autoStart(origin, lines);
+		if (options.autoStart !== false) this.autoStart(origin, lines);
 		if (this.planMode) {
 			lines.push(
 				"Plan mode: nothing is started. The work starts in act mode, once the user agrees. When the plan is complete, present it and ask the user how to proceed.",
@@ -1298,6 +1298,17 @@ export class TaskGraphStore {
 		}
 		if (released.length) this.onChange?.(this);
 		return released;
+	}
+
+	/**
+	 * Hold a task for an agent without starting it: assigned at creation, it
+	 * is that agent's to start once nothing holds it back.
+	 */
+	assign(id: string, holder: string, origin: TaskChangeOrigin = {}): void {
+		const task = this.state.tasks.get(id);
+		if (!task || isClosed(task.status)) return;
+		this.record({ op: "update", update: { id, claimedBy: holder } }, origin);
+		this.onChange?.(this);
 	}
 
 	/** Whether a holder's claim still stands. Set once the team exists. */

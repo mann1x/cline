@@ -2,9 +2,17 @@ export {
 	boardCounts,
 	renderBoard,
 	renderLayers,
+	renderMermaid,
 	renderSavedBoard,
 	renderTask,
 } from "./board";
+export {
+	absoluteGate,
+	decideCommitGate,
+	decideGitHubGate,
+	decideTimerGate,
+	humanGatesAnswered,
+} from "./gates";
 export {
 	countTasks,
 	foldTaskEvents,
@@ -13,7 +21,9 @@ export {
 	readyTasks,
 	type Task,
 	type TaskEvent,
+	type TaskGate,
 	type TaskGraphState,
+	type TaskLink,
 	type TaskPriority,
 	type TaskStatus,
 	taskLayers,
@@ -35,6 +45,7 @@ export {
 	type TaskSnapshot,
 	toolCallsInHistory,
 } from "./store";
+export { createGraphTeamBoard } from "./team-board";
 export { createTaskGraphTools } from "./tools";
 export {
 	buildTaskBoardRules,

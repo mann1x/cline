@@ -56,6 +56,7 @@ import {
 	LIST_FILES_TOOL_NAME,
 } from "../../extensions/tools/list-files";
 import {
+	createGraphTeamBoard,
 	TaskGraphTracker,
 	withTaskBoardRules,
 	withTaskGraphCapture,
@@ -1281,6 +1282,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 				withTaskBoardRules(
 					configWithProvider.systemPrompt,
 					configWithProvider.mode === "plan",
+					typeof runtime.teamRuntime?.useTaskBoard === "function",
 				) ?? configWithProvider.systemPrompt;
 		}
 		// On unless the host turns it off: the graph replaced the checklist
@@ -1290,6 +1292,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 			? new TaskGraphTracker({
 					logPath: join(sessionDir, `${sessionId}.tasks.jsonl`),
 					planMode: configWithProvider.mode === "plan",
+					...(configWithProvider.cwd ? { cwd: configWithProvider.cwd } : {}),
+					onForcedClaim: (id, from, to) =>
+						configWithProvider.logger?.log?.(
+							`[task-graph] ${to} took ${id} over from ${from} (forced)`,
+							{ sessionId },
+						),
 					onHabitualChecklist: (count) =>
 						configWithProvider.logger?.log?.(
 							`[task-graph] habitual task_progress send #${count}, read onto the board`,
@@ -1326,6 +1334,22 @@ export class LocalRuntimeHost implements RuntimeHost {
 				`[task-graph] ${outcome}: ${taskGraphTracker.store.getState().order.length} tasks`,
 				{ sessionId },
 			);
+			// Phase 4: the team's tasks are the board's. `team_task` keeps its
+			// actions; what it creates and claims is a `T<n>` here.
+			// Checked, not assumed: a host may bring a team runtime of its own.
+			if (typeof runtime.teamRuntime?.useTaskBoard === "function") {
+				const board = createGraphTeamBoard(taskGraphTracker.store, {
+					onNudge: (id, key) =>
+						configWithProvider.logger?.log?.(
+							`[task-graph] nudge ${id} (${key})`,
+							{ sessionId },
+						),
+					onReleased: (agentId, ids, reason) =>
+						taskGraphTracker.noteReleased(agentId, ids, reason),
+				});
+				runtime.teamRuntime.useTaskBoard(board);
+				taskGraphTracker.attachTeam(board);
+			}
 			taskGraphConfig?.onAttach?.({
 				sessionId,
 				edit: (action) => taskGraphTracker.edit(action),

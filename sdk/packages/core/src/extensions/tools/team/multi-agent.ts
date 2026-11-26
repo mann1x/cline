@@ -224,6 +224,35 @@ export function isTeamStateChange(event: TeamEvent): boolean {
 	return true;
 }
 
+/**
+ * Where the team's tasks live when the conversation keeps a task board
+ * (task graph phase 4): `team_task` reads and writes the board, so a task a
+ * teammate claims is a `T<n>` the lead's `task_view` shows, and the two
+ * can never disagree. Without one, the runtime keeps its own list.
+ */
+export interface TeamTaskBoard {
+	create(input: CreateTeamTaskInput): TeamTask;
+	claim(taskId: string, agentId: string): TeamTask;
+	block(taskId: string, agentId: string, reason: string): TeamTask;
+	complete(taskId: string, agentId: string, summary: string): TeamTask;
+	get(taskId: string): TeamTask | undefined;
+	list(): TeamTaskListItem[];
+	/** Told once it is in use: whether a member is running, and how to mail one. */
+	attach?(team: {
+		isRunning: (agentId: string) => boolean;
+		notify: (toAgentId: string, subject: string, body: string) => void;
+		leadId: string;
+	}): void;
+	/** A run ended: `run:` gates naming any of `ids` open, or fail. */
+	runEnded?(ids: string[], ok: boolean, reason?: string): void;
+	/** A teammate's task run ended: its claims end with it. */
+	agentStopped?(agentId: string, reason: string): void;
+	/** What to tell a teammate as its run starts: the tasks it holds or may claim. */
+	briefFor?(agentId: string): string | undefined;
+	/** A teammate's run is ending: what to ask about the tasks it still holds. */
+	closeOutFor?(agentId: string): string | undefined;
+}
+
 export interface AgentTeamsRuntimeOptions {
 	teamName: string;
 	leadAgentId?: string;
@@ -761,6 +790,7 @@ export class AgentTeamsRuntime {
 	private readonly maxConcurrentRuns: number;
 	private readonly teammateWorkspaces?: TeammateWorkspaceHooks;
 	private readonly acceptTeammateConnectionUpdates?: AgentTeamsRuntimeOptions["acceptTeammateConnectionUpdates"];
+	private board: TeamTaskBoard | undefined;
 
 	constructor(options: AgentTeamsRuntimeOptions) {
 		this.teamName = options.teamName;
@@ -813,11 +843,62 @@ export class AgentTeamsRuntime {
 			.map((member) => member.agentId);
 	}
 
+	/**
+	 * Keep the team's tasks on the conversation's task board from now on. A
+	 * list the runtime held already (a team restored from before the board)
+	 * is moved onto it once, by title, and dropped here.
+	 */
+	useTaskBoard(board: TeamTaskBoard): void {
+		this.board = board;
+		const leadId =
+			Array.from(this.members.values()).find((member) => member.role === "lead")
+				?.agentId ?? "lead";
+		board.attach?.({
+			isRunning: (agentId) =>
+				(this.members.get(agentId)?.runningCount ?? 0) > 0,
+			notify: (toAgentId, subject, body) => {
+				try {
+					this.sendMessage(leadId, toAgentId, subject, body);
+				} catch {
+					// A teammate gone since: nothing to tell.
+				}
+			},
+			leadId,
+		});
+		if (this.tasks.size > 0) {
+			const known = new Set(board.list().map((task) => task.title));
+			for (const task of this.tasks.values()) {
+				if (known.has(task.title)) continue;
+				const made = board.create({
+					title: task.title,
+					description: task.description,
+					createdBy: task.createdBy,
+				});
+				if (task.status === "completed") {
+					board.complete(
+						made.id,
+						task.assignee ?? leadId,
+						task.summary ?? "done",
+					);
+				}
+			}
+			this.tasks.clear();
+			this.dirty.reset = true;
+			this.notifyStateDirty();
+		}
+	}
+
+	hasTaskBoard(): boolean {
+		return this.board !== undefined;
+	}
+
 	getTask(taskId: string): TeamTask | undefined {
+		if (this.board) return this.board.get(taskId);
 		return this.tasks.get(taskId);
 	}
 
 	listTasks(): TeamTask[] {
+		if (this.board) return this.board.list();
 		return Array.from(this.tasks.values());
 	}
 
@@ -825,6 +906,14 @@ export class AgentTeamsRuntime {
 		status?: TeamTaskStatus;
 		assignee?: string;
 	}): TeamTaskListItem[] {
+		if (this.board) {
+			return this.board.list().filter((task) => {
+				if (options?.status && task.status !== options.status) return false;
+				if (options?.assignee && task.assignee !== options.assignee)
+					return false;
+				return true;
+			});
+		}
 		return Array.from(this.tasks.values())
 			.map((task) => {
 				const blockedBy = this.getUnresolvedDependencies(task);
@@ -894,7 +983,7 @@ export class AgentTeamsRuntime {
 			blocked: 0,
 			completed: 0,
 		};
-		for (const task of this.tasks.values()) {
+		for (const task of this.listTasks()) {
 			taskCounts[task.status]++;
 		}
 		const outcomeCounts: Record<TeamOutcomeStatus, number> = {
@@ -1147,8 +1236,17 @@ export class AgentTeamsRuntime {
 			this.releaseEngineSession(replaced);
 		}
 
+		// T3: a teammate about to end its run with a task it holds still
+		// active is asked to complete or block it first. Composed after any
+		// guard of its own, which speaks to its own obligations.
+		const ownGuard = config.completionPolicy?.completionGuard;
+		const completionPolicy = {
+			...config.completionPolicy,
+			completionGuard: () => ownGuard?.() ?? this.board?.closeOutFor?.(agentId),
+		};
 		const wrappedConfig: TeamMemberConfig = {
 			...config,
+			completionPolicy,
 			apiTimeoutMs: TEAMMATE_API_TIMEOUT_MS,
 			consumePendingUserMessage: () => {
 				const member = this.members.get(agentId);
@@ -1441,6 +1539,14 @@ export class AgentTeamsRuntime {
 	}
 
 	createTask(input: CreateTeamTaskInput): TeamTask {
+		if (this.board) {
+			const task = this.board.create(input);
+			this.emitEvent({
+				type: TeamMessageType.TeamTaskUpdated,
+				task: { ...task },
+			});
+			return task;
+		}
 		const taskId = `task_${String(++this.taskCounter).padStart(4, "0")}`;
 		const now = new Date();
 		const task: TeamTask = {
@@ -1463,6 +1569,20 @@ export class AgentTeamsRuntime {
 	}
 
 	claimTask(taskId: string, agentId: string): TeamTask {
+		if (this.board) {
+			const task = this.board.claim(taskId, agentId);
+			this.emitEvent({
+				type: TeamMessageType.TeamTaskUpdated,
+				task: { ...task },
+			});
+			this.appendMissionLog({
+				agentId,
+				taskId: task.id,
+				kind: "progress",
+				summary: `Claimed task "${task.title}"`,
+			});
+			return task;
+		}
 		const task = this.requireTask(taskId);
 		this.assertDependenciesResolved(task);
 		task.status = "in_progress";
@@ -1482,6 +1602,20 @@ export class AgentTeamsRuntime {
 	}
 
 	blockTask(taskId: string, agentId: string, reason: string): TeamTask {
+		if (this.board) {
+			const task = this.board.block(taskId, agentId, reason);
+			this.emitEvent({
+				type: TeamMessageType.TeamTaskUpdated,
+				task: { ...task },
+			});
+			this.appendMissionLog({
+				agentId,
+				taskId: task.id,
+				kind: "blocked",
+				summary: reason,
+			});
+			return task;
+		}
 		const task = this.requireTask(taskId);
 		task.status = "blocked";
 		task.updatedAt = new Date();
@@ -1500,6 +1634,20 @@ export class AgentTeamsRuntime {
 	}
 
 	completeTask(taskId: string, agentId: string, summary: string): TeamTask {
+		if (this.board) {
+			const task = this.board.complete(taskId, agentId, summary);
+			this.emitEvent({
+				type: TeamMessageType.TeamTaskUpdated,
+				task: { ...task },
+			});
+			this.appendMissionLog({
+				agentId,
+				taskId: task.id,
+				kind: "done",
+				summary,
+			});
+			return task;
+		}
 		const task = this.requireTask(taskId);
 		task.status = "completed";
 		task.updatedAt = new Date();
@@ -1578,10 +1726,13 @@ export class AgentTeamsRuntime {
 				unreadOnly: true,
 				markRead: true,
 			});
+			// T2: the tasks it holds or may claim, so its work lands on the board.
+			const brief = this.board?.briefFor?.(agentId);
+			const withBrief = brief ? `${message}\n\n${brief}` : message;
 			const enrichedMessage =
 				unreadMail.length > 0
-					? `${this.buildMailboxNotification(unreadMail)}\n\n${message}`
-					: message;
+					? `${this.buildMailboxNotification(unreadMail)}\n\n${withBrief}`
+					: withBrief;
 			// The lead's cap for this task alone; the teammate's own comes back
 			// after it, whatever the run did.
 			const agent = member.agent;
@@ -2835,8 +2986,55 @@ export class AgentTeamsRuntime {
 		}));
 	}
 
+	/** Run ends open `run:` gates, and a teammate's task end ends its claims. */
+	private tellBoard(event: TeamEvent): void {
+		const board = this.board;
+		if (!board) return;
+		try {
+			switch (event.type) {
+				case TeamMessageType.TaskEnd: {
+					const ok = (event.status ?? "completed") === "completed";
+					board.runEnded?.(
+						[event.agentId],
+						ok,
+						ok ? undefined : event.error?.message || `the run ${event.status}`,
+					);
+					board.agentStopped?.(
+						event.agentId,
+						ok ? "its run ended" : `its run ${event.status ?? "failed"}`,
+					);
+					return;
+				}
+				case TeamMessageType.RunCompleted:
+					board.runEnded?.([event.run.id], true);
+					return;
+				case TeamMessageType.RunFailed:
+					board.runEnded?.(
+						[event.run.id],
+						false,
+						event.run.error || "the run failed",
+					);
+					return;
+				case TeamMessageType.RunCancelled:
+				case TeamMessageType.RunInterrupted:
+					board.runEnded?.(
+						[event.run.id],
+						false,
+						event.reason ||
+							`the run was ${event.type === TeamMessageType.RunCancelled ? "cancelled" : "interrupted"}`,
+					);
+					return;
+				default:
+					return;
+			}
+		} catch {
+			// The board's own trouble never stops the team.
+		}
+	}
+
 	private emitEvent(event: TeamEvent): void {
 		this.markDirtyFromEvent(event);
+		if (this.board) this.tellBoard(event);
 		try {
 			this.onTeamEvent?.(event);
 		} catch {
