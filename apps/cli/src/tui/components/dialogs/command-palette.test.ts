@@ -28,6 +28,19 @@ describe("command palette", () => {
 		expect(items.map((item) => item.shortcut)).not.toContain("Opt+?");
 	});
 
+	it("gives every shortcut to one item only", () => {
+		// A key press runs the first item that matches, so a second item on
+		// the same key shows a shortcut that can never fire.
+		const items = buildCommandPaletteItems({ canForkSession: true });
+		const owners = new Map<string, string[]>();
+		for (const item of items) {
+			const key = item.shortcut.toLowerCase();
+			owners.set(key, [...(owners.get(key) ?? []), item.label]);
+		}
+		const shared = [...owners].filter(([, labels]) => labels.length > 1);
+		expect(shared).toEqual([]);
+	});
+
 	it("shows fork only when the current session can be forked", () => {
 		const items = buildCommandPaletteItems({
 			canForkSession: true,

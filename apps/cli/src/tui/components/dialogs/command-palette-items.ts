@@ -115,7 +115,9 @@ const ACTION_ITEMS: Array<{
 	{
 		action: "agents",
 		label: "Background Agents",
-		shortcut: "Opt+G",
+		// N, not G: G is Manage Plugins', and the first match wins, so this
+		// shortcut never fired from 2026-09-07 until it moved.
+		shortcut: "Opt+N",
 		description: "Pause, resume or stop the agents running in the background",
 		keywords: ["agents", "background", "pause", "resume", "stop"],
 	},
