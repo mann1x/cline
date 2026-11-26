@@ -301,4 +301,24 @@ describe("the board viewer", () => {
 		expect((screen.getByRole("button", { name: "Skip" }) as HTMLButtonElement).disabled).toBe(true)
 		expect(screen.getByRole("complementary", { name: "Inspector" }).textContent).toContain("so it is not skipped")
 	})
+
+	it("gives a task a pipeline it is done by, and shows it as used, not waited on", async () => {
+		const board = JSON.parse(data.boardText) as { tasks: Record<string, unknown>[] }
+		const task = { ...board.tasks[0], claimedBy: undefined, gates: [{ spec: "use-pipeline:release", open: false }] }
+		render(<BoardViewer />)
+		send({ ...data, boardText: JSON.stringify({ ...board, tasks: [task] }) })
+		fireEvent.click(screen.getByText("card t1"))
+		const inspector = screen.getByRole("complementary", { name: "Inspector" })
+		expect(inspector.textContent).toContain("pipeline release, run when the task starts")
+		expect(screen.getByText("uses")).toBeTruthy()
+		fireEvent.change(screen.getByRole("combobox", { name: "Pipeline the task is done by" }), {
+			target: { value: "release" },
+		})
+		fireEvent.click(screen.getByRole("button", { name: "Use pipeline" }))
+		await waitFor(() =>
+			expect(sentOf("boardViewer/editTask").at(-1)).toMatchObject({
+				updates: [{ id: "t1", gate: ["use-pipeline:release"] }],
+			}),
+		)
+	})
 })

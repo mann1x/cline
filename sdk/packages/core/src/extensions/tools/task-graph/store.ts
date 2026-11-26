@@ -33,12 +33,14 @@ import {
 	foldTaskEvents,
 	isClosed,
 	isPipelineHeld,
+	isPipelineUseGate,
 	isReady,
 	isTaskLinkType,
 	nextTaskId,
 	openDependencies,
 	openGates,
 	PIPELINE_HOLDER_PREFIX,
+	pipelineUseLine,
 	readyTasks,
 	type Task,
 	type TaskAuthor,
@@ -754,6 +756,8 @@ export class TaskGraphStore {
 		lines.push(
 			`${next.id} is active now (started for you, since nothing else was): ${shortTitle(next.title, 60)}.`,
 		);
+		const use = pipelineUseLine(this.state.tasks.get(next.id) as Task);
+		if (use) lines.push(use);
 	}
 
 	/**
@@ -1081,7 +1085,7 @@ export class TaskGraphStore {
 		} else if (
 			!item.status &&
 			task.status === "active" &&
-			(update.gatesAdd ?? []).length > 0
+			(update.gatesAdd ?? []).some((spec) => !isPipelineUseGate(spec))
 		) {
 			// Active work that now waits on something is waiting, so the
 			// close-out does not ask for it and the next task can start.
@@ -1114,6 +1118,15 @@ export class TaskGraphStore {
 		if (update.note && !update.status) said.push("note added");
 		if (said.length === 0) said.push("updated");
 		lines.unshift(`${id} ${said.join(", ")}.`);
+		// Started, or given a pipeline while active: say what to run.
+		if (
+			after.status === "active" &&
+			(update.status === "active" ||
+				(update.gatesAdd ?? []).some(isPipelineUseGate))
+		) {
+			const use = pipelineUseLine(after);
+			if (use) lines.push(use);
+		}
 		if (update.status && isClosed(update.status)) {
 			if (!update.note) {
 				lines.push(

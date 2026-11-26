@@ -460,6 +460,7 @@ export const PIPELINE_RULES = [
 	"This workspace can keep pipelines: reusable DAGs of commands, tool calls, checks, waits and approvals, as JSON under `.cerebriline/pipelines/`, run by the `pipeline` tool in the background.",
 	"- When the person asks for repeatable automation (a release, a nightly check, a review flow), write it as a pipeline: read `pipeline catalog`, `save` it, `test` it with pins, and ask the person to approve it before it can `run`.",
 	"- A run is a task on the task board; a task that needs its result waits on it with the gate `pipeline:<run>`. Do other work meanwhile; when nothing else is left, `pipeline wait` (run) returns when the run ends. Never wait with `sleep`.",
+	"- A task with the gate `use-pipeline:<name>` is done by running that pipeline: `pipeline run` with its `task`.",
 ].join("\n");
 
 export function withPipelineRules(

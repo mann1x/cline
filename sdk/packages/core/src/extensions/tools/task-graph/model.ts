@@ -41,6 +41,10 @@ export interface AcceptanceItem {
  * | `gh-pr:<owner/repo#n>` / `gh-run:<owner/repo/id>` | merged / succeeded |
  * | `pipeline:<run>` | a pipeline run ends (fails when the run fails) |
  *
+ * `use-pipeline:<name>` is not a wait: it says the task is done by running
+ * that pipeline. The task starts as any other, the model is told to run the
+ * pipeline for it, and the run's start turns the gate into `pipeline:<run>`.
+ *
  * A gate that can no longer open (the run failed, the PR was closed) is
  * marked failed once and stays, for the model or the person to remove.
  */
@@ -60,8 +64,26 @@ export const GATE_KINDS = [
 	"gh-pr",
 	"gh-run",
 	"pipeline",
+	"use-pipeline",
 ] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
+
+/** `use-pipeline:<name>`: how the task is done, not what it waits on. */
+export function isPipelineUseGate(spec: string): boolean {
+	return parseGate(spec)?.kind === "use-pipeline";
+}
+
+/**
+ * What the model is told when a task that uses a pipeline is active: run it
+ * for the task. Undefined when the task uses none (or its run started).
+ */
+export function pipelineUseLine(task: Task): string | undefined {
+	const names = (task.gates ?? [])
+		.filter((gate) => !gate.open && isPipelineUseGate(gate.spec))
+		.map((gate) => parseGate(gate.spec)?.value as string);
+	if (names.length === 0) return undefined;
+	return `${task.id} is done by running pipeline ${names.map((name) => `"${name}"`).join(" and ")}: \`pipeline run\` with that name and task "${task.id}". ${task.id} then waits on the run, and is yours again when it ends.`;
+}
 
 /** A gate's kind and the rest, or undefined when it names no known kind. */
 export function parseGate(
@@ -446,7 +468,10 @@ export function openGates(state: TaskGraphState, task: Task): string[] {
 	while (current && !seen.has(current.id)) {
 		seen.add(current.id);
 		for (const gate of current.gates ?? []) {
-			if (!gate.open && !open.includes(gate.spec)) open.push(gate.spec);
+			if (gate.open || open.includes(gate.spec)) continue;
+			// Not a wait: how the task is done (it starts, and runs the pipeline).
+			if (isPipelineUseGate(gate.spec)) continue;
+			open.push(gate.spec);
 		}
 		current = current.parent ? state.tasks.get(current.parent) : undefined;
 	}

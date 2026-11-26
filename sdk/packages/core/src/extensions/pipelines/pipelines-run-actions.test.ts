@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { TaskGraphStore } from "../tools/task-graph/store";
 import { foldJournal, PIPELINE_RUNS_DIR, readJournal } from "./journal";
 import type { PipelineDefinition } from "./model";
 import { PipelineSession } from "./session";
@@ -202,5 +203,109 @@ describe("the person's actions on a run", () => {
 			ok: false,
 			lines: ["There is no run nope-1 in this workspace."],
 		});
+	});
+});
+
+describe("a task that is done by running a pipeline (use-pipeline)", () => {
+	const deploy: PipelineDefinition = {
+		name: "Deploy",
+		nodes: [{ id: "up", type: "set", fields: { ok: true } }],
+	};
+	const task = (board: TaskGraphStore, id: string) =>
+		board.getState().tasks.get(id);
+
+	it("starts like any task, says what to run, and waits once the run takes the gate", async () => {
+		approved(deploy);
+		const board = new TaskGraphStore();
+		const planned = board.plan(
+			{
+				tasks: [
+					{ title: "Write the changelog" },
+					{
+						title: "Deploy it",
+						depends: ["#1"],
+						gate: ["use-pipeline:deploy"],
+					},
+				],
+			},
+			{ by: "person" },
+		);
+		expect(planned.lines.join(" ")).not.toContain("pipeline run");
+		// Closing T1 starts T2, which is not held back by its pipeline: it says what to run.
+		const closed = board.update(
+			{ updates: [{ id: "T1", status: "done", note: "written" }] },
+			{ by: "model" },
+		);
+		expect(task(board, "T2")?.status).toBe("active");
+		expect(closed.lines.join("\n")).toContain(
+			'T2 is done by running pipeline "deploy": `pipeline run` with that name and task "T2".',
+		);
+
+		const run = session().run("deploy", {}, undefined);
+		// No board in that session: nothing to take. With the board, the run takes the gate.
+		await run.result();
+		const s = new PipelineSession({
+			workspaceRoot: root,
+			sessionId: "s1",
+			tools: () => [echoTool as AgentTool],
+			pollMs: 5,
+			board,
+		});
+		const second = s.run("Deploy");
+		expect(task(board, "T2")?.gates.map((gate) => gate.spec)).toEqual([
+			`pipeline:${second.id}`,
+		]);
+		expect(task(board, "T2")?.status).toBe("waiting");
+		await second.result();
+		for (let i = 0; i < 200 && !task(board, "T2")?.gates[0]?.open; i++)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(task(board, "T2")?.gates[0]?.open).toBe(true);
+	});
+
+	it("given to an active task it does not make it wait; two tasks using one pipeline are not guessed between", () => {
+		approved(deploy);
+		const board = new TaskGraphStore();
+		board.plan(
+			{ tasks: [{ title: "Ship" }, { title: "Ship again" }] },
+			{ by: "person" },
+		);
+		board.update(
+			{ updates: [{ id: "T1", status: "active" }] },
+			{ by: "model" },
+		);
+		const given = board.update(
+			{ updates: [{ id: "T1", gate: ["use-pipeline:deploy"] }] },
+			{ by: "person" },
+		);
+		expect(task(board, "T1")?.status).toBe("active");
+		expect(given.lines.join("\n")).toContain(
+			'T1 is done by running pipeline "deploy"',
+		);
+
+		board.update(
+			{ updates: [{ id: "T2", gate: ["use-pipeline:deploy"] }] },
+			{ by: "person" },
+		);
+		const s = new PipelineSession({
+			workspaceRoot: root,
+			sessionId: "s1",
+			tools: () => [echoTool as AgentTool],
+			pollMs: 5,
+			board,
+		});
+		const run = s.run("deploy");
+		// Neither task was picked: each keeps its use-pipeline gate.
+		expect(task(board, "T1")?.gates.map((gate) => gate.spec)).toEqual([
+			"use-pipeline:deploy",
+		]);
+		expect(task(board, "T2")?.gates.map((gate) => gate.spec)).toEqual([
+			"use-pipeline:deploy",
+		]);
+		// Named, the task's own gate is the one replaced.
+		const named = s.run("deploy", {}, "T2");
+		expect(task(board, "T2")?.gates.map((gate) => gate.spec)).toEqual([
+			`pipeline:${named.id}`,
+		]);
+		return Promise.all([run.result(), named.result()]);
 	});
 });

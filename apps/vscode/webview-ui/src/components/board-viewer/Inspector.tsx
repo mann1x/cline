@@ -75,6 +75,7 @@ export function Inspector({
 	taskEdit,
 	runAction,
 	busy = false,
+	pipelines = [],
 }: {
 	subject: InspectorSubject
 	onOpenRun: (run: string) => void
@@ -82,6 +83,8 @@ export function Inspector({
 	taskEdit?: TaskEdit
 	runAction?: RunAction
 	busy?: boolean
+	/** The workspace's pipelines a task can be done by (their names). */
+	pipelines?: string[]
 }) {
 	switch (subject.kind) {
 		case "node":
@@ -95,7 +98,15 @@ export function Inspector({
 				/>
 			)
 		case "task":
-			return <TaskInspector edit={taskEdit} key={subject.task.id} onOpenRun={onOpenRun} task={subject.task} />
+			return (
+				<TaskInspector
+					edit={taskEdit}
+					key={subject.task.id}
+					onOpenRun={onOpenRun}
+					pipelines={pipelines}
+					task={subject.task}
+				/>
+			)
 		case "gate":
 			return (
 				<div>
@@ -395,7 +406,42 @@ function FieldForm({
 	)
 }
 
-function TaskControls({ task, edit }: { task: TaskGraphPanelTask; edit: TaskEdit }) {
+/** `use-pipeline:<name>`: the task is done by running that pipeline. */
+const USE_PIPELINE = /^use-pipeline:\s*(.+)$/
+
+/** Pick a pipeline the task is done by: the model runs it for the task when it starts it. */
+function UsePipeline({ pipelines, onUse }: { pipelines: string[]; onUse: (name: string) => Promise<boolean> }) {
+	const [name, setName] = useState(pipelines[0] ?? "")
+	const [busy, setBusy] = useState(false)
+	return (
+		<form
+			className="bv-form"
+			onSubmit={async (event) => {
+				event.preventDefault()
+				if (!name || busy) return
+				setBusy(true)
+				await onUse(name)
+				setBusy(false)
+			}}>
+			<select
+				aria-label="Pipeline the task is done by"
+				className="bv-input"
+				onChange={(event) => setName(event.target.value)}
+				value={name}>
+				{pipelines.map((candidate) => (
+					<option key={candidate} value={candidate}>
+						{candidate}
+					</option>
+				))}
+			</select>
+			<button className="bv-button" disabled={busy || !name} type="submit">
+				Use pipeline
+			</button>
+		</form>
+	)
+}
+
+function TaskControls({ task, edit, pipelines }: { task: TaskGraphPanelTask; edit: TaskEdit; pipelines: string[] }) {
 	const [answer, setAnswer] = useState<ViewerReply>()
 	const send = async (fields: Record<string, unknown>) => {
 		const reply = await edit({ id: task.id, ...fields })
@@ -438,6 +484,14 @@ function TaskControls({ task, edit }: { task: TaskGraphPanelTask; edit: TaskEdit
 				placeholder="Done when…"
 			/>
 			<FieldForm action="Add" label="New gate" onSend={(gate) => send({ gate: [gate] })} placeholder="human:Ship it?" />
+			{pipelines.length > 0 && task.status !== "done" && task.status !== "cancelled" && (
+				<>
+					<UsePipeline onUse={(name) => send({ gate: [`use-pipeline:${name}`] })} pipelines={pipelines} />
+					<div className="bv-note">
+						The model runs the pipeline for this task when it starts it, and the task waits on the run.
+					</div>
+				</>
+			)}
 			<FieldForm action="Note" label="Note" onSend={(note) => send({ note })} placeholder="A note on the task" />
 			{answer && (answer.lines.length > 0 || answer.errors.length > 0) && (
 				<ul className="bv-list bv-reply" data-ok={answer.ok}>
@@ -454,10 +508,12 @@ function TaskInspector({
 	task,
 	onOpenRun,
 	edit,
+	pipelines,
 }: {
 	task: TaskGraphPanelTask
 	onOpenRun: (run: string) => void
 	edit?: TaskEdit
+	pipelines: string[]
 }) {
 	const run = task.claimedBy?.startsWith("pipeline:") ? task.claimedBy.slice("pipeline:".length) : undefined
 	const status = taskStatus(task)
@@ -536,15 +592,25 @@ function TaskInspector({
 			{task.gates && task.gates.length > 0 && (
 				<Section title="Gates">
 					<ul className="bv-list">
-						{task.gates.map((gate) => (
-							<li key={gate.spec}>
-								<span className="bv-chip" data-status={gate.open ? "open" : gate.failed ? "failed" : "waiting"}>
-									{gate.open ? "open" : gate.failed ? "failed" : "waiting"}
-								</span>{" "}
-								<span className="bv-mono">{gate.spec}</span>
-								{gate.failed && <div className="bv-error">{gate.failed}</div>}
-							</li>
-						))}
+						{task.gates.map((gate) => {
+							const uses = USE_PIPELINE.exec(gate.spec)?.[1]
+							const state = gate.open ? "open" : gate.failed ? "failed" : uses ? "pending" : "waiting"
+							return (
+								<li key={gate.spec}>
+									<span className="bv-chip" data-status={state}>
+										{uses && state === "pending" ? "uses" : state}
+									</span>{" "}
+									{uses ? (
+										<span>
+											pipeline <span className="bv-mono">{uses}</span>, run when the task starts
+										</span>
+									) : (
+										<span className="bv-mono">{gate.spec}</span>
+									)}
+									{gate.failed && <div className="bv-error">{gate.failed}</div>}
+								</li>
+							)
+						})}
 					</ul>
 				</Section>
 			)}
@@ -582,7 +648,7 @@ function TaskInspector({
 					</ul>
 				</Section>
 			)}
-			{edit && <TaskControls edit={edit} task={task} />}
+			{edit && <TaskControls edit={edit} pipelines={pipelines} task={task} />}
 		</div>
 	)
 }

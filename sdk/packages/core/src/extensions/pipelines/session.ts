@@ -35,7 +35,7 @@ import {
 	decideGitHubGate,
 	decideTimerGate,
 } from "../tools/task-graph/gates";
-import { parseGate } from "../tools/task-graph/model";
+import { isClosed, parseGate } from "../tools/task-graph/model";
 import type { TaskGraphStore } from "../tools/task-graph/store";
 import {
 	appendJournal,
@@ -579,7 +579,13 @@ export class PipelineSession {
 		};
 	}
 
-	/** Start the approved version of a workspace pipeline. */
+	/**
+	 * Start the approved version of a workspace pipeline. With `gateTask`,
+	 * that task waits on the run. Without one, the open task whose
+	 * `use-pipeline:` gate names this pipeline is the one, when there is
+	 * exactly one. Either way the task's `use-pipeline:` gate for it becomes
+	 * the run's own gate.
+	 */
 	run(
 		name: string,
 		inputs: Record<string, unknown> = {},
@@ -587,14 +593,55 @@ export class PipelineSession {
 	): PipelineRun {
 		const file = findPipeline(this.options.workspaceRoot, name);
 		if (!file) throw new Error(`no pipeline "${name}"`);
+		const board = this.options.board;
+		const uses = (taskId: string): string[] =>
+			(board?.getState().tasks.get(taskId)?.gates ?? [])
+				.filter((gate) => {
+					const parsed = parseGate(gate.spec);
+					return (
+						!gate.open &&
+						parsed?.kind === "use-pipeline" &&
+						(sameName(parsed.value, file.name) || sameName(parsed.value, name))
+					);
+				})
+				.map((gate) => gate.spec);
+		const task = gateTask ?? this.taskUsing(name, file.name);
 		const run = this.startApproved(file, inputs, []);
-		if (gateTask && this.options.board) {
-			this.options.board.update(
-				{ updates: [{ id: gateTask, gate: [`pipeline:${run.id}`] }] },
+		if (task && board) {
+			const replaced = uses(task);
+			board.update(
+				{
+					updates: [
+						{
+							id: task,
+							gate: [`pipeline:${run.id}`],
+							...(replaced.length > 0 ? { gate_remove: replaced } : {}),
+						},
+					],
+				},
 				{ by: "model" },
 			);
 		}
 		return run;
+	}
+
+	/** The one open task that says it is done by running this pipeline. */
+	private taskUsing(...names: string[]): string | undefined {
+		const state = this.options.board?.getState();
+		if (!state) return undefined;
+		const found = state.order.filter((id) => {
+			const task = state.tasks.get(id);
+			if (!task || isClosed(task.status)) return false;
+			return (task.gates ?? []).some((gate) => {
+				const parsed = parseGate(gate.spec);
+				return (
+					!gate.open &&
+					parsed?.kind === "use-pipeline" &&
+					names.some((name) => sameName(parsed.value, name))
+				);
+			});
+		});
+		return found.length === 1 ? found[0] : undefined;
 	}
 
 	/** The approved version of `file`, started; refused otherwise. */

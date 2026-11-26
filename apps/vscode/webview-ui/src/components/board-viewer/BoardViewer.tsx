@@ -524,6 +524,7 @@ export function BoardViewer() {
 							busy={busy}
 							nodeEdit={nodeEdit}
 							onOpenRun={openRun}
+							pipelines={data.pipelines.filter((candidate) => candidate.valid).map((candidate) => candidate.name)}
 							runAction={runAction}
 							subject={subject}
 							taskEdit={taskEdit}
