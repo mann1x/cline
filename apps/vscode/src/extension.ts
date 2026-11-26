@@ -40,7 +40,10 @@ import {
 	migrateWelcomeViewCompleted,
 	migrateWorkspaceToGlobalStorage,
 } from "./core/storage/state-migrations"
+import { setBoardViewerOpener } from "./core/webview/board-viewer-hooks"
 import { workspaceResolver } from "./core/workspace"
+import { focusForFile } from "./hosts/vscode/board-viewer/collect"
+import { openBoardViewerPanel } from "./hosts/vscode/board-viewer/panel"
 import { findMatchingNotebookCell, getContextForCommand, showWebview } from "./hosts/vscode/commandUtils"
 import { abortCommitGeneration, generateCommitMsg } from "./hosts/vscode/commit-message-generator"
 import { registerClineOutputChannel } from "./hosts/vscode/hostbridge/env/debugLog"
@@ -213,6 +216,32 @@ export async function activate(context: vscode.ExtensionContext) {
 	registerUpdateChecks(context)
 	// A pipeline the model wrote runs only once the person approves it.
 	context.subscriptions.push(vscode.commands.registerCommand(commands.ApprovePipeline, () => approvePipelineCommand()))
+	// The board viewer: the conversation's board, the pipelines and their runs
+	// in an editor-area panel. From the palette, a pipeline file's title bar
+	// (which hands it the file) and the task panel's "Open board".
+	{
+		const boardViewerDeps = {
+			extensionUri: context.extensionUri,
+			workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+			boardText: () => {
+				const messages = webview.controller.task?.messageStateHandler.getClineMessages() ?? []
+				for (let i = messages.length - 1; i >= 0; i--) {
+					if (messages[i].say === "task_graph" && messages[i].text) return messages[i].text
+				}
+				return undefined
+			},
+		}
+		setBoardViewerOpener((focus) => openBoardViewerPanel(boardViewerDeps, focus))
+		context.subscriptions.push(
+			vscode.commands.registerCommand(commands.OpenBoard, (target?: vscode.Uri) =>
+				openBoardViewerPanel(
+					boardViewerDeps,
+					focusForFile(target?.fsPath ?? vscode.window.activeTextEditor?.document.uri.fsPath),
+				),
+			),
+			{ dispose: () => setBoardViewerOpener(undefined) },
+		)
+	}
 	// An SSH FS folder is served to this computer, where the tools also run;
 	// offer to reopen it with Remote-SSH so they run on its host instead.
 	registerSshFsBridge(context, commands.ReopenSshFsWithRemoteSsh)

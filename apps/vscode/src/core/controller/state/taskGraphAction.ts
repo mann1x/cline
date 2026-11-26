@@ -1,4 +1,5 @@
 import { String as ProtoString, type StringRequest } from "@shared/proto/cline/common"
+import { openBoardViewer } from "@/core/webview/board-viewer-hooks"
 import type { Controller } from ".."
 
 /**
@@ -11,6 +12,7 @@ import type { Controller } from ".."
  * Saved plans: `{op:"templates"}` (the list), `{op:"template-use", name,
  * vars}` (its tasks go on the board as the person's) and
  * `{op:"template-save", name, description?, where?}` (the board as one).
+ * `{op:"open-viewer"}` opens the board in the editor-area viewer.
  */
 export async function taskGraphAction(controller: Controller, request: StringRequest): Promise<ProtoString> {
 	let parsed: unknown
@@ -54,6 +56,10 @@ export async function taskGraphAction(controller: Controller, request: StringReq
 			typeof save.description === "string" ? save.description : undefined,
 			save.where === "user" ? "user" : "workspace",
 		)
+	} else if (action?.op === "open-viewer") {
+		answer = openBoardViewer({ board: true })
+			? { ok: true, lines: [] }
+			: { ok: false, lines: ["This editor has no board viewer."] }
 	} else {
 		answer = { ok: false, lines: ["Not a board change: send {op:'update', updates:[…]} or {op:'plan', tasks:[…]}."] }
 	}

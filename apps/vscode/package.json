@@ -259,6 +259,12 @@
 				"icon": "$(pass)"
 			},
 			{
+				"command": "cerebriline.openBoard",
+				"title": "Open Board",
+				"category": "Cerebriline",
+				"icon": "$(type-hierarchy)"
+			},
+			{
 				"command": "cerebriline.reopenSshFsWithRemoteSsh",
 				"title": "Reopen SSH FS Folder with Remote-SSH",
 				"category": "Cerebriline",
@@ -337,6 +343,11 @@
 				}
 			],
 			"editor/title": [
+				{
+					"command": "cerebriline.openBoard",
+					"group": "navigation@9",
+					"when": "resourcePath =~ /\\.cerebriline[\\/\\\\]pipelines[\\/\\\\][^\\/\\\\]+\\.pipeline\\.json$/"
+				},
 				{
 					"command": "cerebriline.plusButtonClicked",
 					"group": "navigation@1",

@@ -1,0 +1,665 @@
+/*
+ * The board viewer. Everything is drawn from the VS Code theme's own
+ * variables, so the panel follows light, dark and high-contrast themes the
+ * way the editor does; the fallbacks are only for a host that sets none.
+ * Unlayered on purpose: the chat's Tailwind base rules sit in a layer, and
+ * these must win over them inside the panel.
+ */
+
+.bv {
+	--bv-bg: var(--vscode-editor-background, #1e1e1e);
+	--bv-fg: var(--vscode-editor-foreground, #d4d4d4);
+	--bv-muted: var(--vscode-descriptionForeground, #9d9d9d);
+	--bv-rail: var(--vscode-sideBar-background, var(--vscode-editor-background, #181818));
+	--bv-surface: var(--vscode-editorWidget-background, #252526);
+	--bv-border: var(--vscode-panel-border, var(--vscode-widget-border, #3c3c3c));
+	--bv-accent: var(--vscode-focusBorder, #0078d4);
+	--bv-hover: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+	--bv-selected: var(--vscode-list-activeSelectionBackground, rgba(0, 120, 212, 0.3));
+	--bv-selected-fg: var(--vscode-list-activeSelectionForeground, inherit);
+	--bv-link: var(--vscode-textLink-foreground, #3794ff);
+	--bv-mono: var(--vscode-editor-font-family, "Geist Mono Variable", ui-monospace, monospace);
+	--bv-sans: var(--vscode-font-family, system-ui, sans-serif);
+
+	--bv-done: var(--vscode-testing-iconPassed, #73c991);
+	--bv-failed: var(--vscode-testing-iconFailed, #f14c4c);
+	--bv-running: var(--vscode-progressBar-background, #0e70c0);
+	--bv-waiting: var(--vscode-editorWarning-foreground, #cca700);
+	--bv-idle: var(--vscode-descriptionForeground, #9d9d9d);
+
+	display: grid;
+	grid-template-rows: auto auto 1fr;
+	height: 100vh;
+	background: var(--bv-bg);
+	color: var(--bv-fg);
+	font-family: var(--bv-sans);
+	font-size: 12px;
+	line-height: 1.45;
+	overflow: hidden;
+}
+
+.bv *,
+.bv *::before,
+.bv *::after {
+	box-sizing: border-box;
+}
+/* The chat's base layer sizes every element on its own; here sizes inherit. */
+.bv * {
+	font-size: inherit;
+	line-height: inherit;
+}
+
+/* Header */
+.bv-header {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
+	padding: 10px 16px 8px;
+	border-bottom: 1px solid var(--bv-border);
+	min-width: 0;
+}
+.bv-header h1 {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.bv-header .bv-sub {
+	color: var(--bv-muted);
+	font-size: 12px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+.bv-header .bv-spacer {
+	flex: 1;
+}
+.bv-source-select {
+	display: none;
+}
+
+/* Tabs */
+.bv-tabs {
+	display: flex;
+	gap: 2px;
+	padding: 0 12px;
+	border-bottom: 1px solid var(--bv-border);
+	overflow-x: auto;
+}
+.bv-tab {
+	appearance: none;
+	background: none;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	color: var(--bv-muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: 12px;
+	padding: 7px 10px 6px;
+	white-space: nowrap;
+}
+.bv-tab:hover {
+	color: var(--bv-fg);
+}
+.bv-tab[aria-selected="true"] {
+	color: var(--bv-fg);
+	border-bottom-color: var(--bv-accent);
+}
+.bv-tab:focus-visible,
+.bv-source:focus-visible,
+.bv-button:focus-visible,
+.bv-row-button:focus-visible {
+	outline: 1px solid var(--bv-accent);
+	outline-offset: -1px;
+}
+
+/* Body: rail | main | inspector */
+.bv-body {
+	display: grid;
+	grid-template-columns: 232px minmax(0, 1fr);
+	min-height: 0;
+}
+.bv-body.bv-with-inspector {
+	grid-template-columns: 232px minmax(0, 1fr) 320px;
+}
+
+.bv-rail {
+	background: var(--bv-rail);
+	border-right: 1px solid var(--bv-border);
+	overflow-y: auto;
+	padding: 8px 0 16px;
+}
+.bv-rail-heading {
+	color: var(--bv-muted);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	padding: 10px 14px 4px;
+}
+.bv-rail-empty {
+	color: var(--bv-muted);
+	padding: 2px 14px 4px;
+}
+.bv-source {
+	appearance: none;
+	background: none;
+	border: 0;
+	color: inherit;
+	cursor: pointer;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 2px 8px;
+	font: inherit;
+	padding: 5px 14px;
+	text-align: left;
+	width: 100%;
+}
+.bv-source:hover {
+	background: var(--bv-hover);
+}
+.bv-source[aria-current="true"] {
+	background: var(--bv-selected);
+	color: var(--bv-selected-fg);
+}
+.bv-source-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.bv-source-meta {
+	color: var(--bv-muted);
+	font-size: 11px;
+	grid-column: 1 / -1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.bv-source[aria-current="true"] .bv-source-meta {
+	color: inherit;
+	opacity: 0.8;
+}
+
+.bv-main {
+	min-width: 0;
+	min-height: 0;
+	overflow: auto;
+	position: relative;
+}
+.bv-main.bv-main-canvas {
+	overflow: hidden;
+}
+.bv-pane {
+	padding: 14px 18px 24px;
+	max-width: 1100px;
+}
+
+.bv-inspector {
+	border-left: 1px solid var(--bv-border);
+	overflow-y: auto;
+	padding: 12px 14px 24px;
+	background: var(--bv-rail);
+}
+
+/* Narrow panel: the rail becomes a picker in the header, the inspector goes below. */
+@media (max-width: 760px) {
+	.bv-body,
+	.bv-body.bv-with-inspector {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr) auto;
+	}
+	.bv-rail {
+		display: none;
+	}
+	.bv-source-select {
+		display: block;
+		max-width: 50%;
+	}
+	.bv-canvas .react-flow__minimap {
+		display: none;
+	}
+	.bv-inspector {
+		border-left: 0;
+		border-top: 1px solid var(--bv-border);
+		max-height: 45vh;
+	}
+}
+
+/* Status chip */
+.bv-chip {
+	--chip: var(--bv-idle);
+	align-items: center;
+	background: color-mix(in srgb, var(--chip) 14%, transparent);
+	border-radius: 999px;
+	color: var(--chip);
+	display: inline-flex;
+	font-size: 11px;
+	gap: 5px;
+	line-height: 16px;
+	padding: 0 7px 0 6px;
+	white-space: nowrap;
+}
+.bv-chip::before {
+	background: currentColor;
+	border-radius: 50%;
+	content: "";
+	height: 6px;
+	width: 6px;
+}
+.bv-chip[data-status="done"],
+.bv-chip[data-status="open"],
+.bv-chip[data-status="passed"],
+.bv-chip[data-status="approved"] {
+	--chip: var(--bv-done);
+}
+.bv-chip[data-status="failed"],
+.bv-chip[data-status="blocked"] {
+	--chip: var(--bv-failed);
+}
+.bv-chip[data-status="running"],
+.bv-chip[data-status="active"] {
+	--chip: var(--bv-running);
+}
+.bv-chip[data-status="waiting"],
+.bv-chip[data-status="ready"] {
+	--chip: var(--bv-waiting);
+}
+@media (prefers-reduced-motion: no-preference) {
+	.bv-chip[data-status="running"]::before,
+	.bv-chip[data-status="active"]::before {
+		animation: bv-pulse 1.4s ease-in-out infinite;
+	}
+}
+@keyframes bv-pulse {
+	50% {
+		opacity: 0.3;
+	}
+}
+
+/* Canvas */
+.bv-canvas {
+	height: 100%;
+	width: 100%;
+}
+.bv-canvas .react-flow {
+	--xy-background-color: var(--bv-bg);
+	--xy-background-pattern-color: color-mix(in srgb, var(--bv-muted) 30%, transparent);
+	--xy-edge-stroke: var(--bv-idle);
+	--xy-minimap-background-color: var(--bv-surface);
+	--xy-minimap-mask-background-color: color-mix(in srgb, var(--bv-bg) 60%, transparent);
+	--xy-controls-button-background-color: var(--bv-surface);
+	--xy-controls-button-background-color-hover: var(--bv-hover);
+	--xy-controls-button-color: var(--bv-fg);
+	--xy-controls-button-border-color: var(--bv-border);
+	--xy-attribution-background-color: transparent;
+	--xy-edge-label-background-color: var(--bv-bg);
+	--xy-edge-label-color: var(--bv-muted);
+}
+.bv-canvas .react-flow__controls {
+	box-shadow: none;
+	border: 1px solid var(--bv-border);
+}
+.bv-canvas .react-flow__minimap {
+	border: 1px solid var(--bv-border);
+}
+.bv-canvas .react-flow__edge-textbg {
+	fill: var(--bv-bg);
+}
+.bv-canvas .react-flow__edge-text {
+	fill: var(--bv-muted);
+	font-family: var(--bv-mono);
+	font-size: 10px;
+}
+.bv-canvas .react-flow__handle {
+	background: var(--bv-border);
+	border: 0;
+	height: 6px;
+	min-height: 0;
+	min-width: 0;
+	width: 6px;
+}
+.bv-empty {
+	color: var(--bv-muted);
+	display: grid;
+	height: 100%;
+	padding: 24px;
+	place-content: center;
+	text-align: center;
+	gap: 6px;
+}
+.bv-empty strong {
+	color: var(--bv-fg);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+/* Cards */
+.bv-card {
+	background: var(--bv-surface);
+	border: 1px solid var(--bv-border);
+	border-radius: 4px;
+	color: var(--bv-fg);
+	cursor: pointer;
+	display: grid;
+	gap: 3px;
+	grid-template-rows: auto auto auto 1fr;
+	height: 90px;
+	padding: 7px 10px 6px;
+	width: 232px;
+}
+.bv-card[data-status="running"],
+.bv-card[data-status="active"] {
+	border-color: var(--bv-running);
+}
+.bv-card[data-status="failed"] {
+	border-color: var(--bv-failed);
+}
+.bv-card[data-status="waiting"] {
+	border-color: var(--bv-waiting);
+}
+.bv-card[data-status="skipped"],
+.bv-card[data-status="cancelled"] {
+	opacity: 0.55;
+}
+.react-flow__node.selected .bv-card {
+	box-shadow: 0 0 0 1px var(--bv-accent);
+	border-color: var(--bv-accent);
+}
+.bv-card-head {
+	align-items: center;
+	display: flex;
+	gap: 6px;
+	justify-content: space-between;
+	min-width: 0;
+}
+.bv-card-type {
+	color: var(--bv-muted);
+	line-height: 16px;
+	font-family: var(--bv-mono);
+	font-size: 10px;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+}
+.bv-card[data-kind="task"] .bv-card-type {
+	letter-spacing: 0;
+	text-transform: none;
+}
+.bv-card-title {
+	font-size: 12.5px;
+	line-height: 17px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.bv-card-target {
+	color: var(--bv-muted);
+	line-height: 15px;
+	font-family: var(--bv-mono);
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.bv-card-foot {
+	align-self: end;
+	line-height: 15px;
+	color: var(--bv-muted);
+	display: flex;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	gap: 8px;
+}
+.bv-badge {
+	border: 1px solid var(--bv-border);
+	border-radius: 3px;
+	font-family: var(--bv-mono);
+	font-size: 10px;
+	padding: 0 4px;
+}
+
+.bv-gate {
+	align-items: center;
+	background: var(--bv-bg);
+	border: 1px dashed var(--bv-border);
+	border-radius: 999px;
+	cursor: pointer;
+	display: flex;
+	font-family: var(--bv-mono);
+	font-size: 10.5px;
+	gap: 6px;
+	height: 36px;
+	padding: 0 10px;
+	width: 168px;
+}
+.bv-gate[data-status="open"] {
+	border-style: solid;
+	border-color: var(--bv-done);
+}
+.bv-gate[data-status="failed"] {
+	border-color: var(--bv-failed);
+}
+.bv-gate-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.react-flow__node.selected .bv-gate {
+	box-shadow: 0 0 0 1px var(--bv-accent);
+	border-color: var(--bv-accent);
+}
+
+/* Sections, tables, key-value lists */
+.bv-section {
+	margin-top: 16px;
+}
+.bv-section:first-child {
+	margin-top: 0;
+}
+.bv-h {
+	color: var(--bv-muted);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	margin: 0 0 6px;
+	text-transform: uppercase;
+}
+.bv-title {
+	font-size: 13px;
+	font-weight: 600;
+	margin: 0 0 4px;
+	overflow-wrap: anywhere;
+}
+.bv-kv {
+	display: grid;
+	gap: 3px 12px;
+	grid-template-columns: max-content minmax(0, 1fr);
+	margin: 0;
+}
+.bv-kv dt {
+	color: var(--bv-muted);
+}
+.bv-kv dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+.bv-muted {
+	color: var(--bv-muted);
+}
+.bv-mono {
+	font-family: var(--bv-mono);
+	font-size: 11.5px;
+}
+.bv-pre {
+	background: var(--bv-surface);
+	border: 1px solid var(--bv-border);
+	border-radius: 4px;
+	font-family: var(--bv-mono);
+	font-size: 11.5px;
+	line-height: 1.45;
+	margin: 0;
+	max-height: 360px;
+	overflow: auto;
+	padding: 8px 10px;
+	white-space: pre;
+}
+.bv-pre.bv-wrap {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.bv-pre.bv-tall {
+	max-height: none;
+}
+.bv-error {
+	color: var(--bv-failed);
+	overflow-wrap: anywhere;
+}
+.bv-note {
+	color: var(--bv-muted);
+	margin: 0 0 10px;
+}
+.bv-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 4px;
+}
+.bv-list li {
+	overflow-wrap: anywhere;
+}
+
+.bv-table-wrap {
+	overflow-x: auto;
+}
+.bv-table {
+	border-collapse: collapse;
+	font-variant-numeric: tabular-nums;
+	width: 100%;
+}
+.bv-table th {
+	border-bottom: 1px solid var(--bv-border);
+	color: var(--bv-muted);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	padding: 4px 10px 4px 0;
+	text-align: left;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+.bv-table td {
+	border-bottom: 1px solid color-mix(in srgb, var(--bv-border) 55%, transparent);
+	padding: 5px 10px 5px 0;
+	vertical-align: top;
+}
+.bv-row-button {
+	appearance: none;
+	background: none;
+	border: 0;
+	color: var(--bv-link);
+	cursor: pointer;
+	font: inherit;
+	padding: 0;
+	text-align: left;
+}
+.bv-row-button:hover {
+	text-decoration: underline;
+}
+
+.bv-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 0 0 12px;
+}
+.bv-button {
+	appearance: none;
+	background: var(--vscode-button-secondaryBackground, var(--bv-surface));
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	color: var(--vscode-button-secondaryForeground, var(--bv-fg));
+	cursor: pointer;
+	font: inherit;
+	padding: 3px 10px;
+}
+.bv-button:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--bv-hover));
+}
+
+/* Run monitor timeline */
+.bv-timeline {
+	display: grid;
+	gap: 2px;
+	grid-template-columns: minmax(120px, 200px) 92px minmax(0, 1fr) 72px;
+	align-items: center;
+	font-variant-numeric: tabular-nums;
+}
+.bv-timeline-head {
+	color: var(--bv-muted);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	padding-bottom: 4px;
+}
+.bv-timeline-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding-right: 8px;
+}
+.bv-track {
+	background: color-mix(in srgb, var(--bv-border) 35%, transparent);
+	border-radius: 2px;
+	height: 12px;
+	position: relative;
+}
+.bv-bar {
+	--bar: var(--bv-idle);
+	background: var(--bar);
+	border-radius: 2px;
+	height: 100%;
+	min-width: 2px;
+	position: absolute;
+	top: 0;
+}
+.bv-bar[data-status="done"] {
+	--bar: var(--bv-done);
+}
+.bv-bar[data-status="failed"] {
+	--bar: var(--bv-failed);
+}
+.bv-bar[data-status="running"] {
+	--bar: var(--bv-running);
+}
+.bv-bar[data-status="waiting"] {
+	--bar: var(--bv-waiting);
+}
+.bv-timeline-time {
+	color: var(--bv-muted);
+	text-align: right;
+}
+
+/* Activity */
+.bv-event-time {
+	color: var(--bv-muted);
+	white-space: nowrap;
+}
+.bv-event-kind {
+	font-family: var(--bv-mono);
+	white-space: nowrap;
+}
+.bv-event-kind[data-kind="fail"] {
+	color: var(--bv-failed);
+}
+.bv-event-kind[data-kind="end"] {
+	color: var(--bv-done);
+}
+.bv-event-kind[data-kind="retry"],
+.bv-event-kind[data-kind="wait"] {
+	color: var(--bv-waiting);
+}

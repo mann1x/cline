@@ -245,8 +245,9 @@ an approved badge, and tabs. **One canvas for task boards and pipelines.**
   node or task: type, target (file, agent, command), status chip, attempts,
   time; edges are `after`, colored by state; gates are small nodes on the
   edge. **Fit**, zoom, pan, minimap; **Auto-layout**. Built on
-  `@xyflow/react` 13 (MIT, 1.3 MB, React ≥18; the webview has 18.3) with
-  `@dagrejs/dagre` (MIT) for the layered layout. elkjs was rejected:
+  `@xyflow/react` (MIT, React ≥18; the webview has 18.3), pinned at 12.12.1
+  because 13.0 was ten days old when phase 3 was built, with
+  `@dagrejs/dagre` 3.1.3 (MIT) for the layered layout. elkjs was rejected:
   EPL-2.0/GPL and 8 MB.
 - **Inspector** (right pane, the selected card): its fields, editable for a
   pipeline node (validated as you type) and for a task (title, acceptance,
@@ -338,7 +339,42 @@ pandorum as a local vsix, and keeps the feature off by default.
      sub-run is closed as stopped, since its parent's node decides.
 3. **The viewer, read-only.** The editor-area panel with the canvas for
    boards and pipelines, Run monitor, Activity, Report, and the inspector
-   (read).
+   (read). **Built 2026-11-26.** As built:
+   - **Cerebriline: Open Board** (palette; the title bar of a
+     `*.pipeline.json`, which opens on that pipeline; **Open board** in the
+     task panel's footer, through the board RPC's `open-viewer` op). One
+     panel per window, an editor tab; the chat stays in the sidebar.
+   - The panel is the chat's own webview bundle with `data-view="board"` on
+     its root. The extension reads the data (`hosts/vscode/board-viewer/`):
+     pipelines with `listPipelines`, the newest 40 journals folded with
+     `foldJournal` (their last 500 events each, with the total), and the
+     conversation's latest `task_graph` row, which the webview reads with the
+     task panel's own parser. Pipeline runs never reach the chat webview, so
+     the files are the record. Shapes in `src/shared/board-viewer.ts`.
+   - It re-reads on a watcher over `.cerebriline/{pipelines,pipeline-runs}`,
+     on every board change (core's `onTaskGraphChange`, through
+     `board-viewer-hooks`), and when the tab comes back into view; 250 ms
+     debounce, posted only while visible.
+   - The rail lists the board, the pipelines (approved / changed since
+     approval / not approved / does not validate, with their run counts) and
+     the runs. Tabs by what is shown: the board has Workflow and Plan; a
+     pipeline Workflow, Definition and Runs; a run Workflow, Run monitor,
+     Activity, Report and Definition (the definition the run used, with a
+     note when the file has changed since).
+   - Canvas: dagre left to right; cards show type (or task id), status
+     chip, target, attempts, time, priority / later / reused. Edges take
+     their source's state: done, active (into a running node, animated),
+     untaken (the branch the run did not fire), failed, skipped, pending.
+     Gates are small nodes feeding their task. Fit, zoom, pan, minimap; the
+     view refits for a new graph and when the inspector opens or closes.
+   - Inspector, read-only: a node's state, fields, output (items, stdout,
+     stderr, text) and its journal lines; a task's fields, acceptance,
+     gates, links, files, notes, outcome, and the run that holds it.
+   - Report is Markdown (nodes table, failures, what `check` and `agent`
+     nodes found), copied or saved through a save dialog.
+   - Colours are the VS Code theme's own variables, so light, dark and
+     high-contrast follow the editor; below 760 px the rail becomes a picker
+     and the inspector goes under the canvas.
 4. **Editing and versions.** Canvas editing, the inspector's edits,
    proposals and approval, board → pipeline and pipeline → template.
 5. **Measured.** A tg-bench-like set of pipeline tasks (write a pipeline from

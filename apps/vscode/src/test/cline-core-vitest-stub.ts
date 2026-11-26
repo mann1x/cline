@@ -23,6 +23,11 @@ export {
 } from "../../../../sdk/packages/core/src/extensions/browser/browser-launch"
 export { startBrowserProcess, wasAdopted } from "../../../../sdk/packages/core/src/extensions/browser/browser-process"
 export {
+	foldJournal,
+	PIPELINE_RUNS_DIR,
+	readJournal,
+} from "../../../../sdk/packages/core/src/extensions/pipelines/journal"
+export {
 	approvePipeline,
 	findPipeline,
 	listPipelines,

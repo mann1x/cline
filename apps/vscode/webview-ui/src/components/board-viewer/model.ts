@@ -1,0 +1,99 @@
+/**
+ * The board viewer's data on the webview side (pipelines plan phase 3,
+ * section 9). The shapes are shared with the extension
+ * (`@shared/board-viewer`); a message is still read defensively, because a
+ * journal outlives the version that wrote it.
+ */
+
+import { BOARD_VIEWER_DATA, type ViewerData, type ViewerPipeline, type ViewerRun } from "@shared/board-viewer"
+import type { ClineMessage } from "@shared/ExtensionMessage"
+import { findLatestTaskGraph, type TaskGraphPanelSnapshot } from "@/components/chat/task-header/TaskGraphPanel"
+
+export type {
+	ViewerData,
+	ViewerEvent,
+	ViewerFocus,
+	ViewerNodeOutput,
+	ViewerNodeState,
+	ViewerNodeStatus,
+	ViewerPipeline,
+	ViewerPipelineDefinition,
+	ViewerPipelineNode,
+	ViewerRequest,
+	ViewerRun,
+} from "@shared/board-viewer"
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+	!!value && typeof value === "object" && !Array.isArray(value)
+
+/** The data from a message, or undefined when it is not one of ours. */
+export function readViewerMessage(message: unknown): ViewerData | undefined {
+	if (!isObject(message) || message.type !== BOARD_VIEWER_DATA || !isObject(message.data)) {
+		return undefined
+	}
+	const data = message.data
+	return {
+		workspace: typeof data.workspace === "string" ? data.workspace : "",
+		...(typeof data.boardText === "string" ? { boardText: data.boardText } : {}),
+		pipelines: Array.isArray(data.pipelines)
+			? (data.pipelines.filter((entry) => isObject(entry) && typeof entry.slug === "string") as ViewerPipeline[]).map(
+					(pipeline) => ({ ...pipeline, errors: Array.isArray(pipeline.errors) ? pipeline.errors : [] }),
+				)
+			: [],
+		runs: Array.isArray(data.runs)
+			? (data.runs.filter((entry) => isObject(entry) && typeof entry.id === "string") as ViewerRun[]).map((run) => ({
+					...run,
+					inputs: isObject(run.inputs) ? run.inputs : {},
+					nodes: isObject(run.nodes) ? run.nodes : {},
+					events: Array.isArray(run.events) ? run.events : [],
+					eventCount: typeof run.eventCount === "number" ? run.eventCount : 0,
+				}))
+			: [],
+		...(isObject(data.focus) ? { focus: data.focus as ViewerData["focus"] } : {}),
+	}
+}
+
+/** The conversation's board, read with the task panel's own parser. */
+export function readBoard(data: ViewerData | undefined): TaskGraphPanelSnapshot | undefined {
+	if (!data?.boardText) return undefined
+	return findLatestTaskGraph([{ ts: 0, type: "say", say: "task_graph", text: data.boardText } as ClineMessage])
+}
+
+const slug = (name: string) =>
+	name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 60) || "pipeline"
+
+/** The run's pipeline: by slug of the run's pipeline name, a test's without its `-test`. */
+export function runBelongsTo(run: ViewerRun, pipeline: ViewerPipeline): boolean {
+	const own = slug(run.pipeline)
+	return [own, own.replace(/-test$/, "")].some((name) => name === pipeline.slug || name === slug(pipeline.name))
+}
+
+/** What the viewer is showing. */
+export type ViewerSource = { kind: "board" } | { kind: "pipeline"; slug: string } | { kind: "run"; id: string }
+
+/** The source a fresh panel opens on: its focus, else the board, else the newest run, else the first pipeline. */
+export function initialSource(data: ViewerData): ViewerSource | undefined {
+	const focus = data.focus
+	if (focus?.run && data.runs.some((run) => run.id === focus.run)) return { kind: "run", id: focus.run }
+	if (focus?.pipeline && data.pipelines.some((pipeline) => pipeline.slug === focus.pipeline)) {
+		return { kind: "pipeline", slug: focus.pipeline }
+	}
+	if (focus?.board || data.boardText) return { kind: "board" }
+	if (data.runs[0]) return { kind: "run", id: data.runs[0].id }
+	if (data.pipelines[0]) return { kind: "pipeline", slug: data.pipelines[0].slug }
+	return undefined
+}
+
+/** A short duration: 840 ms, 12.4 s, 3 m 05 s, 1 h 02 m. */
+export function formatDuration(ms: number | undefined): string {
+	if (ms === undefined || !Number.isFinite(ms) || ms < 0) return ""
+	if (ms < 1000) return `${Math.round(ms)} ms`
+	if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`
+	const s = Math.floor(ms / 1000)
+	if (s < 3600) return `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`
+	return `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")} m`
+}

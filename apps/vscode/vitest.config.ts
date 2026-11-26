@@ -15,6 +15,7 @@ export default defineConfig({
 			"src/hosts/vscode/undocked-chat.test.ts",
 			"src/hosts/vscode/startup-view.test.ts",
 			"src/hosts/vscode/webview-cache.test.ts",
+			"src/hosts/vscode/board-viewer/**/*.test.ts",
 			"src/hosts/vscode/remote/**/*.test.ts",
 			"src/shared/atomic-protocol-defaults.test.ts",
 			"src/shared/escalation-thresholds.test.ts",

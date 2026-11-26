@@ -111,6 +111,18 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ### Pipelines (preview)
 
+- **Open Board: the board, your pipelines and their runs in an editor tab.**
+  Run **Cerebriline: Open Board**, press **Open board** under the task
+  panel, or use the button in a pipeline file's title bar. The tab draws the
+  conversation's task board, or a pipeline, as cards in columns left to
+  right, with its dependencies, gates and branches; a run's cards show how
+  each node did, and the edges show which branch it took. Click a card for
+  its details: a node's fields, output and journal, or a task's acceptance,
+  gates and notes. A run also has a Run monitor (a timeline per node),
+  Activity (its journal) and a Report to copy or save as Markdown. The tab
+  follows the files as runs progress. It only shows: editing in it comes
+  later.
+
 - **Workflows the model writes and runs in the background.** Turn on
   Settings > Features > Pipelines (off by default) and the model gets a
   `pipeline` tool. It writes a pipeline as a file under

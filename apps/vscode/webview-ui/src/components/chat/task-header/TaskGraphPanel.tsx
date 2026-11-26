@@ -264,6 +264,13 @@ const SavedPlans = ({ onReply }: { onReply: (reply: { ok: boolean; text: string 
 	}
 	return (
 		<span className="flex gap-2">
+			<button
+				className={linkButton}
+				onClick={() => void callBoard({ op: "open-viewer" })}
+				title="The board, the workspace's pipelines and their runs, in an editor tab"
+				type="button">
+				Open board
+			</button>
 			<button className={linkButton} onClick={() => void openUse()} type="button">
 				Start from a saved plan…
 			</button>

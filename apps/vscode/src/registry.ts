@@ -52,6 +52,7 @@ const ClineCommands = {
 	CheckForUpdates: prefix + ".checkForUpdates",
 	ReopenSshFsWithRemoteSsh: prefix + ".reopenSshFsWithRemoteSsh",
 	ApprovePipeline: prefix + ".approvePipeline",
+	OpenBoard: prefix + ".openBoard",
 }
 
 /**

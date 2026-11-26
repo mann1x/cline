@@ -57,6 +57,7 @@ import { parseMentions } from "@/core/mentions"
 import { ensureMcpServersDirectoryExists } from "@/core/storage/disk"
 import { clearSdkRemoteConfig, refreshSdkRemoteConfig } from "@/core/storage/remote-config/sdk-refresh"
 import { StateManager } from "@/core/storage/StateManager"
+import { boardChanged } from "@/core/webview/board-viewer-hooks"
 import { WorkspaceRootManager } from "@/core/workspace/WorkspaceRootManager"
 import { HostProvider } from "@/hosts/host-provider"
 import { DEFAULT_MAX_TERMINALS, normalizeMaxTerminals } from "@/hosts/vscode/terminal/terminal-limit"
@@ -444,7 +445,10 @@ export class Controller {
 				this.taskGraphControl = control
 				this.taskBoardMemory.attach(control)
 			},
-			onTaskGraphChange: () => this.taskBoardMemory.changed(),
+			onTaskGraphChange: () => {
+				this.taskBoardMemory.changed()
+				boardChanged()
+			},
 			takeTaskGraphSeed: () => this.taskBoardMemory.takeSeed(),
 		})
 		this.diffEdits = new SdkDiffEditCoordinator({
