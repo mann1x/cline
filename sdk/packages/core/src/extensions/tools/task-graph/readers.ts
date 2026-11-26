@@ -10,7 +10,14 @@
  * model that hears nothing believes it was recorded.
  */
 
-import type { TaskPriority, TaskStatus } from "./model";
+import {
+	normalizeGate,
+	TASK_LINK_TYPES,
+	type TaskLink,
+	type TaskLinkType,
+	type TaskPriority,
+	type TaskStatus,
+} from "./model";
 
 export interface PlanItem {
 	title: string;
@@ -21,6 +28,9 @@ export interface PlanItem {
 	parent?: string;
 	priority?: TaskPriority;
 	start: boolean;
+	gates: string[];
+	links: TaskLink[];
+	files: string[];
 }
 
 export interface UpdateItem {
@@ -38,6 +48,14 @@ export interface UpdateItem {
 	priority?: TaskPriority;
 	later?: boolean;
 	files: string[];
+	gatesAdd: string[];
+	gatesRemove: string[];
+	/** Gates resolved: the person's, from the panel. */
+	gatesOpen: string[];
+	linksAdd: TaskLink[];
+	linksRemove: TaskLink[];
+	/** Take a task another live agent holds. */
+	force: boolean;
 }
 
 export interface ReadResult<T> {
@@ -255,6 +273,147 @@ export function unquoteArgument(text: string): string {
 	return out.trim();
 }
 
+const LINK_TYPE_WORDS: Record<string, TaskLinkType> = {
+	"discovered-from": "discovered-from",
+	discovered_from: "discovered-from",
+	discovered: "discovered-from",
+	"found-in": "discovered-from",
+	from: "discovered-from",
+	related: "related",
+	"related-to": "related",
+	relates: "related",
+	see: "related",
+	"caused-by": "caused-by",
+	caused_by: "caused-by",
+	cause: "caused-by",
+	supersedes: "supersedes",
+	replaces: "supersedes",
+	"duplicate-of": "duplicate-of",
+	duplicate_of: "duplicate-of",
+	duplicate: "duplicate-of",
+	dup: "duplicate-of",
+	url: "url",
+	link: "url",
+	commit: "commit",
+	sha: "commit",
+	message: "message",
+	msg: "message",
+	plan: "plan",
+};
+
+/** A link's type as written, in canonical form, or undefined. */
+function readLinkType(word: string): TaskLinkType | undefined {
+	return LINK_TYPE_WORDS[word.toLowerCase().replace(/\s+/g, "-")];
+}
+
+/**
+ * Links as models write them: `"supersedes T3"`, `"supersedes: T3"`,
+ * `{type: "supersedes", target: "T3"}`, `{supersedes: "T3"}`, a URL, a
+ * commit sha, or a path (a file). Task links need a task id as their target.
+ */
+export function readLinks(value: unknown): {
+	links: TaskLink[];
+	files: string[];
+	bad: string[];
+} {
+	const links: TaskLink[] = [];
+	const files: string[] = [];
+	const bad: string[] = [];
+	const add = (type: TaskLinkType, rawTarget: string, raw: string): void => {
+		const target = rawTarget.trim();
+		if (!target) {
+			bad.push(raw);
+			return;
+		}
+		if ((TASK_LINK_TYPES as readonly string[]).includes(type)) {
+			const id = normalizeTaskId(target);
+			if (!id) {
+				bad.push(raw);
+				return;
+			}
+			links.push({ type, target: id });
+			return;
+		}
+		links.push({ type, target });
+	};
+	const one = (entry: unknown): void => {
+		if (typeof entry === "string") {
+			const text = unquoteArgument(entry);
+			if (!text) return;
+			const typed =
+				/^([a-z][\w-]*(?:\s+(?:of|from|by|to))?)\s*[:=]?\s+(\S[\s\S]*)$/i.exec(
+					text,
+				);
+			if (typed && /^files?$/i.test(typed[1] as string)) {
+				files.push((typed[2] as string).trim());
+				return;
+			}
+			const type = typed ? readLinkType(typed[1] as string) : undefined;
+			if (typed && type) {
+				add(type, typed[2] as string, entry);
+				return;
+			}
+			if (/^https?:\/\//i.test(text)) {
+				links.push({ type: "url", target: text });
+			} else if (/^[0-9a-f]{7,40}$/i.test(text)) {
+				links.push({ type: "commit", target: text });
+			} else if (/^[\w.@~/-][^\s]*$/.test(text) && /[./\\]/.test(text)) {
+				files.push(text);
+			} else {
+				bad.push(entry);
+			}
+			return;
+		}
+		if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+			const obj = entry as Record<string, unknown>;
+			const typeText = asText(obj.type ?? obj.kind ?? obj.rel);
+			const target = asText(obj.target ?? obj.id ?? obj.to ?? obj.value);
+			if (typeText && target) {
+				const type = readLinkType(typeText);
+				if (type) add(type, target, JSON.stringify(entry));
+				else if (typeText.toLowerCase() === "file") files.push(target);
+				else bad.push(JSON.stringify(entry));
+				return;
+			}
+			// {supersedes: "T3"}
+			for (const [key, raw] of Object.entries(obj)) {
+				const type = readLinkType(key);
+				const text = asText(raw);
+				if (type && text) add(type, text, `${key}: ${text}`);
+				else if (key.toLowerCase() === "file" && text) files.push(text);
+				else bad.push(`${key}: ${JSON.stringify(raw)}`);
+			}
+		}
+	};
+	asList(value).forEach(one);
+	return { links, files, bad };
+}
+
+/** Gates as written, in `kind:value` form; what names no kind is returned as bad. */
+export function readGates(value: unknown): { gates: string[]; bad: string[] } {
+	const gates: string[] = [];
+	const bad: string[] = [];
+	for (const entry of asList(value)) {
+		const text =
+			typeof entry === "string"
+				? unquoteArgument(entry)
+				: entry && typeof entry === "object"
+					? (() => {
+							const obj = entry as Record<string, unknown>;
+							const kind = asText(obj.kind ?? obj.type);
+							const rest = asText(
+								obj.value ?? obj.what ?? obj.target ?? obj.id,
+							);
+							return kind && rest ? `${kind}:${rest}` : "";
+						})()
+					: "";
+		const gate = text ? normalizeGate(text) : undefined;
+		if (gate) gates.push(gate);
+		else bad.push(typeof entry === "string" ? entry : JSON.stringify(entry));
+	}
+	return { gates, bad };
+}
+
 export function normalizeTaskId(value: unknown): string | undefined {
 	const raw = asText(value);
 	if (!raw) return undefined;
@@ -295,6 +454,12 @@ const PLAN_KEYS = new Set([
 	"status",
 	"subtasks",
 	"children",
+	"gate",
+	"gates",
+	"link",
+	"links",
+	"files",
+	"file",
 ]);
 
 /**
@@ -353,6 +518,9 @@ export function readPlanInput(input: unknown): ReadResult<PlanItem> {
 					depends: [],
 					...(parentRef ? { parent: parentRef } : {}),
 					start: false,
+					gates: [],
+					links: [],
+					files: [],
 				});
 			}
 			return;
@@ -403,7 +571,21 @@ export function readPlanInput(input: unknown): ReadResult<PlanItem> {
 			),
 			...(parent ? { parent } : {}),
 			start: readBool(obj.start) === true || status === "active",
+			gates: [],
+			links: [],
+			files: asStringList(obj.files ?? obj.file),
 		};
+		const planGates = readGates(obj.gate ?? obj.gates);
+		item.gates = planGates.gates;
+		for (const entry of planGates.bad)
+			ignored.push(
+				`gate ${JSON.stringify(entry)} on "${title}" (use run:, command:, human:, commit:, timer:, gh-pr: or gh-run:)`,
+			);
+		const planLinks = readLinks(obj.link ?? obj.links);
+		item.links = planLinks.links;
+		item.files.push(...planLinks.files);
+		for (const entry of planLinks.bad)
+			ignored.push(`link ${JSON.stringify(entry)} on "${title}"`);
 		const priority = readPriority(obj.priority);
 		if (priority) item.priority = priority;
 		else if (obj.priority !== undefined)
@@ -446,8 +628,16 @@ const UPDATE_KEYS = new Set([
 	"priority",
 	"later",
 	"link",
+	"links",
+	"link_remove",
 	"files",
 	"file",
+	"gate",
+	"gates",
+	"gate_remove",
+	"gate_open",
+	"resolve",
+	"force",
 ]);
 
 /**
@@ -534,8 +724,36 @@ export function readUpdateInput(input: unknown): ReadResult<UpdateItem> {
 			acceptanceAdd: asStringList(obj.acceptance_add ?? obj.add_acceptance),
 			dependsAdd: asRefList(obj.depends_add ?? obj.add_depends),
 			dependsRemove: asRefList(obj.depends_remove ?? obj.remove_depends),
-			files: asStringList(obj.files ?? obj.file ?? obj.link),
+			files: asStringList(obj.files ?? obj.file),
+			gatesAdd: [],
+			gatesRemove: [],
+			gatesOpen: [],
+			linksAdd: [],
+			linksRemove: [],
+			force: readBool(obj.force) === true,
 		};
+		const gateUse = (value: unknown, into: string[], what: string): void => {
+			const read = readGates(value);
+			into.push(...read.gates);
+			for (const entry of read.bad)
+				ignored.push(
+					`${what} ${JSON.stringify(entry)} on ${id} (use run:, command:, human:, commit:, timer:, gh-pr: or gh-run:)`,
+				);
+		};
+		gateUse(obj.gate ?? obj.gates, item.gatesAdd, "gate");
+		gateUse(obj.gate_remove, item.gatesRemove, "gate_remove");
+		gateUse(obj.gate_open ?? obj.resolve, item.gatesOpen, "gate_open");
+		const linkUse = (value: unknown, into: TaskLink[], what: string): void => {
+			const read = readLinks(value);
+			into.push(...read.links);
+			item.files.push(...read.files);
+			for (const entry of read.bad)
+				ignored.push(
+					`${what} ${JSON.stringify(entry)} on ${id} (as "discovered-from T3", "related T4", "caused-by T2", "supersedes T3", "duplicate-of T3", a URL, a commit or a file)`,
+				);
+		};
+		linkUse(obj.link ?? obj.links, item.linksAdd, "link");
+		linkUse(obj.link_remove, item.linksRemove, "link_remove");
 		const priority = readPriority(obj.priority);
 		if (priority) item.priority = priority;
 		else if (obj.priority !== undefined)

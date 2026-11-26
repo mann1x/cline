@@ -9,8 +9,8 @@
 
 import { type AgentTool, createTool } from "@cline/shared";
 import type { ToolOperationResult } from "../types";
-import { renderBoard, renderLayers, renderTask } from "./board";
-import { isBlocked, openDependencies, type Task } from "./model";
+import { renderBoard, renderLayers, renderMermaid, renderTask } from "./board";
+import { isBlocked, type Task, waitsOn } from "./model";
 import { normalizeTaskId } from "./readers";
 import {
 	TASK_PLAN_TOOL_NAME,
@@ -20,6 +20,10 @@ import {
 } from "./store";
 
 const STATUS_ENUM = ["pending", "active", "waiting", "done", "cancelled"];
+const GATE_DESCRIPTION =
+	'What the task waits on besides other tasks; it is blocked until each opens: "human:<what the person must decide>", "timer:+30m" or an ISO time, "commit:<sha>@<branch>", "run:<agent or run id>", "command:<id>", "gh-pr:owner/repo#12", "gh-run:owner/repo/<run id>".';
+const LINK_DESCRIPTION =
+	'Links: "discovered-from T3", "related T4", "caused-by T2", "supersedes T3" (cancels T3), "duplicate-of T3" (cancels this one), a URL, a commit, or a file path.';
 /** An acceptance item, by number or by its text. */
 const ITEM_NUMBER_OR_TEXT = {
 	anyOf: [{ type: "integer" }, { type: "string" }],
@@ -77,6 +81,16 @@ export function createTaskPlanTool(
 							start: {
 								type: "boolean",
 								description: "Mark it active right away.",
+							},
+							gate: {
+								type: "array",
+								items: { type: "string" },
+								description: GATE_DESCRIPTION,
+							},
+							link: {
+								type: "array",
+								items: { type: "string" },
+								description: LINK_DESCRIPTION,
 							},
 						},
 						required: ["title"],
@@ -146,6 +160,17 @@ export function createTaskUpdateTool(
 								type: "boolean",
 								description: "Park it (true) or bring it back (false).",
 							},
+							gate: {
+								type: "array",
+								items: { type: "string" },
+								description: `${GATE_DESCRIPTION} An active task given a gate waits.`,
+							},
+							gate_remove: { type: "array", items: { type: "string" } },
+							link: {
+								type: "array",
+								items: { type: "string" },
+								description: LINK_DESCRIPTION,
+							},
 						},
 						required: ["id"],
 					},
@@ -165,17 +190,29 @@ export function createTaskUpdateTool(
 	});
 }
 
+export interface TaskViewHooks {
+	/**
+	 * Checked before the board is read: the gates only a look is worth
+	 * checking (GitHub's, which go over the network). Returns lines to say.
+	 */
+	beforeView?: () => Promise<string[]>;
+}
+
 export function createTaskViewTool(
 	store: TaskGraphStore,
+	hooks: TaskViewHooks = {},
 ): AgentTool<unknown, ToolOperationResult[]> {
 	return createTool<unknown, ToolOperationResult[]>({
 		name: TASK_VIEW_TOOL_NAME,
 		description:
-			"Read the task board. view: ready (default: the board, with what can start now), show (one task in full, with `id`), graph (open tasks in dependency layers), blocked (what each blocked task waits on).",
+			"Read the task board. view: ready (default: the board, with what can start now), show (one task in full, with `id`), graph (open tasks in dependency layers), blocked (what each blocked task waits on), mermaid (the board as a Mermaid flowchart).",
 		inputSchema: {
 			type: "object",
 			properties: {
-				view: { type: "string", enum: ["ready", "show", "graph", "blocked"] },
+				view: {
+					type: "string",
+					enum: ["ready", "show", "graph", "blocked", "mermaid"],
+				},
 				id: { type: "string" },
 			},
 		},
@@ -194,7 +231,15 @@ export function createTaskViewTool(
 					: id
 						? "show"
 						: "ready";
+			const said = (await hooks.beforeView?.()) ?? [];
 			const state = store.getState();
+			const answer = (
+				query: string,
+				lines: string[],
+				success: boolean,
+			): ToolOperationResult[] => [
+				{ query, result: [...said, ...lines].join("\n"), success },
+			];
 			if (state.order.length === 0) {
 				return answer(
 					TASK_VIEW_TOOL_NAME,
@@ -218,6 +263,9 @@ export function createTaskViewTool(
 			if (view === "graph") {
 				return answer(TASK_VIEW_TOOL_NAME, [renderLayers(state)], true);
 			}
+			if (view === "mermaid") {
+				return answer(TASK_VIEW_TOOL_NAME, [renderMermaid(state)], true);
+			}
 			if (view === "blocked") {
 				const blocked = state.order
 					.map((taskId) => state.tasks.get(taskId) as Task)
@@ -226,7 +274,7 @@ export function createTaskViewTool(
 					TASK_VIEW_TOOL_NAME,
 					blocked.length
 						? blocked.map((task) => {
-								const open = openDependencies(state, task);
+								const open = waitsOn(state, task);
 								return `${task.id} ${task.title}: ${
 									open.length ? `after ${open.join(", ")}` : "parked (later)"
 								}`;
@@ -247,10 +295,11 @@ export function createTaskViewTool(
 export function createTaskGraphTools(
 	store: TaskGraphStore,
 	author?: () => string,
+	viewHooks?: TaskViewHooks,
 ): AgentTool<unknown, ToolOperationResult[]>[] {
 	return [
 		createTaskPlanTool(store, author),
 		createTaskUpdateTool(store, author),
-		createTaskViewTool(store),
+		createTaskViewTool(store, viewHooks),
 	];
 }

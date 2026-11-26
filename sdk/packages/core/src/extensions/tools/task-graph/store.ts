@@ -25,6 +25,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import { shortTitle } from "./board";
+import { absoluteGate } from "./gates";
 import {
 	applyTaskEvent,
 	dependentsOf,
@@ -32,16 +33,21 @@ import {
 	foldTaskEvents,
 	isClosed,
 	isReady,
+	isTaskLinkType,
 	nextTaskId,
 	openDependencies,
+	openGates,
 	readyTasks,
 	type Task,
 	type TaskAuthor,
 	type TaskCreateFields,
 	type TaskEvent,
+	type TaskGate,
 	type TaskGraphState,
+	type TaskLink,
 	type TaskUpdateFields,
 	taskLayers,
+	waitsOn,
 	wouldCycle,
 } from "./model";
 import {
@@ -180,6 +186,20 @@ export interface TaskChangeOrigin {
 	call?: string;
 }
 
+/** Authors that are not an agent of their own: the lead, the person, imports. */
+const NON_AGENT_AUTHORS = new Set(["model", "user", "import", "gate", "host"]);
+
+/**
+ * Whether a change was made by a teammate or delegated agent: their starts
+ * are claims, and nothing is started for them.
+ */
+export function isAgentAuthor(by: TaskAuthor | undefined): boolean {
+	return !!by && !NON_AGENT_AUTHORS.has(by) && !by.startsWith("memory:");
+}
+
+/** What a gate check decided about one gate. */
+export type GateDecision = { open: true } | { failed: string } | undefined;
+
 /** A saved board a new conversation starts from: its events, and who to author them as. */
 export interface TaskGraphSeed {
 	events: readonly unknown[];
@@ -240,6 +260,12 @@ export interface TaskSnapshot {
 	later: boolean;
 	claimedBy?: string;
 	files: string[];
+	gates: TaskGate[];
+	links: TaskLink[];
+	/** What it waits on now: open dependencies, then closed gates. */
+	waitsOn: string[];
+	/** The tool call that created it, to find where it was planned. */
+	createdCall?: string;
 	notes: string[];
 	outcome?: string;
 	ready: boolean;
@@ -338,6 +364,14 @@ export interface TaskGraphStoreOptions {
 	 * it with "Okay, I'm starting T1. I will use sed" in plan mode.
 	 */
 	planMode?: boolean;
+	/**
+	 * Whether an agent's claim still holds: its run is live. A task held by a
+	 * live run is refused to anyone else unless forced (plan section 7).
+	 * Without it every claim holds until released.
+	 */
+	isHolderLive?: (holder: string) => boolean;
+	/** Said when a claim is taken by force, for the log. */
+	onForcedClaim?: (id: string, from: string, to: string) => void;
 }
 
 export class TaskGraphStore {
@@ -347,9 +381,15 @@ export class TaskGraphStore {
 	private readonly onChange: ((store: TaskGraphStore) => void) | undefined;
 	private readonly now: () => number;
 	readonly planMode: boolean;
+	private isHolderLive: ((holder: string) => boolean) | undefined;
+	private readonly onForcedClaim:
+		| ((id: string, from: string, to: string) => void)
+		| undefined;
 
 	constructor(options: TaskGraphStoreOptions = {}) {
 		this.planMode = options.planMode === true;
+		this.isHolderLive = options.isHolderLive;
+		this.onForcedClaim = options.onForcedClaim;
 		this.logPath = options.logPath;
 		this.onChange = options.onChange;
 		this.now = options.now ?? Date.now;
@@ -612,15 +652,32 @@ export class TaskGraphStore {
 						...(depends.length ? { depends } : {}),
 						...(parent ? { parent } : {}),
 						...(item.priority ? { priority: item.priority } : {}),
+						...(item.gates.length
+							? {
+									gates: item.gates.map((gate) =>
+										absoluteGate(gate, this.now()),
+									),
+								}
+							: {}),
+						...(item.links.length
+							? { links: this.resolveLinkTargets(item.links, id, lines) }
+							: {}),
 					},
 				},
 				origin,
 			);
+			if (item.files.length) {
+				this.record(
+					{ op: "update", update: { id, files: item.files } },
+					origin,
+				);
+			}
 			batchIds.push(id);
 			created.push(id);
+			this.applyLinkEffects(id, origin, lines);
 			if (item.start && !this.planMode) {
 				const task = this.state.tasks.get(id) as Task;
-				const open = openDependencies(this.state, task);
+				const open = waitsOn(this.state, task);
 				if (open.length > 0) {
 					lines.push(`${id} not started: it is after ${open.join(", ")}.`);
 				} else {
@@ -633,9 +690,8 @@ export class TaskGraphStore {
 		});
 		const summary = created.map((id) => {
 			const task = this.state.tasks.get(id) as Task;
-			const after = task.depends.length
-				? ` (after ${task.depends.join(", ")})`
-				: "";
+			const wait = waitsOn(this.state, task);
+			const after = wait.length ? ` (after ${wait.join(", ")})` : "";
 			return `${id} ${shortTitle(task.title, 60)}${after}${
 				task.status === "active" ? " [active]" : ""
 			}`;
@@ -664,13 +720,15 @@ export class TaskGraphStore {
 	/**
 	 * With nothing active, start the first ready task and say so.
 	 *
-	 * Starting a task was a request of its own: 29 of 101 \`task_update\`
+	 * Starting a task was a request of its own: 29 of 101 `task_update`
 	 * calls in phase 1b did nothing else, and S5 nudged for the rest. After a
 	 * plan or a close with nothing else under way, the next ready task is the
 	 * one the model takes up anyway; when it is not, one call moves it.
 	 */
 	private autoStart(origin: TaskChangeOrigin, lines: string[]): void {
-		if (this.planMode) return;
+		// A teammate's close starts nothing for it: it claims its next task,
+		// and the lead hands the rest out.
+		if (this.planMode || isAgentAuthor(origin.by)) return;
 		const active = this.state.order.some(
 			(id) => this.state.tasks.get(id)?.status === "active",
 		);
@@ -687,7 +745,7 @@ export class TaskGraphStore {
 	}
 
 	/**
-	 * Close tasks named by a working call's \`task_done\`: done, with the note
+	 * Close tasks named by a working call's `task_done`: done, with the note
 	 * as the outcome and its acceptance ticked, since saying it is done is
 	 * saying those hold. The next ready task starts as after any close.
 	 */
@@ -797,6 +855,37 @@ export class TaskGraphStore {
 		if (item.later !== undefined) update.later = item.later;
 		if (item.files.length) update.files = item.files;
 		if (item.acceptanceAdd.length) update.acceptanceAdd = item.acceptanceAdd;
+		const gates = task.gates ?? [];
+		const newGates = item.gatesAdd
+			.map((spec) => absoluteGate(spec, this.now()))
+			.filter((spec) => !gates.some((gate) => gate.spec === spec));
+		if (newGates.length) update.gatesAdd = newGates;
+		const removeGates = item.gatesRemove.filter((spec) =>
+			gates.some((gate) => gate.spec === spec),
+		);
+		for (const spec of item.gatesRemove) {
+			if (!removeGates.includes(spec))
+				lines.push(`${id}: no gate ${spec} to remove.`);
+		}
+		if (removeGates.length) update.gatesRemove = removeGates;
+		if (item.gatesOpen.length) {
+			// The person resolves gates; the others open by themselves.
+			if (origin.by === "user") {
+				const opening = item.gatesOpen.filter((spec) =>
+					gates.some((gate) => gate.spec === spec && !gate.open),
+				);
+				if (opening.length) update.gatesOpen = opening;
+			} else {
+				lines.push(
+					`${id}: gates are not opened by a tool call: \`human:\` gates open when the person answers, the others when what they wait on happens. Remove one that no longer applies with \`gate_remove\`.`,
+				);
+			}
+		}
+		if (item.linksAdd.length) {
+			const add = this.resolveLinkTargets(item.linksAdd, id, lines);
+			if (add.length) update.linksAdd = add;
+		}
+		if (item.linksRemove.length) update.linksRemove = item.linksRemove;
 		const acceptanceAfterAdd = [
 			...task.acceptance.map((entry) => entry.text),
 			...item.acceptanceAdd,
@@ -869,9 +958,44 @@ export class TaskGraphStore {
 			if (remove.length) update.dependsRemove = remove;
 		}
 		if (item.note) update.note = item.note;
-		if (item.status && item.status !== task.status) {
+		// A task a live agent holds is refused to anyone else unless forced.
+		// The person is never refused: the panel is their override.
+		const holder = task.claimedBy;
+		// A teammate starting a task the lead had active (the auto-start) is
+		// still its claim.
+		const claiming =
+			item.status === "active" &&
+			isAgentAuthor(origin.by) &&
+			holder !== origin.by;
+		const wantsStatus =
+			(item.status && item.status !== task.status) || claiming;
+		const heldByOther =
+			holder !== undefined &&
+			holder !== (origin.by ?? "model") &&
+			origin.by !== "user" &&
+			!isClosed(task.status) &&
+			(this.isHolderLive?.(holder) ?? true);
+		let statusAllowed = true;
+		if (wantsStatus && heldByOther) {
+			if (item.force) {
+				this.onForcedClaim?.(id, holder as string, origin.by ?? "model");
+				update.note = [
+					update.note,
+					`taken over from ${holder} by ${origin.by ?? "model"} (forced)`,
+				]
+					.filter(Boolean)
+					.join("; ");
+			} else {
+				statusAllowed = false;
+				lines.push(
+					`${id} is held by ${holder}, whose run is still going: its status was not changed. Leave it to ${holder}, or send \`force: true\` with the update to take it over.`,
+				);
+			}
+		}
+		if (item.status && wantsStatus && statusAllowed) {
 			if (item.status === "active") {
-				const open = openDependencies(this.state, {
+				const removed = new Set(update.gatesRemove ?? []);
+				const open = waitsOn(this.state, {
 					...task,
 					depends: [
 						...task.depends.filter(
@@ -879,17 +1003,38 @@ export class TaskGraphStore {
 						),
 						...(update.dependsAdd ?? []),
 					],
+					gates: [
+						...gates.filter((gate) => !removed.has(gate.spec)),
+						...(update.gatesAdd ?? []).map((spec) => ({ spec, open: false })),
+					].map((gate) =>
+						(update.gatesOpen ?? []).includes(gate.spec)
+							? { ...gate, open: true }
+							: gate,
+					),
 				});
 				if (open.length > 0) {
 					lines.push(
-						`${id} not started: it is after ${open.join(", ")}, still open. Finish those first, or drop the dependency with \`depends_remove\`.`,
+						`${id} not started: it is after ${open.join(", ")}, still open. Finish those first, or drop the dependency with \`depends_remove\` (a gate with \`gate_remove\`).`,
 					);
 				} else {
 					update.status = "active";
+					// A teammate's start is its claim.
+					if (isAgentAuthor(origin.by)) update.claimedBy = origin.by as string;
+					else if (holder && item.force) update.claimedBy = null;
 				}
 			} else {
 				update.status = item.status;
+				// Put back: whoever held it lets it go.
+				if (item.status === "pending" && holder) update.claimedBy = null;
 			}
+		} else if (
+			!item.status &&
+			task.status === "active" &&
+			(update.gatesAdd ?? []).length > 0
+		) {
+			// Active work that now waits on something is waiting, so the
+			// close-out does not ask for it and the next task can start.
+			update.status = "waiting";
 		}
 		const keys = Object.keys(update).filter((key) => key !== "id");
 		if (keys.length === 0) {
@@ -897,6 +1042,8 @@ export class TaskGraphStore {
 			return { lines, changed: false };
 		}
 		this.record({ op: "update", update }, origin);
+		if (update.linksAdd) this.applyLinkEffects(id, origin, lines);
+		if (update.gatesOpen) this.releaseGated(origin, lines);
 		const after = this.state.tasks.get(id) as Task;
 		const said: string[] = [];
 		if (update.status) said.push(`now ${update.status}`);
@@ -906,6 +1053,13 @@ export class TaskGraphStore {
 			);
 		}
 		if (update.dependsAdd) said.push(`after ${update.dependsAdd.join(", ")}`);
+		if (update.gatesAdd) said.push(`waits on ${update.gatesAdd.join(", ")}`);
+		if (update.gatesOpen) said.push(`${update.gatesOpen.join(", ")} resolved`);
+		if (update.linksAdd)
+			said.push(
+				`linked ${update.linksAdd.map((link) => `${link.type} ${link.target}`).join(", ")}`,
+			);
+		if (update.claimedBy) said.push(`held by ${update.claimedBy}`);
 		if (update.note && !update.status) said.push("note added");
 		if (said.length === 0) said.push("updated");
 		lines.unshift(`${id} ${said.join(", ")}.`);
@@ -933,6 +1087,222 @@ export class TaskGraphStore {
 			}
 		}
 		return { lines, changed: true };
+	}
+
+	// -------------------------------------------------------------------------
+	// Links, gates and claims
+	// -------------------------------------------------------------------------
+
+	/** Task links whose target exists and is not the task itself; the rest said. */
+	private resolveLinkTargets(
+		links: readonly TaskLink[],
+		self: string,
+		lines: string[],
+	): TaskLink[] {
+		return links.filter((link) => {
+			if (!isTaskLinkType(link.type)) return true;
+			if (link.target === self) {
+				lines.push(
+					`${self}: link ${link.type} ${link.target} ignored: a task cannot link to itself.`,
+				);
+				return false;
+			}
+			if (!this.state.tasks.has(link.target)) {
+				lines.push(
+					`${self}: link ${link.type} ${link.target} ignored: no such task.`,
+				);
+				return false;
+			}
+			return true;
+		});
+	}
+
+	/**
+	 * `supersedes` and `duplicate-of` close the replaced task (from beads): T5
+	 * supersedes T3 cancels T3; T5 duplicate-of T3 cancels T5. What waited on
+	 * the replaced task waits on its replacement instead, so nothing becomes
+	 * ready because the work it needed was renamed.
+	 */
+	private applyLinkEffects(
+		id: string,
+		origin: TaskChangeOrigin,
+		lines: string[],
+	): void {
+		const task = this.state.tasks.get(id);
+		if (!task) return;
+		for (const link of task.links ?? []) {
+			let replaced: string;
+			let replacement: string;
+			if (link.type === "supersedes") {
+				replaced = link.target;
+				replacement = id;
+			} else if (link.type === "duplicate-of") {
+				replaced = id;
+				replacement = link.target;
+			} else {
+				continue;
+			}
+			const old = this.state.tasks.get(replaced);
+			if (!old || isClosed(old.status)) continue;
+			for (const dependent of dependentsOf(this.state, replaced)) {
+				if (dependent.id === replacement) continue;
+				if (
+					isAncestorOf(this.state, replacement, dependent.id) ||
+					wouldCycle(this.state, dependent.id, replacement)
+				)
+					continue;
+				this.record(
+					{
+						op: "update",
+						update: { id: dependent.id, dependsAdd: [replacement] },
+					},
+					origin,
+				);
+				lines.push(
+					`${dependent.id} now waits on ${replacement} in place of ${replaced}.`,
+				);
+			}
+			const note =
+				link.type === "supersedes"
+					? `superseded by ${replacement}`
+					: `duplicate of ${replacement}`;
+			this.record(
+				{
+					op: "update",
+					update: {
+						id: replaced,
+						status: "cancelled",
+						note,
+						...(old.claimedBy ? { claimedBy: null } : {}),
+					},
+				},
+				origin,
+			);
+			lines.push(`${replaced} cancelled: ${note}.`);
+		}
+	}
+
+	/**
+	 * Tasks put on hold by gates that have all opened go back to pending,
+	 * where they are ready if nothing else holds them.
+	 */
+	private releaseGated(origin: TaskChangeOrigin, lines: string[]): void {
+		for (const id of this.state.order) {
+			const task = this.state.tasks.get(id) as Task;
+			if (task.status !== "waiting" || (task.gates ?? []).length === 0)
+				continue;
+			if (openGates(this.state, task).length > 0) continue;
+			this.record(
+				{ op: "update", update: { id, status: "pending" } },
+				{ ...origin, by: origin.by ?? "gate" },
+			);
+			lines.push(`${id} no longer waits: its gates opened.`);
+		}
+	}
+
+	/** Every closed gate on an open task, with the task. */
+	closedGates(): { task: Task; gate: TaskGate }[] {
+		const out: { task: Task; gate: TaskGate }[] = [];
+		for (const id of this.state.order) {
+			const task = this.state.tasks.get(id) as Task;
+			if (isClosed(task.status)) continue;
+			for (const gate of task.gates ?? []) {
+				if (!gate.open) out.push({ task, gate });
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Ask `decide` about every closed gate and record what it says: opened,
+	 * or failed (said once; a gate already failed for the same reason is not
+	 * recorded again). Tasks whose gates all opened are released, and what
+	 * became ready is said as a close says it.
+	 */
+	resolveGates(
+		decide: (gate: TaskGate, task: Task) => GateDecision,
+		origin: TaskChangeOrigin = { by: "gate" },
+	): TaskOperationOutcome {
+		const lines: string[] = [];
+		const readyBefore = new Set(readyTasks(this.state).map((task) => task.id));
+		let changed = false;
+		for (const { task, gate } of this.closedGates()) {
+			const decision = decide(gate, task);
+			if (!decision) continue;
+			if ("open" in decision) {
+				this.record(
+					{ op: "update", update: { id: task.id, gatesOpen: [gate.spec] } },
+					origin,
+				);
+				lines.push(`${task.id}: ${gate.spec} opened.`);
+				changed = true;
+			} else if (gate.failed !== decision.failed) {
+				this.record(
+					{
+						op: "update",
+						update: {
+							id: task.id,
+							gatesFailed: [{ gate: gate.spec, reason: decision.failed }],
+						},
+					},
+					origin,
+				);
+				lines.push(
+					`${task.id}: ${gate.spec} can no longer open (${decision.failed}). Remove it with \`gate_remove\`, or replace it, if the task should go on.`,
+				);
+				changed = true;
+			}
+		}
+		if (!changed) return { lines, changed, readyNow: [] };
+		this.releaseGated(origin, lines);
+		const readyNow = readyTasks(this.state)
+			.map((task) => task.id)
+			.filter((id) => !readyBefore.has(id));
+		if (readyNow.length > 0) {
+			lines.push(
+				`Ready now: ${readyNow
+					.map(
+						(id) =>
+							`${id} ${shortTitle((this.state.tasks.get(id) as Task).title, 50)}`,
+					)
+					.join("; ")}.`,
+			);
+			this.autoStart(origin, lines);
+		}
+		this.onChange?.(this);
+		return { lines, changed, readyNow };
+	}
+
+	/**
+	 * A claim ends with its run (plan section 7): what the holder left active
+	 * goes back to pending, unheld, with why. Returns the ids put back.
+	 */
+	releaseClaims(holder: string, reason: string): string[] {
+		const released: string[] = [];
+		for (const id of this.state.order) {
+			const task = this.state.tasks.get(id) as Task;
+			if (task.claimedBy !== holder || isClosed(task.status)) continue;
+			this.record(
+				{
+					op: "update",
+					update: {
+						id,
+						claimedBy: null,
+						...(task.status === "active" ? { status: "pending" } : {}),
+						note: `${holder} let it go: ${reason}`,
+					},
+				},
+				{ by: "host" },
+			);
+			released.push(id);
+		}
+		if (released.length) this.onChange?.(this);
+		return released;
+	}
+
+	/** Whether a holder's claim still stands. Set once the team exists. */
+	setHolderLive(check: ((holder: string) => boolean) | undefined): void {
+		this.isHolderLive = check;
 	}
 
 	// -------------------------------------------------------------------------
@@ -967,6 +1337,10 @@ export class TaskGraphStore {
 				later: task.later,
 				...(task.claimedBy ? { claimedBy: task.claimedBy } : {}),
 				files: [...task.files],
+				gates: (task.gates ?? []).map((gate) => ({ ...gate })),
+				links: (task.links ?? []).map((link) => ({ ...link })),
+				waitsOn: waitsOn(state, task),
+				...(task.createdCall ? { createdCall: task.createdCall } : {}),
 				notes: task.notes.map((note) => note.text),
 				...(task.outcome ? { outcome: task.outcome } : {}),
 				ready,
@@ -974,7 +1348,7 @@ export class TaskGraphStore {
 					!isClosed(task.status) &&
 					task.status !== "active" &&
 					!ready &&
-					openDepends.length > 0,
+					(openDepends.length > 0 || openGates(state, task).length > 0),
 			};
 		});
 		return {

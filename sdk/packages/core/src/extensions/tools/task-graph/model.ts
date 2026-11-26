@@ -27,6 +27,84 @@ export interface AcceptanceItem {
 	done: boolean;
 }
 
+/**
+ * What a task waits on besides other tasks (plan section 6). The kind is the
+ * part before the first colon:
+ *
+ * | gate | opens when |
+ * |---|---|
+ * | `run:<id>` | a teammate run or delegated agent finishes |
+ * | `command:<id>` | a background command exits |
+ * | `human:<what>` | the person answers: a reply to the question naming it, or "Resolve" |
+ * | `commit:<sha>@<branch>` | the branch contains the commit |
+ * | `timer:<ISO time>` | the time passes |
+ * | `gh-pr:<owner/repo#n>` / `gh-run:<owner/repo/id>` | merged / succeeded |
+ *
+ * A gate that can no longer open (the run failed, the PR was closed) is
+ * marked failed once and stays, for the model or the person to remove.
+ */
+export interface TaskGate {
+	spec: string;
+	open: boolean;
+	/** Why it can no longer open. */
+	failed?: string;
+}
+
+export const GATE_KINDS = [
+	"run",
+	"command",
+	"human",
+	"commit",
+	"timer",
+	"gh-pr",
+	"gh-run",
+] as const;
+export type GateKind = (typeof GATE_KINDS)[number];
+
+/** A gate's kind and the rest, or undefined when it names no known kind. */
+export function parseGate(
+	spec: string,
+): { kind: GateKind; value: string } | undefined {
+	const match = /^\s*([a-z][a-z-]*)\s*:\s*([\s\S]*)$/i.exec(spec);
+	if (!match) return undefined;
+	const kind = (match[1] as string).toLowerCase() as GateKind;
+	if (!GATE_KINDS.includes(kind)) return undefined;
+	const value = (match[2] as string).trim();
+	return value ? { kind, value } : undefined;
+}
+
+/** A gate written the one way the board stores it: `kind:value`. */
+export function normalizeGate(spec: string): string | undefined {
+	const parsed = parseGate(spec);
+	return parsed ? `${parsed.kind}:${parsed.value}` : undefined;
+}
+
+/**
+ * Typed links between tasks (from claude-hooks and beads), and attachments.
+ * `supersedes` and `duplicate-of` close the replaced task.
+ */
+export const TASK_LINK_TYPES = [
+	"discovered-from",
+	"related",
+	"caused-by",
+	"supersedes",
+	"duplicate-of",
+] as const;
+export const ATTACHMENT_TYPES = ["url", "commit", "message", "plan"] as const;
+export type TaskLinkType =
+	| (typeof TASK_LINK_TYPES)[number]
+	| (typeof ATTACHMENT_TYPES)[number];
+
+export interface TaskLink {
+	type: TaskLinkType;
+	/** A task id for a task link; the url, sha, message or plan otherwise. */
+	target: string;
+}
+
+export function isTaskLinkType(type: string): boolean {
+	return (TASK_LINK_TYPES as readonly string[]).includes(type);
+}
+
 export interface TaskNote {
 	seq: number;
 	by: TaskAuthor;
@@ -47,12 +125,16 @@ export interface Task {
 	later: boolean;
 	claimedBy?: string;
 	files: string[];
+	gates: TaskGate[];
+	links: TaskLink[];
 	notes: TaskNote[];
 	/** The note given with `done` or `cancelled`: what the board decays to. */
 	outcome?: string;
 	createdSeq: number;
 	/** The event that last changed the task, for "stale" questions. */
 	touchedSeq: number;
+	/** The tool call that created it: where in the chat it was planned. */
+	createdCall?: string;
 }
 
 /** The fields a create event carries; everything else starts at its default. */
@@ -65,6 +147,8 @@ export interface TaskCreateFields {
 	parent?: string;
 	priority?: TaskPriority;
 	status?: TaskStatus;
+	gates?: string[];
+	links?: TaskLink[];
 }
 
 /** One change to one task. Every field optional; applied in this order. */
@@ -84,6 +168,14 @@ export interface TaskUpdateFields {
 	later?: boolean;
 	files?: string[];
 	claimedBy?: string | null;
+	gatesAdd?: string[];
+	gatesRemove?: string[];
+	/** Gates that opened. */
+	gatesOpen?: string[];
+	/** Gates that can no longer open, and why. */
+	gatesFailed?: { gate: string; reason: string }[];
+	linksAdd?: TaskLink[];
+	linksRemove?: TaskLink[];
 }
 
 interface TaskEventBase {
@@ -139,6 +231,20 @@ function uniq(values: Iterable<string>): string[] {
 	return [...new Set(values)];
 }
 
+function linkKey(link: TaskLink): string {
+	return `${link.type} ${link.target}`;
+}
+
+function uniqLinks(links: readonly TaskLink[]): TaskLink[] {
+	const seen = new Set<string>();
+	return links.filter((link) => {
+		const key = linkKey(link);
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
 /** Apply one event. Mutates `state`; the store owns the only copy. */
 export function applyTaskEvent(state: TaskGraphState, event: TaskEvent): void {
 	state.lastSeq = Math.max(state.lastSeq, event.seq);
@@ -161,9 +267,12 @@ export function applyTaskEvent(state: TaskGraphState, event: TaskEvent): void {
 			})),
 			later: false,
 			files: [],
+			gates: uniq(fields.gates ?? []).map((spec) => ({ spec, open: false })),
+			links: uniqLinks(fields.links ?? []),
 			notes: [],
 			createdSeq: event.seq,
 			touchedSeq: event.seq,
+			...(event.call ? { createdCall: event.call } : {}),
 		});
 		state.order.push(fields.id);
 		// Counters follow the ids actually created, so a log replayed from any
@@ -213,6 +322,35 @@ export function applyTaskEvent(state: TaskGraphState, event: TaskEvent): void {
 	}
 	if (update.later !== undefined) task.later = update.later;
 	if (update.files) task.files = uniq([...task.files, ...update.files]);
+	// Logs written before gates and links existed fold to empty lists.
+	task.gates ??= [];
+	task.links ??= [];
+	for (const spec of update.gatesAdd ?? []) {
+		if (!task.gates.some((gate) => gate.spec === spec)) {
+			task.gates.push({ spec, open: false });
+		}
+	}
+	if (update.gatesRemove) {
+		const drop = new Set(update.gatesRemove);
+		task.gates = task.gates.filter((gate) => !drop.has(gate.spec));
+	}
+	for (const spec of update.gatesOpen ?? []) {
+		const gate = task.gates.find((entry) => entry.spec === spec);
+		if (gate) {
+			gate.open = true;
+			delete gate.failed;
+		}
+	}
+	for (const { gate: spec, reason } of update.gatesFailed ?? []) {
+		const gate = task.gates.find((entry) => entry.spec === spec);
+		if (gate && !gate.open) gate.failed = reason;
+	}
+	if (update.linksAdd)
+		task.links = uniqLinks([...task.links, ...update.linksAdd]);
+	if (update.linksRemove) {
+		const drop = new Set(update.linksRemove.map(linkKey));
+		task.links = task.links.filter((link) => !drop.has(linkKey(link)));
+	}
 	if (update.claimedBy !== undefined) {
 		if (update.claimedBy === null) delete task.claimedBy;
 		else task.claimedBy = update.claimedBy;
@@ -283,10 +421,35 @@ export function openDependencies(state: TaskGraphState, task: Task): string[] {
 	return open;
 }
 
+/**
+ * The gates still closed, the task's own and its ancestors', as dependencies
+ * are: a subtask of a task waiting on the person waits on the person too.
+ */
+export function openGates(state: TaskGraphState, task: Task): string[] {
+	const open: string[] = [];
+	let current: Task | undefined = task;
+	const seen = new Set<string>();
+	while (current && !seen.has(current.id)) {
+		seen.add(current.id);
+		for (const gate of current.gates ?? []) {
+			if (!gate.open && !open.includes(gate.spec)) open.push(gate.spec);
+		}
+		current = current.parent ? state.tasks.get(current.parent) : undefined;
+	}
+	return open;
+}
+
+/** What a task waits on, deps first: `T3`, `human:approve the schema`. */
+export function waitsOn(state: TaskGraphState, task: Task): string[] {
+	return [...openDependencies(state, task), ...openGates(state, task)];
+}
+
 export function isBlocked(state: TaskGraphState, task: Task): boolean {
 	return (
 		!isClosed(task.status) &&
-		(openDependencies(state, task).length > 0 || isParked(state, task))
+		(openDependencies(state, task).length > 0 ||
+			openGates(state, task).length > 0 ||
+			isParked(state, task))
 	);
 }
 

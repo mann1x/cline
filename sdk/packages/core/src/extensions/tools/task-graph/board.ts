@@ -16,10 +16,12 @@ import {
 	isClosed,
 	isParked,
 	openDependencies,
+	openGates,
 	readyTasks,
 	type Task,
 	type TaskGraphState,
 	taskLayers,
+	waitsOn,
 } from "./model";
 
 const TITLE_MAX = 70;
@@ -57,7 +59,9 @@ export function renderBoard(state: TaskGraphState): string | undefined {
 	const active = all.filter((task) => task.status === "active");
 	for (const task of active) {
 		lines.push(
-			`Active: ${task.id} ${shortTitle(task.title)}${acceptanceTally(task)}`,
+			`Active: ${task.id} ${shortTitle(task.title)}${acceptanceTally(task)}${
+				task.claimedBy ? ` [${task.claimedBy}]` : ""
+			}`,
 		);
 	}
 	const ready = readyTasks(state);
@@ -78,7 +82,7 @@ export function renderBoard(state: TaskGraphState): string | undefined {
 	);
 	if (blocked.length > 0) {
 		const shown = blocked.slice(0, BLOCKED_SHOWN).map((task) => {
-			const deps = openDependencies(state, task);
+			const deps = waitsOn(state, task);
 			return deps.length
 				? `${task.id} after ${deps.join(", ")}`
 				: `${task.id} parked`;
@@ -92,7 +96,12 @@ export function renderBoard(state: TaskGraphState): string | undefined {
 	if (waiting.length > 0) {
 		lines.push(
 			`Waiting: ${waiting
-				.map((task) => `${task.id} ${shortTitle(task.title, 40)}`)
+				.map((task) => {
+					const gates = openGates(state, task);
+					return `${task.id} ${shortTitle(task.title, 40)}${
+						gates.length ? ` (on ${gates.join(", ")})` : ""
+					}${task.claimedBy ? ` [${task.claimedBy}]` : ""}`;
+				})
 				.join("; ")}`,
 		);
 	}
@@ -131,6 +140,21 @@ export function renderTask(state: TaskGraphState, task: Task): string {
 				.join(", ")}`,
 		);
 	}
+	if ((task.gates ?? []).length) {
+		lines.push(
+			`gates: ${task.gates
+				.map(
+					(gate) =>
+						`${gate.spec} (${gate.open ? "open" : gate.failed ? `cannot open: ${gate.failed}` : "waiting"})`,
+				)
+				.join(", ")}`,
+		);
+	}
+	if ((task.links ?? []).length) {
+		lines.push(
+			`links: ${task.links.map((link) => `${link.type} ${link.target}`).join(", ")}`,
+		);
+	}
 	const unblocks = dependentsOf(state, task.id).map((dep) => dep.id);
 	if (unblocks.length) lines.push(`unblocks: ${unblocks.join(", ")}`);
 	const children = state.order
@@ -155,6 +179,77 @@ export function renderTask(state: TaskGraphState, task: Task): string {
 		lines.push("notes:");
 		for (const note of notes) lines.push(`  - ${note.text}`);
 	}
+	return lines.join("\n");
+}
+
+/** A Mermaid label: quotes and brackets would end it early. */
+function mermaidLabel(text: string): string {
+	return text
+		.replace(/["[\]{}()<>|]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/**
+ * The board as a Mermaid flowchart, for `task_view mermaid` and the panel's
+ * drawing: one node per task, an edge per dependency (and a dotted one per
+ * task link), subtasks inside their parent, gates as their own nodes.
+ */
+export function renderMermaid(state: TaskGraphState): string {
+	const node = (id: string) => id.replace(/\./g, "_");
+	const lines = ["flowchart TD"];
+	const tasks = state.order.map((id) => state.tasks.get(id) as Task);
+	const childrenOf = new Map<string, Task[]>();
+	for (const task of tasks) {
+		if (!task.parent) continue;
+		const list = childrenOf.get(task.parent) ?? [];
+		list.push(task);
+		childrenOf.set(task.parent, list);
+	}
+	const label = (task: Task) =>
+		`${node(task.id)}["${task.id} ${mermaidLabel(shortTitle(task.title, 40))}"]:::${task.status}`;
+	const emit = (task: Task, indent: string): void => {
+		const kids = childrenOf.get(task.id);
+		if (kids?.length) {
+			lines.push(
+				`${indent}subgraph ${node(task.id)}_group["${task.id} ${mermaidLabel(shortTitle(task.title, 40))}"]`,
+			);
+			lines.push(`${indent}  ${label(task)}`);
+			for (const kid of kids) emit(kid, `${indent}  `);
+			lines.push(`${indent}end`);
+		} else {
+			lines.push(`${indent}${label(task)}`);
+		}
+	};
+	for (const task of tasks) if (!task.parent) emit(task, "  ");
+	let gateCount = 0;
+	for (const task of tasks) {
+		for (const dep of task.depends) {
+			if (state.tasks.has(dep))
+				lines.push(`  ${node(dep)} --> ${node(task.id)}`);
+		}
+		for (const link of task.links ?? []) {
+			if (state.tasks.has(link.target))
+				lines.push(
+					`  ${node(link.target)} -. ${link.type} .-> ${node(task.id)}`,
+				);
+		}
+		for (const gate of task.gates ?? []) {
+			gateCount += 1;
+			lines.push(
+				`  G${gateCount}{{"${mermaidLabel(gate.spec)}"}}:::${gate.open ? "gateopen" : "gate"} --> ${node(task.id)}`,
+			);
+		}
+	}
+	lines.push(
+		"  classDef done fill:#2e7d32,color:#fff",
+		"  classDef cancelled fill:#757575,color:#fff",
+		"  classDef active fill:#1565c0,color:#fff",
+		"  classDef waiting fill:#ef6c00,color:#fff",
+		"  classDef pending fill:#fff,color:#000,stroke:#999",
+		"  classDef gate fill:#fff3e0,color:#000,stroke:#ef6c00",
+		"  classDef gateopen fill:#e8f5e9,color:#000,stroke:#2e7d32",
+	);
 	return lines.join("\n");
 }
 

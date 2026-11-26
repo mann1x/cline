@@ -38,9 +38,16 @@ import {
 	TASK_PROGRESS_PARAM,
 } from "../task-progress";
 import { renderBoard, shortTitle } from "./board";
-import { openWork, type Task } from "./model";
+import {
+	decideCommitGate,
+	decideGitHubGate,
+	decideTimerGate,
+	humanGatesAnswered,
+} from "./gates";
+import { openWork, parseGate, type Task } from "./model";
 import { type ExportedTaskBoard, exportTaskEvents } from "./saved-board";
 import {
+	type GateDecision,
 	readTaskDone,
 	TASK_DONE_PARAM,
 	TASK_DONE_TOOL_NAMES,
@@ -83,6 +90,8 @@ export interface TaskGraphTrackerOptions extends TaskGraphStoreOptions {
 	 * phase 3).
 	 */
 	onHabitualChecklist?: (count: number) => void;
+	/** Where `commit:` and GitHub gates are checked. */
+	cwd?: string;
 	// `planMode` (from the store options): the plan goes on the board, and
 	// nothing asks for work to be done, started or closed (that is act
 	// mode's, once the person agrees). Fixed for a session; a switch rebuilds it.
@@ -501,6 +510,7 @@ export class TaskGraphTracker {
 	private readonly onNudge: ((id: string, key: string) => void) | undefined;
 	private readonly planMode: boolean;
 	private readonly onHabitualChecklist: ((count: number) => void) | undefined;
+	private readonly cwd: string | undefined;
 	/** `task_progress` sends this session, read onto the board. */
 	private habitualSends = 0;
 	private calls = 0;
@@ -543,15 +553,113 @@ export class TaskGraphTracker {
 		this.spacing = Math.max(1, options.writeInterval ?? DEFAULT_NUDGE_SPACING);
 		this.onNudge = options.onNudge;
 		this.onHabitualChecklist = options.onHabitualChecklist;
+		this.cwd = options.cwd;
 		this.planMode = this.store.planMode;
 	}
 
 	/** The three tools, writing to this tracker's store. */
 	tools(author?: () => string): AgentTool<unknown, unknown>[] {
-		return createTaskGraphTools(this.store, author) as AgentTool<
-			unknown,
-			unknown
-		>[];
+		return createTaskGraphTools(this.store, author, {
+			beforeView: () => this.checkRemoteGates(),
+		}) as AgentTool<unknown, unknown>[];
+	}
+
+	// -------------------------------------------------------------------------
+	// Gates
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Timer and commit gates, checked before each request: a clock read and a
+	 * `git merge-base`, only when such a gate is waiting. What opened is said
+	 * with the next reminder.
+	 */
+	checkLocalGates(now = Date.now()): void {
+		const waiting = this.store.closedGates();
+		if (waiting.length === 0) return;
+		const outcome = this.store.resolveGates((gate) => {
+			const kind = parseGate(gate.spec)?.kind;
+			if (kind === "timer") return decideTimerGate(gate, now);
+			if (kind === "commit") return decideCommitGate(gate, this.cwd);
+			return undefined;
+		});
+		this.sayGates(outcome.lines);
+	}
+
+	/** GitHub gates, checked when the board is looked at: a network call. */
+	async checkRemoteGates(): Promise<string[]> {
+		const waiting = this.store.closedGates().filter(({ gate }) => {
+			const kind = parseGate(gate.spec)?.kind;
+			return kind === "gh-pr" || kind === "gh-run";
+		});
+		if (waiting.length === 0) return [];
+		const decided = new Map<string, GateDecision>();
+		for (const { gate } of waiting) {
+			if (!decided.has(gate.spec)) {
+				decided.set(gate.spec, await decideGitHubGate(gate, this.cwd));
+			}
+		}
+		return this.store.resolveGates((gate) => decided.get(gate.spec)).lines;
+	}
+
+	/**
+	 * A teammate run or delegated agent ended: its `run:` gates open, or fail
+	 * when it did not finish its work. Its claims end with it.
+	 */
+	noteRunEnded(ids: readonly string[], ok: boolean, reason?: string): void {
+		const names = new Set(ids.filter(Boolean));
+		if (names.size === 0) return;
+		const outcome = this.store.resolveGates((gate) => {
+			const parsed = parseGate(gate.spec);
+			if (parsed?.kind !== "run" || !names.has(parsed.value)) return undefined;
+			return ok ? { open: true } : { failed: reason ?? "the run failed" };
+		});
+		this.sayGates(outcome.lines);
+	}
+
+	/** A background command exited: its \`command:\` gates open, or fail on a nonzero exit. */
+	noteCommandEnded(id: string, exitCode: number | undefined): void {
+		const outcome = this.store.resolveGates((gate) => {
+			const parsed = parseGate(gate.spec);
+			if (parsed?.kind !== "command" || parsed.value !== id) return undefined;
+			return exitCode === 0 || exitCode === undefined
+				? { open: true }
+				: { failed: `it exited with ${exitCode}` };
+		});
+		this.sayGates(outcome.lines);
+	}
+
+	/**
+	 * The person answered a question: the `human:` gates it was about open,
+	 * and the answer is noted on their tasks.
+	 */
+	noteHumanAnswer(question: string, answer: string): void {
+		const answered = humanGatesAnswered(question, this.store.closedGates());
+		if (answered.length === 0) return;
+		const specs = new Set(answered.map(({ gate }) => gate.spec));
+		const tasks = new Set(answered.map(({ task }) => task.id));
+		const short = answer.replace(/\s+/g, " ").trim().slice(0, 200);
+		this.store.update(
+			{
+				updates: [...tasks].map((id) => ({
+					id,
+					note: `the person answered: ${short}`,
+				})),
+			},
+			{ by: "user" },
+			{ silent: true },
+		);
+		const outcome = this.store.resolveGates(
+			(gate, task) =>
+				specs.has(gate.spec) && tasks.has(task.id) ? { open: true } : undefined,
+			{ by: "user" },
+		);
+		this.sayGates(outcome.lines);
+	}
+
+	private sayGates(lines: readonly string[]): void {
+		if (lines.length > 0) {
+			this.doneNotes.push(`[SYSTEM] Task gates: ${lines.join(" ")}`);
+		}
 	}
 
 	/**
@@ -834,6 +942,15 @@ export class TaskGraphTracker {
 			this.retractFailedWrite(input, toolName);
 			return;
 		}
+		if (toolName === "ask_question" && typeof result === "string") {
+			const question =
+				typeof input === "object" && input !== null
+					? (input as { question?: unknown }).question
+					: undefined;
+			if (typeof question === "string" && result.trim()) {
+				this.noteHumanAnswer(question, result);
+			}
+		}
 		// The call said which task it finished; a check passing on it is that.
 		if (closedATask || this.planMode) return;
 		const command = readCheckCommand(toolName, input);
@@ -900,9 +1017,9 @@ export class TaskGraphTracker {
 
 	/**
 	 * A graph call closed tasks right after a working call that could have
-	 * carried \`task_done\`: say so once, with the reply already going out.
+	 * carried `task_done`: say so once, with the reply already going out.
 	 * In tg-bench arm C3 (2026-11-21) 3 of 5 textkit runs alternated an edit
-	 * and a \`task_update\` close and never used \`task_done\`; each close was a
+	 * and a `task_update` close and never used `task_done`; each close was a
 	 * request of its own.
 	 */
 	noteGraphCall(doneBefore: Set<string>): void {
@@ -934,7 +1051,7 @@ export class TaskGraphTracker {
 
 	/**
 	 * A change the person made from the task panel: applied as theirs
-	 * (\`by: "user"\`) and told to the model, with the next tool results when a
+	 * (`by: "user"`) and told to the model, with the next tool results when a
 	 * run is under way, or at the start of the next run when it is not. The
 	 * model does not have to ask; it is told what changed and by whom.
 	 */
@@ -961,14 +1078,17 @@ export class TaskGraphTracker {
 
 	/** The person's changes not yet told, for the start of a run; cleared by the read. */
 	takeRunStartNote(): string | undefined {
-		if (this.userNotes.length === 0) return undefined;
-		const text = this.userNotes.join("\n\n");
+		this.checkLocalGates();
+		const notes = [...this.userNotes, ...this.doneNotes];
 		this.userNotes = [];
-		return text;
+		this.doneNotes = [];
+		if (notes.length === 0) return undefined;
+		return notes.join("\n\n");
 	}
 
 	/** What to say after the turn's tool calls, cleared by the read. */
 	takePendingReminder(): string | undefined {
+		this.checkLocalGates();
 		const parts: string[] = [...this.userNotes, ...this.doneNotes];
 		this.userNotes = [];
 		this.doneNotes = [];
