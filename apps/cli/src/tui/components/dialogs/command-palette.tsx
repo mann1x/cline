@@ -9,6 +9,7 @@ import {
 	type CommandPaletteResult,
 	filterCommandPaletteItems,
 	findCommandPaletteShortcut,
+	formatShortcut,
 } from "./command-palette-items";
 
 export type { CommandPaletteResult } from "./command-palette-items";
@@ -196,7 +197,7 @@ export function CommandPaletteContent(
 											width={shortcutWidth}
 											flexShrink={0}
 										>
-											{item.shortcut}
+											{formatShortcut(item.shortcut)}
 										</text>
 									</box>
 									<text

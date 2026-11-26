@@ -7,6 +7,7 @@ import {
 	buildCommandPaletteItems,
 	filterCommandPaletteItems,
 	findCommandPaletteShortcut,
+	formatShortcut,
 } from "./command-palette-items";
 
 describe("command palette", () => {
@@ -26,6 +27,15 @@ describe("command palette", () => {
 		expect(labels).not.toContain("Create Session Fork");
 		expect(items.every((item) => item.shortcut.startsWith("Opt+"))).toBe(true);
 		expect(items.map((item) => item.shortcut)).not.toContain("Opt+?");
+	});
+
+	it("names the Option key Alt everywhere but on a Mac", () => {
+		expect(formatShortcut("Opt+N", "darwin")).toBe("Opt+N");
+		expect(formatShortcut("Opt+N", "win32")).toBe("Alt+N");
+		expect(formatShortcut("Opt+N", "linux")).toBe("Alt+N");
+		// Only the Option prefix: the help dialog's other keys pass through.
+		expect(formatShortcut("Ctrl+Alt+B/F", "win32")).toBe("Ctrl+Alt+B/F");
+		expect(formatShortcut("Shift+Enter", "linux")).toBe("Shift+Enter");
 	});
 
 	it("gives every shortcut to one item only", () => {

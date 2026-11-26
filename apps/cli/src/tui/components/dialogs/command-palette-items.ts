@@ -256,6 +256,18 @@ export function filterCommandPaletteItems(
 		.map((entry) => entry.item);
 }
 
+/**
+ * A shortcut as the person should read it. They are stored as "Opt+X", which
+ * is the key's name on a Mac; elsewhere the same key is Alt, and a terminal
+ * there sends Alt+X as the meta modifier the matcher below accepts.
+ */
+export function formatShortcut(
+	shortcut: string,
+	platform: NodeJS.Platform = process.platform,
+): string {
+	return platform === "darwin" ? shortcut : shortcut.replace(/^Opt\+/, "Alt+");
+}
+
 export function findCommandPaletteShortcut(
 	items: readonly CommandPaletteItem[],
 	key: { name: string; meta: boolean; option?: boolean; shift: boolean },
