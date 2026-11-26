@@ -39,6 +39,46 @@ export interface GraphTeamBoardOptions {
 	onNudge?: (id: string, key: string) => void;
 	/** A teammate's run ended holding these tasks; they are back on the board. */
 	onReleased?: (agentId: string, ids: string[], reason: string) => void;
+	/** Phase 6: a task the plan gave a teammate was started on it. */
+	onDispatched?: (agentId: string, taskId: string, runId: string) => void;
+	/** Phase 6: that run ended with the task closed (`done` or `cancelled`). */
+	onDispatchClosed?: (agentId: string, task: TaskSnapshot) => void;
+	/** Phase 6: the teammate could not take it; it stays on the board. */
+	onDispatchRefused?: (agentId: string, taskId: string, reason: string) => void;
+}
+
+/**
+ * What a teammate is told when the plan's task for it starts: the task, what
+ * shows it is done, and what the tasks it builds on came to.
+ */
+export function dispatchMessage(
+	task: TaskSnapshot,
+	all: readonly TaskSnapshot[],
+): string {
+	const parts = [`Task ${task.id} from the lead's plan: ${task.title}`];
+	if (task.description) parts.push(task.description);
+	if (task.acceptance.length) {
+		parts.push(
+			`Done when:\n${task.acceptance.map((item) => `- ${item.text}`).join("\n")}`,
+		);
+	}
+	const before = task.depends
+		.map((id) => all.find((entry) => entry.id === id))
+		.filter((entry): entry is TaskSnapshot => !!entry);
+	if (before.length) {
+		parts.push(
+			`It builds on: ${before
+				.map(
+					(entry) =>
+						`${entry.id} ${shortTitle(entry.title, 60)} (${entry.status}${entry.outcome ? `: ${entry.outcome}` : ""})`,
+				)
+				.join("; ")}.`,
+		);
+	}
+	parts.push(
+		"Do this task only: the lead and other teammates have the rest of the plan.",
+	);
+	return parts.join("\n\n");
 }
 
 /**
@@ -52,10 +92,21 @@ export function createGraphTeamBoard(
 ): TeamTaskBoard & {
 	/** T4: ready tasks nobody holds, for the lead waiting on runs. */
 	idleReady(): string | undefined;
+	/** Whether an agentId names a teammate that can take tasks. */
+	isTeammate(agentId: string): boolean;
 } {
 	let leadId = "lead";
 	let isRunning: (agentId: string) => boolean = () => false;
 	let notify: (to: string, subject: string, body: string) => void = () => {};
+	let isTeammate: ((agentId: string) => boolean) | undefined;
+	let dispatch:
+		| ((agentId: string, message: string, taskId: string) => string)
+		| undefined;
+	/** Phase 6: tasks started on their teammate, never started again by itself. */
+	const dispatched = new Set<string>();
+	/** One task at a time per teammate: the task its dispatched run is on. */
+	const inFlight = new Map<string, { taskId: string; runId: string }>();
+	let pumpDue = false;
 	/** T3 is asked once per run: the teammate may know better. */
 	const closeOutAsked = new Set<string>();
 	const author = (agentId: string) =>
@@ -154,12 +205,92 @@ export function createGraphTeamBoard(
 		return outcome;
 	};
 
+	/**
+	 * Phase 6: start each task the plan gave a teammate, once it is ready and
+	 * the teammate is free. The model said who does what when it planned; the
+	 * graph says when. Arm D3: told to hand tasks out, qwen36 27B did so in 1
+	 * run of 10 -- the decision is taken once, in the plan, not at each step.
+	 */
+	const pump = (): void => {
+		if (!dispatch || !isTeammate || store.planMode) return;
+		for (const task of snapshot().tasks) {
+			const agentId = task.assignee;
+			if (!agentId || dispatched.has(task.id)) continue;
+			if (inFlight.has(agentId) || !isTeammate(agentId)) continue;
+			// Ready, or the lead started it before the teammate existed.
+			const free =
+				task.ready ||
+				(task.status === "active" &&
+					task.waitsOn.length === 0 &&
+					(!task.claimedBy || task.claimedBy === agentId));
+			if (!free) continue;
+			change({ updates: [{ id: task.id, status: "active" }] }, agentId);
+			const held = find(task.id);
+			if (held.status !== "active" || held.claimedBy !== agentId) continue;
+			dispatched.add(task.id);
+			try {
+				const runId = dispatch(
+					agentId,
+					dispatchMessage(held, snapshot().tasks),
+					task.id,
+				);
+				inFlight.set(agentId, { taskId: task.id, runId });
+				options.onNudge?.("T6", `dispatch:${task.id}:${agentId}`);
+				options.onDispatched?.(agentId, task.id, runId);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				store.releaseClaims(agentId, `it could not take the task: ${reason}`);
+				options.onDispatchRefused?.(agentId, task.id, reason);
+			}
+		}
+	};
+	/** Later, not inside the store's change: pumping changes the store. */
+	const schedulePump = (): void => {
+		if (pumpDue) return;
+		pumpDue = true;
+		queueMicrotask(() => {
+			pumpDue = false;
+			try {
+				pump();
+			} catch {
+				// The board's trouble never stops the team.
+			}
+		});
+	};
+	store.watch(schedulePump);
+
+	/** A teammate's run ended: its claims end, and its dispatch with them. */
+	const stopped = (agentId: string, reason: string): void => {
+		const run = inFlight.get(agentId);
+		inFlight.delete(agentId);
+		const released = store.releaseClaims(agentId, reason);
+		closeOutAsked.delete(agentId);
+		if (released.length) options.onReleased?.(agentId, released, reason);
+		if (run) {
+			const task = snapshot().tasks.find((entry) => entry.id === run.taskId);
+			if (task && (task.status === "done" || task.status === "cancelled"))
+				options.onDispatchClosed?.(agentId, task);
+			schedulePump();
+		}
+	};
+
 	return {
 		attach(team) {
 			leadId = team.leadId;
 			isRunning = team.isRunning;
 			notify = team.notify;
-			store.setHolderLive((holder) => holder === leadId || isRunning(holder));
+			isTeammate = team.isTeammate;
+			dispatch = team.dispatch;
+			// A dispatched run is queued before it runs: its claim stands then too.
+			store.setHolderLive(
+				(holder) =>
+					holder === leadId || isRunning(holder) || inFlight.has(holder),
+			);
+			schedulePump();
+		},
+
+		memberJoined(_agentId: string): void {
+			schedulePump();
 		},
 
 		create(input: CreateTeamTaskInput): TeamTask {
@@ -257,12 +388,16 @@ export function createGraphTeamBoard(
 				return ok ? { open: true } : { failed: reason ?? "the run failed" };
 			});
 			tellHolders(outcome.readyNow);
+			// A dispatched run that ended without its teammate's task end
+			// (failed before it started, cancelled in the queue).
+			for (const [agentId, run] of [...inFlight]) {
+				if (ids.includes(run.runId))
+					stopped(agentId, ok ? "its run ended" : (reason ?? "the run failed"));
+			}
 		},
 
 		agentStopped(agentId: string, reason: string): void {
-			const released = store.releaseClaims(agentId, reason);
-			closeOutAsked.delete(agentId);
-			if (released.length) options.onReleased?.(agentId, released, reason);
+			stopped(agentId, reason);
 		},
 
 		/** T2: a teammate's run opens with the tasks it holds, or the ones it may claim. */
@@ -303,9 +438,14 @@ export function createGraphTeamBoard(
 			return `[SYSTEM] You still hold ${ids} on the task board. Before you finish, close it: team_task complete with a summary of what was done and how it was checked, or team_task block with the reason it cannot be finished. Left as it is, it goes back on the board as not done.`;
 		},
 
+		isTeammate(agentId: string): boolean {
+			return isTeammate?.(agentId) ?? false;
+		},
+
 		idleReady(): string | undefined {
+			// A task the plan gave a teammate is not nobody's.
 			const ready = snapshot().tasks.filter(
-				(task) => task.ready && !task.claimedBy,
+				(task) => task.ready && !task.claimedBy && !task.assignee,
 			);
 			if (ready.length === 0) return undefined;
 			return ready

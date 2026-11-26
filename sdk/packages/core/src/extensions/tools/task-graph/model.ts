@@ -126,6 +126,11 @@ export interface Task {
 	/** Parked by choice: neither ready nor nagged about, children included. */
 	later: boolean;
 	claimedBy?: string;
+	/**
+	 * The teammate the plan gave it to (phase 6): started on it once it is
+	 * ready. Unlike a claim it outlives the teammate's runs.
+	 */
+	assignee?: string;
 	files: string[];
 	gates: TaskGate[];
 	links: TaskLink[];
@@ -151,6 +156,7 @@ export interface TaskCreateFields {
 	status?: TaskStatus;
 	gates?: string[];
 	links?: TaskLink[];
+	assignee?: string;
 }
 
 /** One change to one task. Every field optional; applied in this order. */
@@ -170,6 +176,7 @@ export interface TaskUpdateFields {
 	later?: boolean;
 	files?: string[];
 	claimedBy?: string | null;
+	assignee?: string | null;
 	gatesAdd?: string[];
 	gatesRemove?: string[];
 	/** Gates that opened. */
@@ -271,6 +278,7 @@ export function applyTaskEvent(state: TaskGraphState, event: TaskEvent): void {
 			files: [],
 			gates: uniq(fields.gates ?? []).map((spec) => ({ spec, open: false })),
 			links: uniqLinks(fields.links ?? []),
+			...(fields.assignee ? { assignee: fields.assignee } : {}),
 			notes: [],
 			createdSeq: event.seq,
 			touchedSeq: event.seq,
@@ -356,6 +364,10 @@ export function applyTaskEvent(state: TaskGraphState, event: TaskEvent): void {
 	if (update.claimedBy !== undefined) {
 		if (update.claimedBy === null) delete task.claimedBy;
 		else task.claimedBy = update.claimedBy;
+	}
+	if (update.assignee !== undefined) {
+		if (update.assignee === null) delete task.assignee;
+		else task.assignee = update.assignee;
 	}
 	if (update.note) {
 		task.notes.push({ seq: event.seq, by: event.by, text: update.note });

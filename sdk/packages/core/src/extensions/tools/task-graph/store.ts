@@ -261,6 +261,8 @@ export interface TaskSnapshot {
 	acceptance: { text: string; done: boolean }[];
 	later: boolean;
 	claimedBy?: string;
+	/** The teammate the plan gave it to (phase 6). */
+	assignee?: string;
 	files: string[];
 	gates: TaskGate[];
 	links: TaskLink[];
@@ -381,6 +383,7 @@ export class TaskGraphStore {
 	private state: TaskGraphState = emptyTaskGraphState();
 	private readonly logPath: string | undefined;
 	private readonly onChange: ((store: TaskGraphStore) => void) | undefined;
+	private readonly watchers = new Set<(store: TaskGraphStore) => void>();
 	private readonly now: () => number;
 	readonly planMode: boolean;
 	private isHolderLive: ((holder: string) => boolean) | undefined;
@@ -522,7 +525,7 @@ export class TaskGraphStore {
 					this.finish(carriedDone(call), origin, { silent: true });
 				}
 			}
-			this.onChange?.(this);
+			this.changed();
 			return "replayed";
 		}
 		// A conversation started from a saved board: its events, ids kept, each
@@ -537,7 +540,7 @@ export class TaskGraphStore {
 				applied += 1;
 			}
 			if (applied > 0) {
-				this.onChange?.(this);
+				this.changed();
 				return "seeded";
 			}
 		}
@@ -555,7 +558,7 @@ export class TaskGraphStore {
 					);
 				}
 			}
-			this.onChange?.(this);
+			this.changed();
 			return "imported";
 		}
 		return "empty";
@@ -665,6 +668,7 @@ export class TaskGraphStore {
 						...(item.links.length
 							? { links: this.resolveLinkTargets(item.links, id, lines) }
 							: {}),
+						...(item.to ? { assignee: item.to } : {}),
 					},
 				},
 				origin,
@@ -678,7 +682,8 @@ export class TaskGraphStore {
 			batchIds.push(id);
 			created.push(id);
 			this.applyLinkEffects(id, origin, lines);
-			if (item.start && !this.planMode) {
+			// A task given to a teammate is the teammate's to start.
+			if (item.start && !item.to && !this.planMode) {
 				const task = this.state.tasks.get(id) as Task;
 				const open = waitsOn(this.state, task);
 				if (open.length > 0) {
@@ -696,8 +701,8 @@ export class TaskGraphStore {
 			const wait = waitsOn(this.state, task);
 			const after = wait.length ? ` (after ${wait.join(", ")})` : "";
 			return `${id} ${shortTitle(task.title, 60)}${after}${
-				task.status === "active" ? " [active]" : ""
-			}`;
+				task.assignee ? ` → ${task.assignee}` : ""
+			}${task.status === "active" ? " [active]" : ""}`;
 		});
 		lines.unshift(`Created ${created.length}: ${summary.join("; ")}.`);
 		for (const note of ignored) lines.push(`Ignored: ${note}.`);
@@ -716,7 +721,7 @@ export class TaskGraphStore {
 				"Plan mode: nothing is started. The work starts in act mode, once the user agrees. When the plan is complete, present it and ask the user how to proceed.",
 			);
 		}
-		if (!options.silent) this.onChange?.(this);
+		if (!options.silent) this.changed();
 		return { lines, changed: true, readyNow };
 	}
 
@@ -739,7 +744,8 @@ export class TaskGraphStore {
 			return task?.status === "active" && !isPipelineHeld(task);
 		});
 		if (active) return;
-		const next = readyTasks(this.state)[0];
+		// A task the plan gave a teammate is started by its dispatch, not here.
+		const next = readyTasks(this.state).find((task) => !task.assignee);
 		if (!next) return;
 		this.record(
 			{ op: "update", update: { id: next.id, status: "active" } },
@@ -834,7 +840,7 @@ export class TaskGraphStore {
 			);
 		}
 		if (closedNow) this.autoStart(origin, lines);
-		if (changed && !options.silent) this.onChange?.(this);
+		if (changed && !options.silent) this.changed();
 		return { lines, changed, readyNow };
 	}
 
@@ -1275,8 +1281,29 @@ export class TaskGraphStore {
 			);
 			this.autoStart(origin, lines);
 		}
-		this.onChange?.(this);
+		this.changed();
 		return { lines, changed, readyNow };
+	}
+
+	/**
+	 * Be told of every change, after the one `onChange` (the writer) is.
+	 * Returns the way to stop. A watcher's trouble never stops the store, and
+	 * a watcher that changes the store should do it later, not inside the call.
+	 */
+	watch(listener: (store: TaskGraphStore) => void): () => void {
+		this.watchers.add(listener);
+		return () => this.watchers.delete(listener);
+	}
+
+	private changed(): void {
+		this.onChange?.(this);
+		for (const listener of [...this.watchers]) {
+			try {
+				listener(this);
+			} catch {
+				// Not the store's trouble.
+			}
+		}
 	}
 
 	/**
@@ -1302,7 +1329,7 @@ export class TaskGraphStore {
 			);
 			released.push(id);
 		}
-		if (released.length) this.onChange?.(this);
+		if (released.length) this.changed();
 		return released;
 	}
 
@@ -1314,7 +1341,7 @@ export class TaskGraphStore {
 		const task = this.state.tasks.get(id);
 		if (!task || isClosed(task.status)) return;
 		this.record({ op: "update", update: { id, claimedBy: holder } }, origin);
-		this.onChange?.(this);
+		this.changed();
 	}
 
 	/** Whether a holder's claim still stands. Set once the team exists. */
@@ -1369,6 +1396,7 @@ export class TaskGraphStore {
 				acceptance: task.acceptance.map((entry) => ({ ...entry })),
 				later: task.later,
 				...(task.claimedBy ? { claimedBy: task.claimedBy } : {}),
+				...(task.assignee ? { assignee: task.assignee } : {}),
 				files: [...task.files],
 				gates: (task.gates ?? []).map((gate) => ({ ...gate })),
 				links: (task.links ?? []).map((link) => ({ ...link })),

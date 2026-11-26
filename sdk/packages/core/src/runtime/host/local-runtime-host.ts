@@ -1367,6 +1367,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 						),
 					onReleased: (agentId, ids, reason) =>
 						taskGraphTracker.noteReleased(agentId, ids, reason),
+					onDispatched: (agentId, taskId, runId) =>
+						taskGraphTracker.noteDispatched(agentId, taskId, runId),
+					onDispatchClosed: (agentId, task) =>
+						taskGraphTracker.noteDispatchClosed(agentId, task),
+					onDispatchRefused: (agentId, taskId, reason) =>
+						taskGraphTracker.noteDispatchRefused(agentId, taskId, reason),
 				});
 				runtime.teamRuntime.useTaskBoard(board);
 				taskGraphTracker.attachTeam(board);

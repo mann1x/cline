@@ -242,7 +242,17 @@ export interface TeamTaskBoard {
 		isRunning: (agentId: string) => boolean;
 		notify: (toAgentId: string, subject: string, body: string) => void;
 		leadId: string;
+		/** Whether `agentId` is a teammate that can take a task now or later. */
+		isTeammate?: (agentId: string) => boolean;
+		/**
+		 * Start a teammate's run on a task, in the background, as the lead's
+		 * async `team_run_task` does. Returns the run's id; throws when the
+		 * teammate cannot take it.
+		 */
+		dispatch?: (agentId: string, message: string, taskId: string) => string;
 	}): void;
+	/** A teammate joined the team: tasks given to it may start. */
+	memberJoined?(agentId: string): void;
 	/** A run ended: `run:` gates naming any of `ids` open, or fail. */
 	runEnded?(ids: string[], ok: boolean, reason?: string): void;
 	/** A teammate's task run ended: its claims end with it. */
@@ -864,6 +874,19 @@ export class AgentTeamsRuntime {
 				}
 			},
 			leadId,
+			isTeammate: (agentId) => {
+				const member = this.members.get(agentId);
+				return (
+					member?.role === "teammate" &&
+					!!member.agent &&
+					member.status !== "stopped"
+				);
+			},
+			dispatch: (agentId, message, taskId) =>
+				this.startTeammateRun(agentId, message, {
+					taskId,
+					fromAgentId: leadId,
+				}).id,
 		});
 		if (this.tasks.size > 0) {
 			const known = new Set(board.list().map((task) => task.title));
@@ -3005,6 +3028,9 @@ export class AgentTeamsRuntime {
 					);
 					return;
 				}
+				case TeamMessageType.TeammateSpawned:
+					board.memberJoined?.(event.agentId);
+					return;
 				case TeamMessageType.RunCompleted:
 					board.runEnded?.([event.run.id], true);
 					return;

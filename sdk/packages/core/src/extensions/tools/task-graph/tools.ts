@@ -127,13 +127,17 @@ function withTemplate(
 
 /** `task_plan`'s description, with teammates on. */
 export const TEAM_PLAN_SENTENCE =
-	" You have teammates: after the plan, hand each task that does not depend on another to a teammate with `team_run_task` (name the task id in the message), and work on one yourself while they run. Do not do them all yourself one after another.";
+	" You have teammates: give a task to one by putting its agentId in `to`, and it starts that task by itself as soon as the tasks it depends on are done (a teammate that does not exist yet starts once you spawn it with `team_spawn_teammate`). Give each task that can run beside the others to a teammate and keep one for yourself; do not do a teammate's task yourself.";
 
 export function createTaskPlanTool(
 	store: TaskGraphStore,
 	author: () => string = () => "model",
 	templates: () => readonly TaskTemplate[] = () => [],
-	options: { team?: boolean } = {},
+	options: {
+		team?: boolean;
+		/** Whether an agentId names a teammate now, for `to`. */
+		isTeammate?: (agentId: string) => boolean;
+	} = {},
 ): AgentTool<unknown, ToolOperationResult[]> {
 	const offered = templates();
 	// With teammates, the plan is also how work is handed out: said where the
@@ -197,6 +201,15 @@ export function createTaskPlanTool(
 								items: { type: "string" },
 								description: LINK_DESCRIPTION,
 							},
+							...(teamSentence
+								? {
+										to: {
+											type: "string",
+											description:
+												"A teammate's agentId: it runs this task as soon as the tasks it depends on are done. Leave it out for a task you do yourself.",
+										},
+									}
+								: {}),
 						},
 						required: ["title"],
 					},
@@ -216,6 +229,35 @@ export function createTaskPlanTool(
 				by: author(),
 				...(context?.toolCallId ? { call: context.toolCallId } : {}),
 			});
+			// `to` naming nobody yet: the task waits for the spawn, said so.
+			if (outcome.changed && options.isTeammate) {
+				const waiting = new Map<string, string[]>();
+				// The ids this call made, as the first line lists them.
+				const created = new Set(
+					[
+						...(outcome.lines[0] ?? "").matchAll(
+							/(?:^Created \d+: |; )(T[\d.]+) /g,
+						),
+					].map((match) => match[1]),
+				);
+				for (const task of store.snapshot().tasks) {
+					if (
+						!task.assignee ||
+						!created.has(task.id) ||
+						options.isTeammate(task.assignee)
+					)
+						continue;
+					waiting.set(task.assignee, [
+						...(waiting.get(task.assignee) ?? []),
+						task.id,
+					]);
+				}
+				for (const [agentId, ids] of waiting) {
+					outcome.lines.push(
+						`${agentId} is not a teammate yet: spawn it with team_spawn_teammate (agentId "${agentId}") and ${ids.join(", ")} start${ids.length === 1 ? "s" : ""} on it when ready.`,
+					);
+				}
+			}
 			// The store starts the first ready task when nothing is active.
 			return answer(
 				TASK_PLAN_TOOL_NAME,
@@ -411,7 +453,10 @@ export function createTaskGraphTools(
 	author?: () => string,
 	viewHooks?: TaskViewHooks,
 	templates?: () => readonly TaskTemplate[],
-	options: { team?: boolean } = {},
+	options: {
+		team?: boolean;
+		isTeammate?: (agentId: string) => boolean;
+	} = {},
 ): AgentTool<unknown, ToolOperationResult[]>[] {
 	return [
 		createTaskPlanTool(store, author, templates, options),

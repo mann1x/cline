@@ -76,7 +76,7 @@ export function renderBoard(state: TaskGraphState): string | undefined {
 			const unblocks = dependentsOf(state, task.id).map((dep) => dep.id);
 			return `${task.id} ${shortTitle(task.title, 50)}${
 				unblocks.length ? ` (unblocks ${unblocks.join(", ")})` : ""
-			}`;
+			}${task.assignee ? ` → ${task.assignee}` : ""}`;
 		});
 		const more = ready.length - shown.length;
 		lines.push(
@@ -89,9 +89,10 @@ export function renderBoard(state: TaskGraphState): string | undefined {
 	if (blocked.length > 0) {
 		const shown = blocked.slice(0, BLOCKED_SHOWN).map((task) => {
 			const deps = waitsOn(state, task);
+			const to = task.assignee ? ` → ${task.assignee}` : "";
 			return deps.length
-				? `${task.id} after ${deps.join(", ")}`
-				: `${task.id} parked`;
+				? `${task.id} after ${deps.join(", ")}${to}`
+				: `${task.id} parked${to}`;
 		});
 		const more = blocked.length - shown.length;
 		lines.push(
@@ -135,7 +136,11 @@ export function renderTask(state: TaskGraphState, task: Task): string {
 		`${task.id} ${task.title}`,
 		`status: ${task.status}${isBlocked(state, task) ? " (blocked)" : ""}${
 			isParked(state, task) ? " (parked)" : ""
-		} · priority ${task.priority}${task.claimedBy ? ` · held by ${task.claimedBy}` : ""}`,
+		} · priority ${task.priority}${task.claimedBy ? ` · held by ${task.claimedBy}` : ""}${
+			task.assignee && task.assignee !== task.claimedBy
+				? ` · for ${task.assignee}`
+				: ""
+		}`,
 	];
 	if (task.parent) lines.push(`parent: ${task.parent}`);
 	if (task.depends.length) {

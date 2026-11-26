@@ -1,6 +1,7 @@
 # Plan: a task graph per conversation (replaces `task_progress`)
 
-Status 2026-11-26: phases 0-5 built and measured. Phase 3 shipped in
+Status 2026-11-26: phases 0-5 built and measured; phase 6 (the plan hands
+tasks to teammates) built, not yet measured. Phase 3 shipped in
 4.100.292; phases 4 and 5 and the phase 3 leftovers are on main for
 4.100.299 (deployed to pandorum 2026-11-26). Arm D (teams) ran 2026-11-26:
 unprompted, qwen36 27B never handed work to a teammate. Asked with `/team`
@@ -614,6 +615,33 @@ runtime held before is moved onto the board once.
   726 characters (p90 440). More than four were closed in 15 transcripts;
   the 5 times the model named a closed task, it was among the four shown.
   The caps stay.
+
+**6. The plan hands out the work. Built 2026-11-26, not yet measured.**
+Arms D-D3 showed the model does not decide to delegate step by step: told in
+`task_plan`'s description, it handed a task out in 1 run of 10. It does plan
+(every run of every arm called `task_plan`). So the choice moves into the
+plan, and the graph does the scheduling:
+- With a team, `task_plan`'s items take `to` (a teammate's agentId; also read
+  as `assignee` or `owner`). It is stored on the task as `assignee`, which
+  outlives the teammate's runs, unlike a claim.
+- The team board starts each such task on its teammate as a background run
+  (as `team_run_task` async does) once it is ready and the teammate exists
+  and has no dispatched run in flight. The run's message is the task, its
+  acceptance, and what the tasks it depends on came to; the T2 brief adds
+  "You hold Tn". Starts happen after the store's change, never inside it
+  (`TaskGraphStore.watch`).
+- When the run ends: the claim ends as before; a closed task is told to the
+  lead with its outcome and what is ready for it; a task left open goes back
+  on the board and is not started again by itself (the lead hands it out or
+  takes it). A start the runtime refuses is said and the claim let go.
+- The lead's auto-start skips tasks given to a teammate; T1 and T4 do not
+  count them as unhanded.
+- A `to` naming no teammate yet is said in the plan's answer; the task
+  starts when that teammate is spawned.
+- Not done: reassigning with `task_update`; the panel shows the assignee only
+  through the board text; nothing starts in plan mode.
+- To measure: arm D4, tg-bench textkit and ledger, no prompt prefix, against
+  D (no delegation) and D2 (`/team`, 10 of 10 delegated, 2-4x the time).
 
 ## Decided
 

@@ -31,6 +31,8 @@ export interface PlanItem {
 	gates: string[];
 	links: TaskLink[];
 	files: string[];
+	/** A teammate to run the task once it is ready (phase 6). */
+	to?: string;
 }
 
 export interface UpdateItem {
@@ -460,6 +462,9 @@ const PLAN_KEYS = new Set([
 	"links",
 	"files",
 	"file",
+	"to",
+	"assignee",
+	"owner",
 ]);
 
 /**
@@ -575,6 +580,8 @@ export function readPlanInput(input: unknown): ReadResult<PlanItem> {
 			links: [],
 			files: asStringList(obj.files ?? obj.file),
 		};
+		const to = asText(obj.to) ?? asText(obj.assignee) ?? asText(obj.owner);
+		if (to) item.to = to;
 		const planGates = readGates(obj.gate ?? obj.gates);
 		item.gates = planGates.gates;
 		for (const entry of planGates.bad)

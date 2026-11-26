@@ -55,6 +55,7 @@ import {
 	isReady,
 	openWork,
 	parseGate,
+	readyTasks,
 	type Task,
 	taskLayers,
 } from "./model";
@@ -68,6 +69,7 @@ import {
 	type TaskGraphSeed,
 	TaskGraphStore,
 	type TaskGraphStoreOptions,
+	type TaskSnapshot,
 } from "./store";
 import {
 	boardToTemplate,
@@ -538,7 +540,12 @@ export class TaskGraphTracker {
 	private readonly cwd: string | undefined;
 	private readonly templateDirs: string[];
 	/** The team, once there is one: T1 and T4 speak only then. */
-	private team: { idleReady: () => string | undefined } | undefined;
+	private team:
+		| {
+				idleReady: () => string | undefined;
+				isTeammate?: (agentId: string) => boolean;
+		  }
+		| undefined;
 	private calls = 0;
 	/** S5: the active task as last touched, and what has happened under it since. */
 	private drift:
@@ -590,7 +597,15 @@ export class TaskGraphTracker {
 			author,
 			{ beforeView: () => this.checkRemoteGates() },
 			() => this.templates(),
-			{ team: this.team !== undefined },
+			{
+				team: this.team !== undefined,
+				...(this.team?.isTeammate
+					? {
+							isTeammate: (agentId: string) =>
+								this.team?.isTeammate?.(agentId) ?? false,
+						}
+					: {}),
+			},
 		) as AgentTool<unknown, unknown>[];
 	}
 
@@ -673,8 +688,39 @@ export class TaskGraphTracker {
 	// -------------------------------------------------------------------------
 
 	/** The conversation has a team: its tasks are on this board. */
-	attachTeam(team: { idleReady: () => string | undefined }): void {
+	attachTeam(team: {
+		idleReady: () => string | undefined;
+		isTeammate?: (agentId: string) => boolean;
+	}): void {
 		this.team = team;
+	}
+
+	/** Phase 6: the plan's task for a teammate started on it. */
+	noteDispatched(agentId: string, taskId: string, runId: string): void {
+		this.doneNotes.push(
+			`[SYSTEM] ${taskId} started on ${agentId} (${runId}), as the plan gave it. Leave it to them: its result comes with team_await_runs, and you are told when it closes.`,
+		);
+		this.boardDue = true;
+	}
+
+	/** Phase 6: a teammate's dispatched task closed. */
+	noteDispatchClosed(agentId: string, task: TaskSnapshot): void {
+		const state = this.store.getState();
+		const ready = readyTasks(state)
+			.filter((entry) => !entry.claimedBy && !entry.assignee)
+			.map((entry) => entry.id);
+		this.doneNotes.push(
+			`[SYSTEM] ${agentId} closed ${task.id} (${task.status})${task.outcome ? `: ${task.outcome}` : ""}.${ready.length ? ` Ready for you: ${ready.slice(0, 5).join(", ")}.` : ""}`,
+		);
+		this.boardDue = true;
+	}
+
+	/** Phase 6: a teammate could not take its task. */
+	noteDispatchRefused(agentId: string, taskId: string, reason: string): void {
+		this.doneNotes.push(
+			`[SYSTEM] ${taskId} could not start on ${agentId}: ${reason}. It is on the board, unheld: hand it out (team_run_task) or take it yourself.`,
+		);
+		this.boardDue = true;
 	}
 
 	/** A teammate's run ended holding tasks; they are back on the board. */
@@ -702,9 +748,12 @@ export class TaskGraphTracker {
 		if (!this.team || this.planMode) return;
 		const state = this.store.getState();
 		// The lead's own active task counts: it is as free to hand out.
+		// A task the plan gave a teammate is handed out already.
 		const first = (taskLayers(state)[0] ?? []).filter(
 			(task) =>
-				!task.claimedBy && (isReady(state, task) || task.status === "active"),
+				!task.claimedBy &&
+				!task.assignee &&
+				(isReady(state, task) || task.status === "active"),
 		);
 		if (first.length < 2) return;
 		const ids = first.map((task) => task.id);
