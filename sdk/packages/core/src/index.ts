@@ -1623,6 +1623,13 @@ export {
 	type ExportedTaskBoard,
 	exportTaskLog,
 } from "./extensions/tools/task-graph/saved-board";
+// Saved plans (task graph phase 3 templates), listed for the task panel even
+// when no session is running.
+export {
+	loadTaskTemplates,
+	type TaskTemplate,
+	taskTemplateDirs,
+} from "./extensions/tools/task-graph/templates";
 export {
 	type AgentFileFields,
 	agentFileName,

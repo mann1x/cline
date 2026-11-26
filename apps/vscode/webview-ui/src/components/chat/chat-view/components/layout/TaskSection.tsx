@@ -27,6 +27,8 @@ interface TaskSectionProps {
 		supportsImages: boolean
 	}
 	messageHandlers: MessageHandlers
+	/** Scrolls the chat to the message with this timestamp. */
+	onShowMessage?: (ts: number) => void
 }
 
 /**
@@ -41,6 +43,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 	contextWindowGrant,
 	selectedModelInfo,
 	messageHandlers,
+	onShowMessage,
 }) => {
 	return (
 		<TaskHeader
@@ -58,6 +61,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			generateTokens={apiMetrics.totalGenerateTokens}
 			onClose={messageHandlers.handleTaskCloseButtonClick}
 			onSendMessage={messageHandlers.handleSendMessage}
+			onShowMessage={onShowMessage}
 			task={task}
 			tokensIn={apiMetrics.totalTokensIn}
 			tokensOut={apiMetrics.totalTokensOut}

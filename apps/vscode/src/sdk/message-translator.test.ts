@@ -351,6 +351,39 @@ describe("translateSessionEvent — pending prompts", () => {
 // ---------------------------------------------------------------------------
 
 describe("translateSessionEvent — agent_event content_start", () => {
+	it("stamps the call id on the rows of the calls that put tasks on the board, and only those", () => {
+		const row = (toolName: string, toolCallId: string, input: unknown) => {
+			const state = new MessageTranslatorState()
+			const start = translateSessionEvent(
+				{
+					type: "agent_event",
+					payload: {
+						sessionId: "session-1",
+						event: { type: "content_start", contentType: "tool", toolName, toolCallId, input } as AgentEvent,
+					},
+				},
+				state,
+			)
+			const end = translateSessionEvent(
+				{
+					type: "agent_event",
+					payload: {
+						sessionId: "session-1",
+						event: { type: "content_end", contentType: "tool", toolName, toolCallId, output: "ok" } as AgentEvent,
+					},
+				},
+				state,
+			)
+			return [start.messages[0], end.messages[0]].map((message) => JSON.parse(message?.text ?? "{}"))
+		}
+		for (const parsed of row("task_plan", "plan-call", { tasks: [{ title: "A" }] })) {
+			expect(parsed.callId).toBe("plan-call")
+		}
+		for (const parsed of row("grep", "grep-call", { pattern: "x" })) {
+			expect(parsed.callId).toBeUndefined()
+		}
+	})
+
 	it("reuses the approved tool prompt row for the matching tool lifecycle", () => {
 		const state = new MessageTranslatorState()
 		const approvedMessageTs = 42

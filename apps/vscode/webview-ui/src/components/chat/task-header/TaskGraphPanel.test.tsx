@@ -3,11 +3,24 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const taskGraphAction = vi.fn()
+const openFileRelativePath = vi.fn()
 vi.mock("@/services/grpc-client", () => ({
 	StateServiceClient: { taskGraphAction: (request: { value: string }) => taskGraphAction(request) },
+	FileServiceClient: { openFileRelativePath: (request: { value: string }) => openFileRelativePath(request) },
+}))
+// The drawing itself is mermaid's; the panel's part is the code it hands over.
+vi.mock("@/components/common/MermaidBlock", () => ({
+	default: ({ code }: { code: string }) => <pre data-testid="mermaid">{code}</pre>,
 }))
 
-import { findLatestTaskGraph, TaskGraphPanel, type TaskGraphPanelTask, taskGraphHeader } from "./TaskGraphPanel"
+import {
+	findLatestTaskGraph,
+	plannedRows,
+	TaskGraphPanel,
+	type TaskGraphPanelTask,
+	taskGraphHeader,
+	taskGraphMermaid,
+} from "./TaskGraphPanel"
 
 const base: Omit<TaskGraphPanelTask, "id" | "title" | "status"> = {
 	priority: "M",
@@ -33,6 +46,27 @@ const tasks: TaskGraphPanelTask[] = [
 ]
 
 describe("TaskGraphPanel", () => {
+	it("a task links to the chat row of the call that planned it", () => {
+		const planned: ClineMessage = {
+			ts: 7,
+			type: "say",
+			say: "tool",
+			text: JSON.stringify({ tool: "task_plan", callId: "call-9" }),
+			partial: false,
+		}
+		expect(plannedRows([planned, board(tasks)]).get("call-9")).toBe(7)
+		const onShowMessage = vi.fn()
+		const withOrigin = tasks.map((task) => (task.id === "T2" ? { ...task, createdCall: "call-9" } : task))
+		render(<TaskGraphPanel clineMessages={[planned, board(withOrigin)]} onShowMessage={onShowMessage} />)
+		fireEvent.click(screen.getByText("Tasks"))
+		fireEvent.click(screen.getByText("Store cents"))
+		fireEvent.click(screen.getByText("Show where it was planned"))
+		expect(onShowMessage).toHaveBeenCalledWith(7)
+		// A task whose call has no row (an older conversation) offers no link.
+		fireEvent.click(screen.getByText("Read the code"))
+		expect(screen.getAllByText("Show where it was planned")).toHaveLength(1)
+	})
+
 	it("renders nothing without a board", () => {
 		const { container } = render(<TaskGraphPanel clineMessages={[]} />)
 		expect(container.firstChild).toBeNull()
@@ -168,5 +202,81 @@ describe("TaskGraphPanel save to memory", () => {
 		fireEvent.click(screen.getByText("Tasks"))
 		fireEvent.click(screen.getByText("Save to memory…"))
 		await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Memory is off"))
+	})
+})
+
+describe("TaskGraphPanel gates, links and drawing (phase 5)", () => {
+	beforeEach(() => {
+		taskGraphAction.mockReset()
+		taskGraphAction.mockResolvedValue({ value: JSON.stringify({ ok: true, lines: ["T2: human:go resolved."] }) })
+		openFileRelativePath.mockReset()
+		openFileRelativePath.mockResolvedValue({})
+	})
+	const sent = () => taskGraphAction.mock.calls.map(([request]) => JSON.parse(request.value))
+	const gated: TaskGraphPanelTask[] = [
+		{ ...base, id: "T1", title: "Build", status: "done", files: ["src/a.ts"] },
+		{
+			...base,
+			id: "T2",
+			title: "Ship",
+			status: "pending",
+			blocked: true,
+			depends: ["T1"],
+			gates: [{ spec: "human:go", open: false }],
+			waitsOn: ["human:go"],
+			links: [
+				{ type: "discovered-from", target: "T1" },
+				{ type: "url", target: "https://example.com/pr/1" },
+			],
+		},
+	]
+
+	it("shows what a task waits on, and the person resolves a gate", async () => {
+		render(<TaskGraphPanel clineMessages={[board(gated)]} />)
+		fireEvent.click(screen.getByText("Tasks"))
+		expect(screen.getByText("· after human:go")).toBeTruthy()
+		fireEvent.click(screen.getByText("Ship"))
+		fireEvent.click(screen.getByRole("button", { name: "Resolve" }))
+		await waitFor(() => expect(sent()).toEqual([{ op: "update", updates: [{ id: "T2", gate_open: ["human:go"] }] }]))
+	})
+
+	it("links: a task link opens that task, a URL is a link", () => {
+		render(<TaskGraphPanel clineMessages={[board(gated)]} />)
+		fireEvent.click(screen.getByText("Tasks"))
+		fireEvent.click(screen.getByText("Ship"))
+		expect(screen.getByRole("link", { name: "https://example.com/pr/1" })).toBeTruthy()
+		fireEvent.click(screen.getByRole("button", { name: "T1" }))
+		expect(screen.getByRole("button", { name: "src/a.ts" })).toBeTruthy()
+		fireEvent.click(screen.getByRole("button", { name: "src/a.ts" }))
+		expect(openFileRelativePath).toHaveBeenCalledWith({ value: "src/a.ts" })
+	})
+
+	it("draws the board in the Graph tab", () => {
+		render(<TaskGraphPanel clineMessages={[board(gated, [["T2"]])]} />)
+		fireEvent.click(screen.getByText("Tasks"))
+		fireEvent.click(screen.getByRole("tab", { name: "Graph" }))
+		const code = screen.getByTestId("mermaid").textContent ?? ""
+		expect(code).toContain("flowchart TD")
+		expect(code).toContain("T1 --> T2")
+		expect(code).toContain("T1 -. discovered-from .-> T2")
+		expect(code).toContain('{{"human:go"}}:::gate --> T2')
+		expect(taskGraphMermaid(tasks)).toContain("subgraph T3_group")
+	})
+
+	it("starts from a saved plan", async () => {
+		taskGraphAction.mockImplementation(async (request: { value: string }) => {
+			const action = JSON.parse(request.value)
+			if (action.op === "templates") {
+				return { value: JSON.stringify({ ok: true, templates: [{ name: "Release", vars: ["version"], tasks: 3 }] }) }
+			}
+			return { value: JSON.stringify({ ok: true, lines: ['From the saved plan "Release".'] }) }
+		})
+		render(<TaskGraphPanel clineMessages={[board(gated)]} />)
+		fireEvent.click(screen.getByText("Tasks"))
+		fireEvent.click(screen.getByRole("button", { name: "Start from a saved plan…" }))
+		await waitFor(() => expect(screen.getByRole("combobox", { name: "Saved plan to start from" })).toBeTruthy())
+		fireEvent.change(screen.getByRole("textbox", { name: "Values for the plan" }), { target: { value: "version=2.0" } })
+		fireEvent.click(screen.getByRole("button", { name: "Add to board" }))
+		await waitFor(() => expect(sent().at(-1)).toEqual({ op: "template-use", name: "Release", vars: { version: "2.0" } }))
 	})
 })

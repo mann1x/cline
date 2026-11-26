@@ -843,6 +843,7 @@ export async function runInteractive(
 			await sessionRuntime.ensureReady();
 			return await sessionRuntime.listConfiguredAgents();
 		},
+		onShowTasks: () => sessionRuntime.renderTaskBoard(),
 		onDelegate: async (agentName: string, prompt: string) => {
 			await sessionRuntime.ensureReady();
 			return await sessionRuntime.delegateToAgent(agentName, prompt);

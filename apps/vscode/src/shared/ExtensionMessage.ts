@@ -530,6 +530,12 @@ export interface ClineSayTool {
 	 * the row calls it a result, and a failure "Failed".
 	 */
 	answered?: boolean
+	/**
+	 * The tool call's id, on the rows of the calls that put tasks on the
+	 * board (`task_plan`, `team_task`): the task panel finds the row a task
+	 * was planned in by it.
+	 */
+	callId?: string
 }
 
 // must keep in sync with system prompt

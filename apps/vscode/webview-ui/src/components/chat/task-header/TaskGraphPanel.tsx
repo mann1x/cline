@@ -2,8 +2,9 @@ import type { ClineMessage } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import { memo, useCallback, useMemo, useState } from "react"
+import MermaidBlock from "@/components/common/MermaidBlock"
 import { cn } from "@/lib/utils"
-import { StateServiceClient } from "@/services/grpc-client"
+import { FileServiceClient, StateServiceClient } from "@/services/grpc-client"
 
 /**
  * The conversation's task graph, under the context window. The person can
@@ -31,6 +32,14 @@ export interface TaskGraphPanelTask {
 	later: boolean
 	claimedBy?: string
 	files: string[]
+	/** What it waits on besides other tasks (phase 5). Absent on older rows. */
+	gates?: { spec: string; open: boolean; failed?: string }[]
+	/** Typed links and attachments (phase 5). Absent on older rows. */
+	links?: { type: string; target: string }[]
+	/** Open dependencies, then closed gates. Absent on older rows. */
+	waitsOn?: string[]
+	/** The tool call that created it: its chat row carries the same id. */
+	createdCall?: string
 	notes: string[]
 	outcome?: string
 	ready: boolean
@@ -76,7 +85,8 @@ function statusChip(task: TaskGraphPanelTask): { glyph: string; label: string; c
 	if (task.status === "active") return { glyph: "▶", label: "active", className: "text-link" }
 	if (task.status === "waiting") return { glyph: "⏸", label: "waiting", className: "text-warning" }
 	if (task.later) return { glyph: "…", label: "parked", className: "opacity-60" }
-	if (task.blocked) return { glyph: "○", label: `after ${task.openDepends.join(", ")}`, className: "opacity-70" }
+	if (task.blocked)
+		return { glyph: "○", label: `after ${(task.waitsOn ?? task.openDepends).join(", ")}`, className: "opacity-70" }
 	if (task.ready) return { glyph: "●", label: "ready", className: "" }
 	return { glyph: "○", label: "pending", className: "opacity-70" }
 }
@@ -97,6 +107,172 @@ export type TaskGraphPanelAction =
 	| { op: "plan"; tasks: Record<string, unknown>[] }
 
 export type SendTaskGraphAction = (action: TaskGraphPanelAction) => void
+
+/** A Mermaid label: quotes and brackets would end it early. */
+const mermaidLabel = (text: string) =>
+	text
+		.replace(/["[\]{}()<>|]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 40)
+
+/**
+ * The board as a Mermaid flowchart, drawn in the Graph tab: subtasks inside
+ * their parent, dependencies as arrows, task links dotted, gates as their own
+ * nodes. The same drawing `task_view mermaid` gives the model.
+ */
+export function taskGraphMermaid(tasks: TaskGraphPanelTask[]): string {
+	const node = (id: string) => id.replace(/\./g, "_")
+	const ids = new Set(tasks.map((task) => task.id))
+	const lines = ["flowchart TD"]
+	const label = (task: TaskGraphPanelTask) => `${node(task.id)}["${task.id} ${mermaidLabel(task.title)}"]:::${task.status}`
+	const emit = (task: TaskGraphPanelTask, indent: string) => {
+		const kids = tasks.filter((child) => child.parent === task.id)
+		if (kids.length) {
+			lines.push(`${indent}subgraph ${node(task.id)}_group["${task.id} ${mermaidLabel(task.title)}"]`)
+			lines.push(`${indent}  ${label(task)}`)
+			for (const kid of kids) emit(kid, `${indent}  `)
+			lines.push(`${indent}end`)
+		} else {
+			lines.push(`${indent}${label(task)}`)
+		}
+	}
+	for (const task of tasks) if (!task.parent || !ids.has(task.parent)) emit(task, "  ")
+	let gateCount = 0
+	for (const task of tasks) {
+		for (const dep of task.depends) if (ids.has(dep)) lines.push(`  ${node(dep)} --> ${node(task.id)}`)
+		for (const link of task.links ?? [])
+			if (ids.has(link.target)) lines.push(`  ${node(link.target)} -. ${link.type} .-> ${node(task.id)}`)
+		for (const gate of task.gates ?? []) {
+			gateCount += 1
+			lines.push(
+				`  G${gateCount}{{"${mermaidLabel(gate.spec)}"}}:::${gate.open ? "gateopen" : "gate"} --> ${node(task.id)}`,
+			)
+		}
+	}
+	lines.push(
+		"  classDef done fill:#2e7d32,color:#fff",
+		"  classDef cancelled fill:#757575,color:#fff",
+		"  classDef active fill:#1565c0,color:#fff",
+		"  classDef waiting fill:#ef6c00,color:#fff",
+		"  classDef pending fill:#fff,color:#000,stroke:#999",
+		"  classDef gate fill:#fff3e0,color:#000,stroke:#ef6c00",
+		"  classDef gateopen fill:#e8f5e9,color:#000,stroke:#2e7d32",
+	)
+	return lines.join("\n")
+}
+
+/** The task panel's own calls (templates), answered as JSON. */
+async function callBoard(action: Record<string, unknown>) {
+	const response = await StateServiceClient.taskGraphAction(StringRequest.create({ value: JSON.stringify(action) }))
+	return JSON.parse(response.value) as {
+		ok?: boolean
+		lines?: string[]
+		templates?: { name: string; description?: string; vars: string[]; tasks: number }[]
+	}
+}
+
+/** "Saved plans": start from one, or save this board as one. */
+const SavedPlans = ({ onReply }: { onReply: (reply: { ok: boolean; text: string }) => void }) => {
+	const [mode, setMode] = useState<"closed" | "use" | "save">("closed")
+	const [templates, setTemplates] = useState<{ name: string; vars: string[]; tasks: number }[]>([])
+	const [chosen, setChosen] = useState("")
+	const [vars, setVars] = useState("")
+	const fail = (error: unknown) => onReply({ ok: false, text: error instanceof Error ? error.message : String(error) })
+	const openUse = async () => {
+		try {
+			const answer = await callBoard({ op: "templates" })
+			const list = answer.templates ?? []
+			if (list.length === 0) {
+				onReply({
+					ok: false,
+					text: "No saved plans yet. Save a board as one, or add JSON files under .cerebriline/task-templates/.",
+				})
+				return
+			}
+			setTemplates(list)
+			setChosen(list[0]?.name ?? "")
+			setMode("use")
+		} catch (error) {
+			fail(error)
+		}
+	}
+	const use = async () => {
+		const values = Object.fromEntries(
+			vars
+				.split(",")
+				.map((pair) => pair.split("="))
+				.filter((pair) => pair.length === 2 && pair[0]?.trim())
+				.map(([key, value]) => [key?.trim(), value?.trim() ?? ""]),
+		)
+		try {
+			const answer = await callBoard({ op: "template-use", name: chosen, vars: values })
+			onReply({ ok: answer.ok === true, text: (answer.lines ?? []).join(" ") })
+			setMode("closed")
+		} catch (error) {
+			fail(error)
+		}
+	}
+	if (mode === "save") {
+		return (
+			<InlineText
+				label="Save plan"
+				onCancel={() => setMode("closed")}
+				onSubmit={(name) => {
+					void callBoard({ op: "template-save", name })
+						.then((answer) => onReply({ ok: answer.ok === true, text: (answer.lines ?? []).join(" ") }))
+						.catch(fail)
+					setMode("closed")
+				}}
+				placeholder="Name for this plan"
+				required
+			/>
+		)
+	}
+	if (mode === "use") {
+		const vars0 = templates.find((template) => template.name === chosen)?.vars ?? []
+		return (
+			<div className="flex gap-2 items-center flex-wrap text-xs">
+				<select
+					aria-label="Saved plan to start from"
+					className="text-xs bg-input-background text-input-foreground border border-input-border"
+					onChange={(event) => setChosen(event.target.value)}
+					value={chosen}>
+					{templates.map((template) => (
+						<option key={template.name} value={template.name}>
+							{template.name} ({template.tasks} tasks)
+						</option>
+					))}
+				</select>
+				{vars0.length > 0 && (
+					<input
+						aria-label="Values for the plan"
+						className="min-w-0 text-xs bg-input-background text-input-foreground border border-input-border rounded-xs px-1 py-0.5"
+						onChange={(event) => setVars(event.target.value)}
+						placeholder={vars0.map((name) => `${name}=…`).join(", ")}
+						value={vars}
+					/>
+				)}
+				<button className={linkButton} onClick={() => void use()} type="button">
+					Add to board
+				</button>
+				<button className={linkButton} onClick={() => setMode("closed")} type="button">
+					Back
+				</button>
+			</div>
+		)
+	}
+	return (
+		<span className="flex gap-2">
+			<button className={linkButton} onClick={() => void openUse()} type="button">
+				Start from a saved plan…
+			</button>
+			<button className={linkButton} onClick={() => setMode("save")} type="button">
+				Save as a plan…
+			</button>
+		</span>
+	)
+}
 
 const linkButton = "bg-transparent border-0 p-0 cursor-pointer text-link text-xs hover:underline"
 
@@ -261,10 +437,108 @@ const TaskActions = ({ task, send }: { task: TaskGraphPanelTask; send: SendTaskG
 	)
 }
 
-const TaskDetail = ({ task, send }: { task: TaskGraphPanelTask; send?: SendTaskGraphAction }) => (
+/** A link's target as something to press: a task, a URL, a file. */
+const LinkTarget = ({ link, onShowTask }: { link: { type: string; target: string }; onShowTask?: (id: string) => void }) => {
+	if (/^T\d+(?:\.\d+)*$/.test(link.target) && onShowTask) {
+		return (
+			<button className={linkButton} onClick={() => onShowTask(link.target)} type="button">
+				{link.target}
+			</button>
+		)
+	}
+	if (link.type === "url") {
+		return (
+			<a className="text-link break-all" href={link.target}>
+				{link.target}
+			</a>
+		)
+	}
+	return <span className="break-all">{link.target}</span>
+}
+
+/**
+ * The chat rows of the calls that put tasks on the board, by call id: where
+ * each task was planned. Rows written before the id was stamped have none.
+ */
+export function plannedRows(messages: readonly ClineMessage[]): Map<string, number> {
+	const rows = new Map<string, number>()
+	for (const message of messages) {
+		if ((message.say !== "tool" && message.ask !== "tool") || !message.text?.includes('"callId"')) continue
+		try {
+			const callId = (JSON.parse(message.text) as { callId?: unknown }).callId
+			if (typeof callId === "string" && !rows.has(callId)) rows.set(callId, message.ts)
+		} catch {
+			// Not a tool row's JSON.
+		}
+	}
+	return rows
+}
+
+const TaskDetail = ({
+	task,
+	send,
+	onShowTask,
+	onShowPlanned,
+}: {
+	task: TaskGraphPanelTask
+	send?: SendTaskGraphAction
+	onShowTask?: (id: string) => void
+	/** Scrolls the chat to the call that created the task. */
+	onShowPlanned?: () => void
+}) => (
 	<div className="pl-4 pr-1 pb-1 flex flex-col gap-0.5 text-xs opacity-90">
 		{task.description && <div className="break-words">{task.description}</div>}
+		{onShowPlanned && (
+			<div>
+				<button className={linkButton} onClick={onShowPlanned} type="button">
+					Show where it was planned
+				</button>
+			</div>
+		)}
 		{task.depends.length > 0 && <div>after: {task.depends.join(", ")}</div>}
+		{(task.gates ?? []).length > 0 && (
+			<ul aria-label="Waits on" className="list-none m-0 p-0">
+				{(task.gates ?? []).map((gate) => (
+					<li className="flex gap-1 items-baseline flex-wrap" key={gate.spec}>
+						<span
+							className={cn("shrink-0", gate.open ? "text-success" : gate.failed ? "text-error" : "text-warning")}>
+							{gate.open ? "◆" : "◇"}
+						</span>
+						<span className="break-words min-w-0">{gate.spec}</span>
+						<span className="opacity-70">
+							{gate.open ? "· open" : gate.failed ? `· cannot open: ${gate.failed}` : "· waiting"}
+						</span>
+						{send && !gate.open && !isClosed(task) && (
+							<button
+								className={linkButton}
+								onClick={() => send({ op: "update", updates: [{ id: task.id, gate_open: [gate.spec] }] })}
+								type="button">
+								Resolve
+							</button>
+						)}
+						{send && !isClosed(task) && (
+							<button
+								className={linkButton}
+								onClick={() => send({ op: "update", updates: [{ id: task.id, gate_remove: [gate.spec] }] })}
+								type="button">
+								Remove
+							</button>
+						)}
+					</li>
+				))}
+			</ul>
+		)}
+		{(task.links ?? []).length > 0 && (
+			<div className="flex gap-1 flex-wrap items-baseline">
+				links:
+				{(task.links ?? []).map((link) => (
+					<span className="flex gap-1" key={`${link.type} ${link.target}`}>
+						<span className="opacity-70">{link.type}</span>
+						<LinkTarget link={link} onShowTask={onShowTask} />
+					</span>
+				))}
+			</div>
+		)}
 		{task.acceptance.length > 0 && (
 			<ul className="list-none m-0 p-0">
 				{task.acceptance.map((item, index) => (
@@ -291,7 +565,20 @@ const TaskDetail = ({ task, send }: { task: TaskGraphPanelTask; send?: SendTaskG
 			</ul>
 		)}
 		{task.outcome && <div className="break-words">outcome: {task.outcome}</div>}
-		{task.files.length > 0 && <div className="break-words">files: {task.files.join(", ")}</div>}
+		{task.files.length > 0 && (
+			<div className="flex gap-1 flex-wrap items-baseline">
+				files:
+				{task.files.map((file) => (
+					<button
+						className={linkButton}
+						key={file}
+						onClick={() => void FileServiceClient.openFileRelativePath({ value: file }).catch(() => undefined)}
+						type="button">
+						{file}
+					</button>
+				))}
+			</div>
+		)}
 		{task.notes.length > 0 && (
 			<ul className="list-none m-0 p-0">
 				{task.notes.slice(-5).map((note, index) => (
@@ -311,12 +598,16 @@ const TaskRow = ({
 	open,
 	onToggle,
 	send,
+	onShowTask,
+	onShowPlanned,
 }: {
 	task: TaskGraphPanelTask
 	depth: number
 	open: boolean
 	onToggle: () => void
 	send?: SendTaskGraphAction
+	onShowTask?: (id: string) => void
+	onShowPlanned?: () => void
 }) => {
 	const chip = statusChip(task)
 	return (
@@ -336,16 +627,18 @@ const TaskRow = ({
 				<span className={cn("shrink-0 opacity-70", chip.className)}>· {chip.label}</span>
 				{task.claimedBy && <span className="shrink-0 opacity-70">· {task.claimedBy}</span>}
 			</button>
-			{open && <TaskDetail send={send} task={task} />}
+			{open && <TaskDetail onShowPlanned={onShowPlanned} onShowTask={onShowTask} send={send} task={task} />}
 		</li>
 	)
 }
 
 interface TaskGraphPanelProps {
 	clineMessages: ClineMessage[]
+	/** Scrolls the chat to the message with this timestamp. */
+	onShowMessage?: (ts: number) => void
 }
 
-export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
+export const TaskGraphPanel = memo(({ clineMessages, onShowMessage }: TaskGraphPanelProps) => {
 	const [isExpanded, setIsExpanded] = useState(false)
 	const [tab, setTab] = useState<"list" | "graph">("list")
 	const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set())
@@ -366,6 +659,10 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 
 	const snapshot = useMemo(() => findLatestTaskGraph(clineMessages), [clineMessages])
 	const tasks = snapshot?.tasks ?? []
+	const planned = useMemo(
+		() => (onShowMessage ? plannedRows(clineMessages) : new Map<string, number>()),
+		[clineMessages, onShowMessage],
+	)
 
 	// Children under their parent, in creation order; a task whose parent is
 	// missing from the snapshot is shown at the top rather than lost.
@@ -438,7 +735,8 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 								{name === "list" ? "List" : "Graph"}
 							</button>
 						))}
-						<span className="ml-auto">
+						<span className="ml-auto flex gap-2 flex-wrap">
+							<SavedPlans onReply={setReply} />
 							<SaveToMemory onReply={setReply} />
 						</span>
 					</div>
@@ -448,6 +746,12 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 								<TaskRow
 									depth={depth}
 									key={task.id}
+									onShowPlanned={
+										onShowMessage && task.createdCall && planned.has(task.createdCall)
+											? () => onShowMessage(planned.get(task.createdCall as string) as number)
+											: undefined
+									}
+									onShowTask={(id) => setOpenIds((current) => new Set(current).add(id))}
 									onToggle={() => toggle(task.id)}
 									open={openIds.has(task.id)}
 									send={send}
@@ -473,18 +777,23 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 								)}
 							</li>
 						</ul>
-					) : snapshot && snapshot.layers.length > 0 ? (
-						<ol className="list-none m-0 p-0 flex flex-col gap-0.5 text-xs">
-							{snapshot.layers.map((layer, index) => (
-								<li className="break-words" key={layer.join(",")}>
-									<span className="font-bold">Layer {index}</span>
-									{index === 0 ? " (can start now)" : ""}:{" "}
-									{layer.map((id) => `${id} ${byId.get(id)?.title ?? ""}`.trim()).join(" · ")}
-								</li>
-							))}
-						</ol>
 					) : (
-						<div className="text-xs opacity-80">No open tasks.</div>
+						<div className="flex flex-col gap-1">
+							{snapshot && snapshot.layers.length > 0 ? (
+								<ol className="list-none m-0 p-0 flex flex-col gap-0.5 text-xs">
+									{snapshot.layers.map((layer, index) => (
+										<li className="break-words" key={layer.join(",")}>
+											<span className="font-bold">Layer {index}</span>
+											{index === 0 ? " (can start now)" : ""}:{" "}
+											{layer.map((id) => `${id} ${byId.get(id)?.title ?? ""}`.trim()).join(" · ")}
+										</li>
+									))}
+								</ol>
+							) : (
+								<div className="text-xs opacity-80">No open tasks.</div>
+							)}
+							<MermaidBlock code={taskGraphMermaid(tasks)} />
+						</div>
 					)}
 					{reply && (
 						<div className={cn("text-xs break-words", reply.ok ? "opacity-80" : "text-error")} role="status">

@@ -27,6 +27,7 @@ export {
 	parseOcrLanguages,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"
 export { exportTaskLog } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/saved-board"
+export { loadTaskTemplates, taskTemplateDirs } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/templates"
 export { createModelRequestWriter } from "../../../../sdk/packages/core/src/services/llms/model-request-files"
 export {
 	resolveSessionOutputCap,

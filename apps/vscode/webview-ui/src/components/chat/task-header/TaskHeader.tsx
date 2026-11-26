@@ -45,6 +45,8 @@ interface TaskHeaderProps {
 	compactTask: () => Promise<boolean>
 	onClose: () => void
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
+	/** Scrolls the chat to a message; the task panel uses it to show where a task was planned. */
+	onShowMessage?: (ts: number) => void
 }
 
 const BUTTON_CLASS = "max-h-3 border-0 font-bold bg-transparent hover:opacity-100 text-foreground"
@@ -67,6 +69,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	compactTask,
 	onClose,
 	onSendMessage,
+	onShowMessage,
 }) => {
 	const {
 		apiConfiguration,
@@ -284,7 +287,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						    until the first board arrives. A checklist an older
 						    conversation sent is not drawn: it is imported onto the
 						    board when the conversation is resumed (4.100.292). */}
-						<TaskGraphPanel clineMessages={clineMessages} />
+						<TaskGraphPanel clineMessages={clineMessages} onShowMessage={onShowMessage} />
 					</div>
 				)}
 			</div>

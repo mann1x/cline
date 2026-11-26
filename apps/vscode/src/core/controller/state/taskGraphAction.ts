@@ -8,6 +8,9 @@ import type { Controller } from ".."
  * model is told what changed with its next look. Answers `{ok, lines}`, the
  * lines being what the board said back. Also `{op:"memories"}` (where a board
  * can be saved) and `{op:"save", memory, keepUpdated}` (save it there).
+ * Saved plans: `{op:"templates"}` (the list), `{op:"template-use", name,
+ * vars}` (its tasks go on the board as the person's) and
+ * `{op:"template-save", name, description?, where?}` (the board as one).
  */
 export async function taskGraphAction(controller: Controller, request: StringRequest): Promise<ProtoString> {
 	let parsed: unknown
@@ -31,6 +34,26 @@ export async function taskGraphAction(controller: Controller, request: StringReq
 			...(typeof save.memory === "string" ? { memory: save.memory } : {}),
 			keepUpdated: save.keepUpdated === true,
 		})
+	} else if (action?.op === "templates") {
+		return ProtoString.create({
+			value: JSON.stringify({ ok: true, lines: [], templates: controller.taskTemplates() }),
+		})
+	} else if (action?.op === "template-use") {
+		const use = parsed as { name?: unknown; vars?: unknown }
+		const vars =
+			use.vars && typeof use.vars === "object" && !Array.isArray(use.vars)
+				? Object.fromEntries(
+						Object.entries(use.vars as Record<string, unknown>).map(([key, value]) => [key, String(value)]),
+					)
+				: {}
+		answer = controller.useTaskTemplate(typeof use.name === "string" ? use.name : "", vars)
+	} else if (action?.op === "template-save") {
+		const save = parsed as { name?: unknown; description?: unknown; where?: unknown }
+		answer = controller.saveTaskTemplate(
+			typeof save.name === "string" ? save.name : "",
+			typeof save.description === "string" ? save.description : undefined,
+			save.where === "user" ? "user" : "workspace",
+		)
 	} else {
 		answer = { ok: false, lines: ["Not a board change: send {op:'update', updates:[…]} or {op:'plan', tasks:[…]}."] }
 	}

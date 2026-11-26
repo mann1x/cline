@@ -1,4 +1,8 @@
-import { mergeAgentHooks, type TeamEvent } from "@cline/core";
+import {
+	type CoreTaskGraphControl,
+	mergeAgentHooks,
+	type TeamEvent,
+} from "@cline/core";
 import type { ChatCommandState } from "../../utils/chat-commands";
 import type { Config } from "../../utils/types";
 import {
@@ -11,6 +15,8 @@ export function buildInteractiveSessionConfig(input: {
 	chatCommandState: ChatCommandState;
 	runtimeHooks: { hooks?: Config["hooks"] };
 	onTeamEvent: (event: TeamEvent) => void;
+	/** The session's task board, for `/tasks`. */
+	onTaskGraphAttach?: (control: CoreTaskGraphControl) => void;
 	resolveMistakeLimitDecision: Config["onConsecutiveMistakeLimitReached"];
 }): Config {
 	return {
@@ -28,6 +34,18 @@ export function buildInteractiveSessionConfig(input: {
 		// own hooks carry the prompt template's tool descriptions.
 		hooks: mergeAgentHooks([input.config.hooks, input.runtimeHooks.hooks]),
 		onTeamEvent: input.onTeamEvent,
+		...(input.onTaskGraphAttach
+			? {
+					taskGraph: {
+						...input.config.taskGraph,
+						enabled: input.config.taskGraph?.enabled ?? true,
+						onAttach: (control: CoreTaskGraphControl) => {
+							input.config.taskGraph?.onAttach?.(control);
+							input.onTaskGraphAttach?.(control);
+						},
+					},
+				}
+			: {}),
 		onConsecutiveMistakeLimitReached: input.resolveMistakeLimitDecision,
 	};
 }

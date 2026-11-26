@@ -26,6 +26,7 @@ import {
 	listConfiguredAgentSummaries,
 	loadConfiguredAgentConfigs,
 	loadRulesForSystemPromptFromRecords,
+	loadTaskTemplates,
 	type PreparedRemoteConfigCoreIntegration,
 	planAgentCommand,
 	type RuleConfig,
@@ -33,6 +34,7 @@ import {
 	resolveDefaultMcpSettingsPath,
 	type SessionHistoryRecord,
 	setTelemetryOptOutGlobally,
+	taskTemplateDirs,
 	type UserInstructionConfigService,
 } from "@cline/core"
 import { formatDisplayUserInput, type RemoteConfig, type RemoteConfigBundle } from "@cline/shared"
@@ -955,6 +957,61 @@ export class Controller {
 		}
 		const outcome = control.edit(action)
 		return { ok: outcome.changed, lines: outcome.lines }
+	}
+
+	/**
+	 * Saved plans (task graph phase 3 templates): the running session's view
+	 * when there is one, else read from the workspace and the user's folder,
+	 * so the panel can list them before the first message.
+	 */
+	taskTemplates(): { name: string; description?: string; vars: string[]; tasks: number }[] {
+		const control = this.taskGraphControl
+		if (control?.templates) return control.templates()
+		return loadTaskTemplates(taskTemplateDirs(this.lastKnownWorkspaceRoot)).map((template) => ({
+			name: template.name,
+			...(template.description ? { description: template.description } : {}),
+			vars: template.vars,
+			tasks: template.tasks.length,
+		}))
+	}
+
+	/** The task panel's "Start from a saved plan". */
+	useTaskTemplate(name: string, vars: Record<string, string>): { ok: boolean; lines: string[] } {
+		const control = this.liveTaskGraphControl()
+		if (!control?.useTemplate) {
+			return { ok: false, lines: ["A saved plan goes on a running conversation's board. Send a message to start one."] }
+		}
+		const outcome = control.useTemplate(name, vars)
+		return { ok: outcome.changed, lines: outcome.lines }
+	}
+
+	/** The task panel's "Save as a plan". */
+	saveTaskTemplate(
+		name: string,
+		description: string | undefined,
+		where: "workspace" | "user",
+	): { ok: boolean; lines: string[] } {
+		const control = this.liveTaskGraphControl()
+		if (!name.trim()) return { ok: false, lines: ["Give the plan a name."] }
+		if (!control?.saveTemplate) {
+			return { ok: false, lines: ["The board can be saved while its conversation is running or waiting for you."] }
+		}
+		const file = control.saveTemplate(name.trim(), description, where)
+		return file
+			? {
+					ok: true,
+					lines: [
+						`Saved as "${name.trim()}" in ${file}. The model can use it with task_plan {"template": "${name.trim()}"}.`,
+					],
+				}
+			: { ok: false, lines: ["There is nothing on the board to save."] }
+	}
+
+	/** The board control, when it belongs to the conversation on screen. */
+	private liveTaskGraphControl(): CoreTaskGraphControl | undefined {
+		const control = this.taskGraphControl
+		const active = this.sessions.getActiveSession()?.sessionId
+		return control && active && control.sessionId === active ? control : undefined
 	}
 
 	/** The task panel's "Save to memory": the memories to choose from. */

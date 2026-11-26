@@ -361,6 +361,17 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	// Use scroll behavior hook
 	const scrollBehavior = useScrollBehavior(displayMessages, visibleMessages, groupedMessages, expandedRows, setExpandedRows)
 	const { scrollToBottomSmooth, scrollToBottomAuto, disableAutoScrollRef, resumeFollowing } = scrollBehavior
+	const { scrollToMessage } = scrollBehavior
+	// The task panel's "Show where it was planned": a row is found by its timestamp.
+	const showMessage = useCallback(
+		(ts: number) => {
+			const index = displayMessages.findIndex((message) => message.ts === ts)
+			if (index >= 0) {
+				scrollToMessage(index)
+			}
+		},
+		[displayMessages, scrollToMessage],
+	)
 
 	// When a prompt gets queued, the queue banner mounts (or grows) in the footer, which
 	// shrinks the messages area and visually covers the bottom of the conversation. No new
@@ -407,6 +418,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						contextTokensUsed={shownContextUsage.used || undefined}
 						contextWindowGrant={shownContextUsage.grant}
 						messageHandlers={messageHandlers}
+						onShowMessage={showMessage}
 						selectedModelInfo={{
 							supportsPromptCache: selectedModelInfo.supportsPromptCache,
 							supportsImages: selectedModelInfo.supportsImages || false,

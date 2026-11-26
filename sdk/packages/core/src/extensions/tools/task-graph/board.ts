@@ -182,6 +182,43 @@ export function renderTask(state: TaskGraphState, task: Task): string {
 	return lines.join("\n");
 }
 
+/**
+ * Every task, one line each, subtasks indented under their parent: what the
+ * CLI's `/tasks` prints. Status, who holds it, and what it waits on.
+ */
+export function renderBoardListing(state: TaskGraphState): string {
+	if (state.order.length === 0) return "No tasks on the board yet.";
+	const tasks = state.order.map((id) => state.tasks.get(id) as Task);
+	const lines = [`Tasks: ${boardCounts(state)}`];
+	const mark: Record<Task["status"], string> = {
+		pending: "○",
+		active: "▶",
+		waiting: "⏸",
+		done: "✓",
+		cancelled: "✕",
+	};
+	const emit = (task: Task, depth: number): void => {
+		const wait = waitsOn(state, task);
+		const extra = [
+			task.claimedBy ? `held by ${task.claimedBy}` : "",
+			!isClosed(task.status) && wait.length ? `after ${wait.join(", ")}` : "",
+			task.outcome ? task.outcome : "",
+		].filter(Boolean);
+		lines.push(
+			`${"  ".repeat(depth)}${mark[task.status]} ${task.id} ${shortTitle(task.title)}${
+				extra.length ? ` (${extra.join("; ")})` : ""
+			}`,
+		);
+		for (const child of tasks.filter((entry) => entry.parent === task.id)) {
+			emit(child, depth + 1);
+		}
+	};
+	for (const task of tasks) {
+		if (!task.parent || !state.tasks.has(task.parent)) emit(task, 0);
+	}
+	return lines.join("\n");
+}
+
 /** A Mermaid label: quotes and brackets would end it early. */
 function mermaidLabel(text: string): string {
 	return text

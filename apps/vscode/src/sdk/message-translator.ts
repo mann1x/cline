@@ -162,6 +162,12 @@ function normalizeUsageEvent(usageEvent: {
 // ---------------------------------------------------------------------------
 
 /**
+ * The calls that put tasks on the board. Their rows carry the call id, which
+ * a task records as where it was created, so the task panel can show it.
+ */
+const BOARD_ORIGIN_TOOLS = new Set(["task_plan", "team_task"])
+
+/**
  * Tracks the state of streaming content to properly handle
  * partial message updates.
  */
@@ -3654,6 +3660,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						state.currentCwd(),
 					)
 					if (event.toolCallId) {
+						if (BOARD_ORIGIN_TOOLS.has(toolName)) {
+							sayTool.callId = event.toolCallId
+						}
 						state.noteGenericToolRow(event.toolCallId, state.getStreamingToolTs(), sayTool)
 					}
 					messages.push({
@@ -4198,6 +4207,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						if (answer.failed) {
 							sayTool.failed = true
 						}
+					}
+					if (event.toolCallId && BOARD_ORIGIN_TOOLS.has(toolName)) {
+						sayTool.callId = event.toolCallId
 					}
 					if (!sayTool.report && !BESPOKE_TOOL_ROWS.has(sayTool.tool) && !isSubagentSpawnTool(toolName)) {
 						const answer = toolAnswer(event.output, event.error)

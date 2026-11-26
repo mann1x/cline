@@ -784,6 +784,7 @@ function App(props: TuiProps) {
 		onControlBackgroundDelegation: props.onControlBackgroundDelegation,
 		onBackgroundDelegationStarted: refreshBackgroundRuns,
 		onListAgents: props.onListAgents,
+		onShowTasks: props.onShowTasks,
 		onFork: props.onFork,
 		onUndo: openCheckpointRestore,
 		onExit: exitCline,

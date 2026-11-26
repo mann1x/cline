@@ -2,6 +2,7 @@ import type {
 	BackgroundDelegationView,
 	ConfiguredAgentDelegationResult,
 	ConfiguredAgentSummary,
+	CoreTaskGraphControl,
 } from "@cline/core";
 import {
 	type AgentEvent,
@@ -218,9 +219,17 @@ export function createInteractiveSessionRuntime(input: {
 			chatCommandState: input.chatCommandState,
 			runtimeHooks: { hooks },
 			onTeamEvent: input.onTeamEvent,
+			onTaskGraphAttach: (control) => {
+				taskGraphControl = control;
+			},
 			resolveMistakeLimitDecision: input.resolveMistakeLimitDecision,
 		});
 	};
+	/** The running session's task board, for `/tasks`. */
+	let taskGraphControl: CoreTaskGraphControl | undefined;
+	const renderTaskBoard = (): string =>
+		taskGraphControl?.render?.() ??
+		"No task board yet: it starts with the conversation's first message.";
 
 	const startFreshSession = async (
 		initial: MessageWithMetadata[] = [],
@@ -1011,6 +1020,7 @@ export function createInteractiveSessionRuntime(input: {
 		forkCurrentSession,
 		compactCurrentSession,
 		listConfiguredAgents,
+		renderTaskBoard,
 		delegateToAgent,
 		delegateToAgentInBackground,
 		listBackgroundDelegations,

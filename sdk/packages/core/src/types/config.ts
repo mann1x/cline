@@ -510,6 +510,8 @@ export interface CoreTaskGraphControl {
 	): string | undefined;
 	/** The board as a Mermaid flowchart, for the panel's drawing. */
 	mermaid?(): string;
+	/** Every task, one line each: what the CLI's `/tasks` prints. */
+	render?(): string;
 }
 
 /**

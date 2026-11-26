@@ -22,6 +22,8 @@ export interface LocalSlashCommandActionInput {
 	clearConversation: () => Promise<void>;
 	openHelp: () => void;
 	openHistory: () => void;
+	/** Print the conversation's task board. */
+	showTasks?: () => void;
 	exitCline: () => void;
 }
 
@@ -99,6 +101,10 @@ export function runLocalSlashCommandAction(
 	}
 	if (normalized === "help") {
 		input.openHelp();
+		return true;
+	}
+	if (normalized === "tasks") {
+		input.showTasks?.();
 		return true;
 	}
 	if (normalized === "history") {

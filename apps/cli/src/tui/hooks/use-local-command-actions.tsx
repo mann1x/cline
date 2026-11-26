@@ -43,6 +43,7 @@ export function useLocalCommandActions(input: {
 	/** Draws the panel now rather than at the next poll. */
 	onBackgroundDelegationStarted?: () => void;
 	onListAgents: TuiProps["onListAgents"];
+	onShowTasks?: TuiProps["onShowTasks"];
 	onFork: TuiProps["onFork"];
 	onUndo: () => Promise<void>;
 	onExit: TuiProps["onExit"];
@@ -72,10 +73,17 @@ export function useLocalCommandActions(input: {
 		onControlBackgroundDelegation,
 		onBackgroundDelegationStarted,
 		onListAgents,
+		onShowTasks,
 		onFork,
 		onUndo,
 		onExit,
 	} = input;
+	const showTasks = useCallback(() => {
+		session.appendEntry({
+			kind: "status",
+			text: onShowTasks?.() ?? "No task board in this session.",
+		});
+	}, [onShowTasks, session]);
 
 	const openHistory = useCallback(async () => {
 		const sessionId = await dialog.choice<string>({
@@ -462,6 +470,7 @@ export function useLocalCommandActions(input: {
 				clearConversation: onClearConversation,
 				openHelp,
 				openHistory,
+				showTasks,
 				exitCline: onExit,
 			});
 		},
@@ -474,6 +483,7 @@ export function useLocalCommandActions(input: {
 			openMcpManager,
 			openHelp,
 			openHistory,
+			showTasks,
 			openModelSelector,
 			openSkills,
 			openThemePicker,

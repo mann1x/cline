@@ -229,6 +229,8 @@ export interface TuiProps {
 	onCompact: () => Promise<InteractiveCompactionResult>;
 	/** The agents this session can hand work to. */
 	onListAgents: () => Promise<ConfiguredAgentSummary[]>;
+	/** The conversation's task board as text, for `/tasks`. */
+	onShowTasks?: () => string;
 	/** Hand a task to one of them, without asking the lead model first. */
 	onDelegate: (
 		agentName: string,

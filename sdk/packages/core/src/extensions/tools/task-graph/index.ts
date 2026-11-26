@@ -1,6 +1,7 @@
 export {
 	boardCounts,
 	renderBoard,
+	renderBoardListing,
 	renderLayers,
 	renderMermaid,
 	renderSavedBoard,

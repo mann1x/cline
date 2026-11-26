@@ -57,6 +57,7 @@ import {
 } from "../../extensions/tools/list-files";
 import {
 	createGraphTeamBoard,
+	renderBoardListing,
 	renderMermaid,
 	TaskGraphTracker,
 	taskTemplateDirs,
@@ -1370,6 +1371,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 				saveTemplate: (name, description, where) =>
 					taskGraphTracker.saveTemplate(name, description, where),
 				mermaid: () => renderMermaid(taskGraphTracker.store.getState()),
+				render: () => renderBoardListing(taskGraphTracker.store.getState()),
 			});
 		}
 		// The checklist is gone (4.100.292); a host's toolset that still names a

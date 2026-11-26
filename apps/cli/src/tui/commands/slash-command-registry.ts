@@ -28,6 +28,7 @@ export type LocalSlashCommandName =
 	| "undo"
 	| "clear"
 	| "history"
+	| "tasks"
 	| "quit"
 	| "help";
 
@@ -129,6 +130,10 @@ const TUI_LOCAL_COMMANDS: Array<{
 		description: "View session history",
 	},
 	{
+		name: "tasks",
+		description: "Show the conversation's task board",
+	},
+	{
 		name: "help",
 		description: "Show help",
 	},
@@ -155,6 +160,7 @@ const SYSTEM_COMMAND_ORDER = [
 	"undo",
 	"clear",
 	"team",
+	"tasks",
 	"history",
 	"help",
 	"quit",
