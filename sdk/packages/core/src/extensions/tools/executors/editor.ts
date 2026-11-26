@@ -26,10 +26,12 @@ import {
 	normalizeLineEndings,
 	normalizeNewFileLineEndings,
 } from "./line-endings";
-import { MAX_LINE_CHARS, MAX_LONE_LINE_CHARS } from "./output-limits";
+import { MAX_LONE_LINE_CHARS } from "./output-limits";
 import {
 	changedRegion,
 	isWhole,
+	type LineCut,
+	noteShown,
 	type ReadReceipts,
 	readFileStamp,
 } from "./read-receipts";
@@ -481,6 +483,41 @@ function findAcrossLineEndings(content: string, text: string): string[] {
 	return [...content.matchAll(new RegExp(pattern, "g"))].map(
 		(match) => match[0],
 	);
+}
+
+/** A cut line an edit reaches past the part the reads showed. */
+interface CutReached {
+	line: number;
+	cut: LineCut;
+	/** What the edit does there, for the refusal: "reaches column 2400, …". */
+	what: string;
+}
+
+/**
+ * The parts of `text` the reads did not show, columns 1-based and inclusive.
+ * When the line is no longer as long as when it was read, what was seen of it
+ * cannot be placed in it, so all of it is unseen.
+ */
+export function unseenParts(
+	text: string,
+	cut: LineCut,
+): { first: number; last: number; text: string }[] {
+	if (text.length !== cut.length) {
+		return text.length === 0 ? [] : [{ first: 1, last: text.length, text }];
+	}
+	const from = cut.from ?? 1;
+	const parts: { first: number; last: number; text: string }[] = [];
+	if (from > 1) {
+		parts.push({ first: 1, last: from - 1, text: text.slice(0, from - 1) });
+	}
+	if (cut.shown < text.length) {
+		parts.push({
+			first: cut.shown + 1,
+			last: text.length,
+			text: text.slice(cut.shown),
+		});
+	}
+	return parts;
 }
 
 /** Past this, the prefix search costs more than the hint is worth. */
@@ -2668,39 +2705,107 @@ export function createEditorExecutor(
 	 * past at all (pandorum a695t: the same rewrite of lines 29-768 refused
 	 * four times, the file re-read in chunks between, each read cutting line
 	 * 651 where the last one had).
+	 *
+	 * The refusal carries the characters the model has not seen, and they then
+	 * count as read: the same edit sent again goes through. Naming the read
+	 * was not enough — pandorum 1795698921370_aaigd, 2026-11-26: three block
+	 * rewrites through line 102 (3,672 characters) refused, a full-file read
+	 * between each that cut the line again and repeated the advice, and the
+	 * model never read the line alone; it gave up on the rewrite and inserted
+	 * a second `<script>` block instead. Lines too long for one read to show
+	 * keep the old advice, and what one refusal carries is held to what one
+	 * read of a line would show.
 	 */
+	const cutReached = (
+		filePath: string,
+		line: number,
+		reach: number,
+		start?: number,
+	): CutReached | undefined => {
+		const cut = receipts?.cutAt?.(filePath, line);
+		if (!cut || isWhole(cut)) {
+			return undefined;
+		}
+		const from = cut.from ?? 1;
+		if (reach <= cut.shown && (start === undefined || start >= from)) {
+			return undefined;
+		}
+		const what =
+			reach > cut.shown
+				? `reaches ${Number.isFinite(reach) ? `column ${reach}` : "the whole line"}, past what you have seen`
+				: `starts at column ${start}, before what you have seen`;
+		return { line, cut, what };
+	};
+
+	/** Refuse the edit when it reaches any cut line; see {@link cutReached}. */
+	const refuseCut = async (
+		filePath: string,
+		reached: CutReached[],
+	): Promise<void> => {
+		const [head] = reached;
+		if (!head) {
+			return;
+		}
+		const lines = await fileLines(filePath);
+		let budget = MAX_LONE_LINE_CHARS;
+		const shown: string[] = [];
+		const kept: CutReached[] = [];
+		for (const item of reached) {
+			const text = lines?.[item.line - 1];
+			const parts =
+				text !== undefined && text.length <= MAX_LONE_LINE_CHARS
+					? unseenParts(text, item.cut)
+					: undefined;
+			const size = parts?.reduce((n, part) => n + part.text.length, 0);
+			if (text === undefined || !parts || size === undefined || size > budget) {
+				kept.push(item);
+				continue;
+			}
+			budget -= size;
+			noteShown(receipts, filePath, item.line, 1, text.length, text.length);
+			for (const part of parts) {
+				shown.push(
+					`Line ${item.line}, columns ${part.first.toLocaleString("en-US")}-${part.last.toLocaleString("en-US")}${part.last === text.length ? " (the end of the line)" : ""}:\n${part.text}`,
+				);
+			}
+		}
+		const cutSeen = (cut: LineCut): string =>
+			(cut.from ?? 1) <= 1
+				? `the first ${cut.shown.toLocaleString("en-US")}`
+				: `characters ${(cut.from ?? 1).toLocaleString("en-US")}-${cut.shown.toLocaleString("en-US")}`;
+		const others = reached.slice(1).map((item) => item.line);
+		const more =
+			others.length === 0
+				? ""
+				: ` It also reaches past what you have seen of line${others.length === 1 ? "" : "s"} ${others.join(", ")}.`;
+		const opening = `Not modified: line ${head.line} of ${filePath} is ${head.cut.length.toLocaleString("en-US")} characters, and the reads so far showed you only ${cutSeen(head.cut)}. This edit ${head.what}.${more}`;
+		const below =
+			shown.length === 0
+				? ""
+				: ` The characters you had not seen are below, and they now count as read: check the edit against them, then send it again — unchanged, if it is still what you mean.`;
+		const [rest] = kept;
+		const way = !rest
+			? ""
+			: (() => {
+					const from = rest.cut.from ?? 1;
+					const inside = `edit inside columns ${from}-${rest.cut.shown} of line ${rest.line}, or anchor the edit on text with \`old_text\``;
+					return rest.cut.length <= MAX_LONE_LINE_CHARS
+						? ` Read line ${rest.line} by itself — \`read_files\` with \`start_line\` and \`end_line\` both ${rest.line} — to see all of it, then send this edit again; or ${inside}.`
+						: ` Line ${rest.line} is too long for one read to show whole (${rest.cut.length.toLocaleString("en-US")} characters, of which you have seen ${cutSeen(rest.cut)}): ${inside} — grep for a pattern from the rest of the line shows the characters around it.`;
+				})();
+		throw new Error(
+			`${opening}${below}${way}${shown.length === 0 ? "" : `\n\n${shown.join("\n\n")}`}`,
+		);
+	};
+
 	const requireUncut = (
 		filePath: string,
 		line: number,
 		reach: number,
 		start?: number,
-	): void => {
-		const cut = receipts?.cutAt?.(filePath, line);
-		if (!cut || isWhole(cut)) {
-			return;
-		}
-		const from = cut.from ?? 1;
-		if (reach <= cut.shown && (start === undefined || start >= from)) {
-			return;
-		}
-		const seen =
-			from <= 1
-				? `the first ${cut.shown.toLocaleString("en-US")}`
-				: `characters ${from.toLocaleString("en-US")}-${cut.shown.toLocaleString("en-US")}`;
-		const what =
-			reach > cut.shown
-				? `reaches ${Number.isFinite(reach) ? `column ${reach}` : "the whole line"}, past what you have seen`
-				: `starts at column ${start}, before what you have seen`;
-		const inside = `edit inside columns ${from}-${cut.shown}, or anchor the edit on text with \`old_text\``;
-		const way =
-			cut.length <= MAX_LINE_CHARS
-				? `Read it with \`read_files\`, which shows this line whole, then send this edit again; or ${inside}.`
-				: cut.length <= MAX_LONE_LINE_CHARS
-					? `Read line ${line} by itself — \`read_files\` with \`start_line\` and \`end_line\` both ${line} — to see all of it, then send this edit again; or ${inside}.`
-					: `It is too long for one read to show whole: ${inside} — grep for a pattern from the rest of the line shows the characters around it.`;
-		throw new Error(
-			`Not modified: line ${line} of ${filePath} is ${cut.length.toLocaleString("en-US")} characters, and the reads so far showed you only ${seen}. This edit ${what}. ${way}`,
-		);
+	): Promise<void> => {
+		const reached = cutReached(filePath, line, reach, start);
+		return refuseCut(filePath, reached ? [reached] : []);
 	};
 
 	/** The text of each line of `filePath` a read cut, before an edit. */
@@ -2808,9 +2913,15 @@ export function createEditorExecutor(
 		endLine: number,
 		endColumn?: number | null,
 		startColumn?: number | null,
-	): void => {
-		for (let line = startLine; line <= endLine; line++) {
-			requireUncut(
+	): Promise<void> => {
+		const reached: CutReached[] = [];
+		// Only the lines a read cut; a whole-file rewrite need not walk them all.
+		const cutLines = receipts?.cutLines?.(filePath) ?? [];
+		for (const line of [...cutLines].sort((a, b) => a - b)) {
+			if (line < startLine || line > endLine) {
+				continue;
+			}
+			const item = cutReached(
 				filePath,
 				line,
 				line === endLine && endColumn != null
@@ -2818,7 +2929,11 @@ export function createEditorExecutor(
 					: Number.POSITIVE_INFINITY,
 				line === startLine && startColumn != null ? startColumn : 1,
 			);
+			if (item) {
+				reached.push(item);
+			}
 		}
+		return refuseCut(filePath, reached);
 	};
 
 	/**
@@ -3016,7 +3131,7 @@ export function createEditorExecutor(
 				}
 				await requireRead(filePath, insertLine, insertLine);
 				// Inserting right after the last character shown is still in sight.
-				requireUncut(
+				await requireUncut(
 					filePath,
 					insertLine,
 					input.insert_column - 1,
@@ -3070,7 +3185,7 @@ export function createEditorExecutor(
 			}
 			if (input.start_column != null) {
 				if (!knowsText) {
-					requireRangeUncut(
+					await requireRangeUncut(
 						filePath,
 						input.start_line,
 						input.end_line ?? input.start_line,
@@ -3132,7 +3247,7 @@ export function createEditorExecutor(
 			// With `old_text` only the matched text is replaced, and it can only
 			// match text the model has; without it the whole line goes.
 			if (input.old_text == null) {
-				requireRangeUncut(
+				await requireRangeUncut(
 					filePath,
 					input.start_line,
 					input.end_line ?? input.start_line,
@@ -3236,7 +3351,7 @@ export function createEditorExecutor(
 						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`file_path\`, \`start_line\`, \`end_line\` and the \`text\` for just those lines.`,
 				);
 			}
-			requireRangeUncut(filePath, 1, lineCount);
+			await requireRangeUncut(filePath, 1, lineCount);
 			const result = await replaceLineRange(
 				filePath,
 				1,

@@ -138,14 +138,48 @@ describe("a line every read cut can be read whole by itself", () => {
 		);
 	});
 
-	it("refuses a block rewrite through the line, naming that read", async () => {
+	// pandorum 1795698921370_aaigd, 2026-11-26: naming the read was not
+	// enough — three rewrites refused, the line never read alone. The refusal
+	// now carries what was not seen, and the same edit sent again goes through.
+	it("refuses a block rewrite through the line once, carrying the rest of it", async () => {
 		const { file, edit } = await opened("m.js", long);
-		await expect(
-			edit({ start_line: 1, end_line: 3, new_text: "rewritten\n" }),
-		).rejects.toThrow(
-			/Read line 2 by itself — `read_files` with `start_line` and `end_line` both 2 — to see all of it, then send this edit again/,
+		const refusal = await edit({
+			start_line: 1,
+			end_line: 3,
+			new_text: "rewritten\n",
+		}).then(
+			() => "",
+			(error: Error) => error.message,
 		);
+		expect(refusal).toContain("showed you only the first 2,000");
+		expect(refusal).toContain("they now count as read");
+		expect(refusal).toContain(
+			`Line 2, columns 2,001-3,704 (the end of the line):\n${"a".repeat(1_000)}TAIL${"b".repeat(700)}`,
+		);
+		expect(refusal).not.toContain("Read line 2 by itself");
 		expect(await fs.readFile(file, "utf8")).toBe(long);
+		await edit({ start_line: 1, end_line: 3, new_text: "rewritten\n" });
+		expect(await fs.readFile(file, "utf8")).toBe("rewritten\n");
+	});
+
+	it("carries every cut line a rewrite reaches, then lets it through", async () => {
+		const two = `${"x".repeat(2_500)}\nmid\n${"y".repeat(2_100)}Z\n`;
+		const { file, edit } = await opened("two.js", two);
+		const refusal = await edit({ new_text: "short\n" }).then(
+			() => "",
+			(error: Error) => error.message,
+		);
+		expect(refusal).toContain(
+			"It also reaches past what you have seen of line 3.",
+		);
+		expect(refusal).toContain(
+			`Line 1, columns 2,001-2,500 (the end of the line):\n${"x".repeat(500)}`,
+		);
+		expect(refusal).toContain(
+			`Line 3, columns 2,001-2,101 (the end of the line):\n${"y".repeat(100)}Z`,
+		);
+		await edit({ new_text: "short\n" });
+		expect(await fs.readFile(file, "utf8")).toBe("short\n");
 	});
 
 	it("shows the whole line, and the rewrite goes through after it", async () => {
