@@ -292,13 +292,13 @@ export function buildTaskBoardRules(planMode = false, team = false): string {
 		TASK_BOARD_RULES_HEADING,
 		"",
 		"This conversation keeps a task board: the plan as tasks, which the user sees while you work.",
-		'- Before the first file change, write the plan with one `task_plan` call: one task per step the request needs, each with its acceptance (what is true when it is done, and how that is checked), `depends` for the order, and `"start": true` on the first.',
+		'- Before the first file change, write the plan with one `task_plan` call: one task per step the request needs, each with its acceptance (what is true when it is done, and how that is checked), `depends` only where a task needs another finished first, and `"start": true` on the first.',
 		'- Close a task on the call that finishes it: add `task_done: "T1: what was done and how it was checked"` to that call.',
 		"- When the work turns out different from the plan (a new problem, a step it does not have), change the plan: add the task with `task_plan`, or note on the task where it stands with `task_update`.",
 		"- A request that only needs an answer needs no plan.",
 		...(team
 			? [
-					"- Your teammates work the same board: `team_task` shows and claims the same `T<n>` tasks. Give a task `depends` only when it needs another task's result: tasks that do not need each other get none, so they are the first layer and can run side by side. Hand those out with `team_run_task`, naming the task id in the message; a teammate claims it and closes it with `team_task complete`. A task that needs a teammate's result can wait on it with the gate `run:<teammate id>`.",
+					"- Your teammates work the same board: `team_task` shows and claims the same `T<n>` tasks. Tasks with no `depends` are the first layer and can run side by side. Hand those out with `team_run_task`, naming the task id in the message; a teammate claims it and closes it with `team_task complete`. A task that needs a teammate's result can wait on it with the gate `run:<teammate id>`.",
 				]
 			: []),
 	].join("\n");
@@ -342,7 +342,7 @@ export function buildTaskGraphStartNote(planMode = false): string {
 	return [
 		"[SYSTEM] This conversation keeps a task board.",
 		`If the request needs any file changed, write the plan before the first change, in one call: ${PLAN_EXAMPLE}.`,
-		'Every step with what has to be true when it is done, the order between them (`depends`), and `"start": true` on the first.',
+		'Every step with what has to be true when it is done, `depends` only where a step needs another finished first, and `"start": true` on the first.',
 		"Close each task as you finish it (`task_done` on the call that finishes it). A request that changes no file needs no plan.",
 	].join(" ");
 }
@@ -364,7 +364,7 @@ export function buildTaskGraphUntrackedNudge(
 		}
 		return [
 			`[SYSTEM] You just changed ${changed}, and this task has no plan.`,
-			"Before the next change, write the plan with one `task_plan` call: every step the request needs, each with its acceptance, and the order between them (`depends`).",
+			"Before the next change, write the plan with one `task_plan` call: every step the request needs, each with its acceptance, and `depends` only where a step needs another finished first.",
 			'Mark the step you are on with `"start": true`.',
 		].join(" ");
 	}
@@ -401,14 +401,14 @@ export function buildTaskGraphPlanFirstNudge(
 		return [
 			`[SYSTEM] ${calls} calls in and the board has no plan.`,
 			`If this request needs changes, put the plan on the board in one call: ${PLAN_EXAMPLE_PLAN_MODE}.`,
-			"Every step with its acceptance and the order between them; start none, the work is done in act mode once the user agrees.",
+			"Every step with its acceptance, and `depends` only where a step needs another finished first; start none, the work is done in act mode once the user agrees.",
 			"If it only needs an answer, carry on: no plan is needed.",
 		].join(" ");
 	}
 	return [
 		`[SYSTEM] ${calls} calls in and there is no plan yet.`,
 		`If this request needs changes, write the plan before the first one, in one call: ${PLAN_EXAMPLE}.`,
-		"Every step with its acceptance and the order between them; start the first.",
+		"Every step with its acceptance, and `depends` only where a step needs another finished first; start the first.",
 		"If it only needs an answer, carry on: no plan is needed.",
 	].join(" ");
 }

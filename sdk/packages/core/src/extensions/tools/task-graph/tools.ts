@@ -140,8 +140,9 @@ export function createTaskPlanTool(
 				"One task per change: its title says what changes and where (file, function or line), its description why that removes the cause, and its acceptance how it is checked (the command and the result that shows it worked); the last task checks the whole request. " +
 				'In `depends` and `parent`, "#2" means the second task of this same call, so the whole plan goes in at once; an existing task is named by its id (T3). ' +
 				"Nothing is started in plan mode: the work begins in act mode, once the user agrees."
-			: "Write down the work as tasks, with the order between them, in one call. " +
+			: "Write down the work as tasks, in one call. " +
 				"Plan before you change files: list every step the request needs, each with what has to be true when it is done (`acceptance`). " +
+				"`depends` is only for a task that needs another one finished first; tasks that do not need each other get none. " +
 				'In `depends` and `parent`, "#2" means the second task of this same call, so the whole plan goes in at once; an existing task is named by its id (T3). ' +
 				"Returns the ids and the order; the first ready task is started for you." +
 				templateExtra.sentence,
@@ -163,7 +164,8 @@ export function createTaskPlanTool(
 							depends: {
 								type: "array",
 								items: { type: "string" },
-								description: 'Tasks this one waits on: "#1" (this call) or T3.',
+								description:
+									'Only the tasks whose result this one needs: "#1" (this call) or T3. Leave it out for a task that does not need another.',
 							},
 							parent: {
 								type: "string",
