@@ -457,6 +457,21 @@ pandorum as a local vsix, and keeps the feature off by default.
    `run.sh` takes `PIPELINES=1`; `go-phase5.sh` needs `MODEL` (the user names
    it). Smoke: `deepseek-v4.1-flash:cloud`, one run a task; the dense 27B arm
    waits for eleven2go.
+   **Smoke, 2026-11-26** (`deepseek-v4.1-flash:cloud` on Ollama, build
+   01c7be012f, runs 0140-0143): pwrite 8/8 (31 s, 15 calls: catalog,
+   validate, save, one green test), pfix 6/6 (38 s: run, status, rerun from
+   `pack`), pgate 5/5 (121 s). All at the ceiling, so the process is what
+   it shows:
+   - **No way to wait.** In pgate the model gated the report task on
+     `pipeline:stats-1` and then slept in the shell (`sleep 60`, then three
+     `sleep 25`) and read the run's journal file. A run's end reaches the
+     model with its next tool result, and nothing held the turn: a headless
+     session would have ended. Added `pipeline wait` (782a0cc7f9: run,
+     timeout 600 s, at most 1800) and a rule to use it, never `sleep`.
+     Re-run (0143): `run` with `task`, one `wait`, no sleep; 97 s, 26 calls,
+     578k input tokens against 121 s, 32 calls and 824k (one run each).
+   - Next: the dense 27B arm when eleven2go is free, and more runs a task
+     only if a model leaves the ceiling.
 
 ## To decide
 
