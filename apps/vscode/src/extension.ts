@@ -43,7 +43,7 @@ import {
 import { setBoardViewerOpener } from "./core/webview/board-viewer-hooks"
 import { workspaceResolver } from "./core/workspace"
 import { focusForFile } from "./hosts/vscode/board-viewer/collect"
-import { openBoardViewerPanel } from "./hosts/vscode/board-viewer/panel"
+import { type BoardViewerDeps, openBoardViewerPanel } from "./hosts/vscode/board-viewer/panel"
 import { findMatchingNotebookCell, getContextForCommand, showWebview } from "./hosts/vscode/commandUtils"
 import { abortCommitGeneration, generateCommitMsg } from "./hosts/vscode/commit-message-generator"
 import { registerClineOutputChannel } from "./hosts/vscode/hostbridge/env/debugLog"
@@ -220,7 +220,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// in an editor-area panel. From the palette, a pipeline file's title bar
 	// (which hands it the file) and the task panel's "Open board".
 	{
-		const boardViewerDeps = {
+		const boardViewerDeps: BoardViewerDeps = {
 			extensionUri: context.extensionUri,
 			workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
 			boardText: () => {
@@ -231,6 +231,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				return undefined
 			},
 			boardEdit: (action: { op: "update"; updates: unknown[] }) => webview.controller.taskGraphAction(action),
+			runAction: (action) => webview.controller.pipelineRunAction(action),
 		}
 		setBoardViewerOpener((focus) => openBoardViewerPanel(boardViewerDeps, focus))
 		context.subscriptions.push(

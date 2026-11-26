@@ -24,6 +24,7 @@ import {
 	type ViewerFocus,
 	type ViewerReplyMessage,
 	type ViewerRequest,
+	type ViewerRunOp,
 } from "@/shared/board-viewer"
 import { collectViewerData } from "./collect"
 
@@ -55,6 +56,27 @@ export interface BoardViewerDeps {
 	boardText: () => string | undefined
 	/** A change to the conversation's board as the person's, as the task panel sends it. */
 	boardEdit?: (action: { op: "update"; updates: unknown[] }) => { ok: boolean; lines: string[] }
+	/** The person's action on a run, through the conversation that started it. */
+	runAction?: (action: { op: ViewerRunOp; run: string; node?: string }) => { ok: boolean; lines: string[]; run?: string }
+}
+
+/** The confirm for each run action: its button, and what it does. */
+const RUN_OPS: Record<ViewerRunOp, { label: string; question: (run: string, node: string) => string }> = {
+	retry: {
+		label: "Retry",
+		question: (run, node) => `Retry ${node}? ${run} resumes: ${node} runs again, then what comes after it.`,
+	},
+	skip: {
+		label: "Skip",
+		question: (run, node) =>
+			`Skip ${node}? It counts as done without running again, its input goes on to the nodes after it, and ${run} resumes.`,
+	},
+	rerun: {
+		label: "Re-run",
+		question: (run, node) =>
+			`Re-run ${run} from ${node}? A new run starts: it reuses what came before ${node} and runs ${node} and everything after it again.`,
+	},
+	stop: { label: "Stop", question: (run) => `Stop ${run}? The nodes running now are stopped.` },
 }
 
 let current: BoardViewer | undefined
@@ -177,7 +199,9 @@ class BoardViewer {
 	}
 
 	/** A request the panel waits on: what it changed, or why it did not. */
-	private async answer(request: ViewerRequest & { id: number }): Promise<{ ok: boolean; errors?: string[]; lines?: string[] }> {
+	private async answer(
+		request: ViewerRequest & { id: number },
+	): Promise<{ ok: boolean; errors?: string[]; lines?: string[]; run?: string }> {
 		const root = this.deps.workspaceRoot()
 		switch (request.type) {
 			case "boardViewer/validate": {
@@ -190,6 +214,8 @@ class BoardViewer {
 				const outcome = this.deps.boardEdit({ op: "update", updates: request.updates })
 				return { ok: outcome.ok, lines: outcome.lines }
 			}
+			case "boardViewer/runAction":
+				return this.runAction(request.op, request.run, request.node)
 		}
 		if (!root) return { ok: false, errors: ["Open a folder first: pipelines live in the workspace."] }
 		switch (request.type) {
@@ -206,6 +232,28 @@ class BoardViewer {
 			default:
 				return { ok: false, errors: ["Not a request this panel knows."] }
 		}
+	}
+
+	/**
+	 * Retry, Skip, Re-run from a node, or Stop. Each changes what runs in
+	 * the background (commands, tools, requests), so it is confirmed first;
+	 * the conversation that started the run decides whether it can.
+	 */
+	private async runAction(
+		op: ViewerRunOp,
+		run: string,
+		node: string | undefined,
+	): Promise<{ ok: boolean; errors?: string[]; lines?: string[]; run?: string }> {
+		if (!this.deps.runAction) return { ok: false, errors: ["This editor cannot act on runs."] }
+		if (!RUN_OPS[op] || typeof run !== "string") return { ok: false, errors: ["Not a run action."] }
+		if (op !== "stop" && typeof node !== "string") return { ok: false, errors: ["Pick a node of the run first."] }
+		const { label, question } = RUN_OPS[op]
+		const answer = await vscode.window.showWarningMessage(question(run, node ?? ""), { modal: true }, label)
+		if (answer !== label) return { ok: false }
+		const outcome = this.deps.runAction({ op, run, ...(node !== undefined ? { node } : {}) })
+		return outcome.ok
+			? { ok: true, lines: outcome.lines, ...(outcome.run ? { run: outcome.run } : {}) }
+			: { ok: false, errors: outcome.lines }
 	}
 
 	/** The person's edit: saved and approved, as their own edits are (plan section 7). */

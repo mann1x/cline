@@ -322,6 +322,11 @@
 					"when": "view == cerebriline.SidebarProvider"
 				},
 				{
+					"command": "cerebriline.openBoard",
+					"group": "navigation@4",
+					"when": "view == cerebriline.SidebarProvider"
+				},
+				{
 					"command": "cerebriline.accountButtonClicked",
 					"group": "navigation@5",
 					"when": "view == cerebriline.SidebarProvider"

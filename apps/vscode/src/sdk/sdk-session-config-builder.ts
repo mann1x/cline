@@ -1,4 +1,4 @@
-import type { CoreSessionConfig, CoreTaskGraphControl } from "@cline/core"
+import type { CorePipelineControl, CoreSessionConfig, CoreTaskGraphControl } from "@cline/core"
 import { type AgentHooks, type AgentTool, createSwitchToActModeTool, withSwitchToActModeTool } from "@cline/shared"
 import type { StateManager } from "@/core/storage/StateManager"
 import { offerAgentProfileRepair } from "./agent-profile-repair"
@@ -30,6 +30,8 @@ export interface SdkSessionConfigBuilderOptions {
 	onTaskGraphAttach?: (control: CoreTaskGraphControl) => void
 	/** Called after every change to the board (keep-updated saved boards). */
 	onTaskGraphChange?: () => void
+	/** The live session's pipeline runs, for the board viewer's Retry, Skip, Re-run and Stop. */
+	onPipelineAttach?: (control: CorePipelineControl) => void
 	/** A saved board the session starts from, when it is a new conversation. */
 	takeTaskGraphSeed?: () => { events: unknown[]; by: string; about?: string } | undefined
 }
@@ -105,6 +107,14 @@ export class SdkSessionConfigBuilder {
 				},
 				onAttach: (control) => this.options.onTaskGraphAttach?.(control),
 				...(seed ? { seed } : {}),
+			}
+		}
+		// Pipelines are on for this session (Features → Pipelines): the board
+		// viewer acts on its runs through this handle.
+		if (config.pipelines?.enabled) {
+			config.pipelines = {
+				...config.pipelines,
+				onAttach: (control) => this.options.onPipelineAttach?.(control),
 			}
 		}
 		// Plan only: the tool disappears once the session is rebuilt in act mode,

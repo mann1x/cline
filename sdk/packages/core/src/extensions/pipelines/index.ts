@@ -49,6 +49,8 @@ export {
 	resolveInputs,
 } from "./runner";
 export {
+	type PipelineActOutcome,
+	type PipelineRunAction,
 	type PipelineRunSummary,
 	PipelineSession,
 	type PipelineSessionOptions,

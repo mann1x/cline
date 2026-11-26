@@ -4,7 +4,7 @@ import "./board-viewer.css"
 import { Canvas, type CanvasEdit } from "./Canvas"
 import { addNode, boardTasks, connect, removeEdge, removeNodes, replaceNode } from "./edit"
 import { boardGraph, pipelineGraph, type ViewerGraph } from "./graph"
-import { Inspector, type InspectorSubject, type NodeEdit, type TaskEdit } from "./Inspector"
+import { Inspector, type InspectorSubject, type NodeEdit, type RunAction, type TaskEdit } from "./Inspector"
 import {
 	ask,
 	initialSource,
@@ -176,6 +176,9 @@ export function BoardViewer() {
 			...(state ? { state } : {}),
 			events: run ? run.events.filter((event) => event.node === selected) : [],
 			...(run?.startedAt !== undefined ? { runStart: run.startedAt } : {}),
+			...(source?.kind === "run" && run
+				? { run: { id: run.id, status: run.status, ...(run.parent ? { parent: run.parent } : {}) } }
+				: {}),
 		}
 	}, [selected, source, graph, board, definition, run])
 
@@ -293,6 +296,25 @@ export function BoardViewer() {
 						change(() => parsed as ViewerPipelineDefinition)
 						return undefined
 					},
+				}
+			: undefined
+
+	// A re-run's new run is shown once its journal has been read.
+	const [pendingRun, setPendingRun] = useState<string>()
+	useEffect(() => {
+		if (pendingRun && data?.runs.some((candidate) => candidate.id === pendingRun)) {
+			setPendingRun(undefined)
+			show({ kind: "run", id: pendingRun })
+		}
+	}, [pendingRun, data, show])
+	const runAction: RunAction | undefined =
+		source?.kind === "run" && run
+			? (op, node) => {
+					void request(() =>
+						ask(post, { type: "boardViewer/runAction", op, run: run.id, ...(node !== undefined ? { node } : {}) }),
+					).then((reply) => {
+						if (reply.ok && reply.run && reply.run !== run.id) setPendingRun(reply.run)
+					})
 				}
 			: undefined
 
@@ -498,7 +520,14 @@ export function BoardViewer() {
 				</main>
 				{withInspector && subject && (
 					<aside aria-label="Inspector" className="bv-inspector">
-						<Inspector nodeEdit={nodeEdit} onOpenRun={openRun} subject={subject} taskEdit={taskEdit} />
+						<Inspector
+							busy={busy}
+							nodeEdit={nodeEdit}
+							onOpenRun={openRun}
+							runAction={runAction}
+							subject={subject}
+							taskEdit={taskEdit}
+						/>
 					</aside>
 				)}
 			</div>

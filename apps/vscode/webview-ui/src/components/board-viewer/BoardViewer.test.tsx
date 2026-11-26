@@ -104,7 +104,7 @@ const send = (payload: object) =>
 	})
 
 /** The extension's answer to the last request of `type`. */
-const answer = (type: string, payload: { ok: boolean; errors?: string[]; lines?: string[] }) => {
+const answer = (type: string, payload: { ok: boolean; errors?: string[]; lines?: string[]; run?: string }) => {
 	const request = [...posted].reverse().find((message) => (message as { type?: string }).type === type) as
 		| { id: number }
 		| undefined
@@ -252,5 +252,53 @@ describe("the board viewer", () => {
 		})
 		answer("boardViewer/editTask", { ok: true, lines: ["T1: acceptance item added."] })
 		await waitFor(() => expect(screen.getByText("T1: acceptance item added.")).toBeTruthy())
+	})
+
+	it("retries, skips or re-runs a run's node, and stops a run that is going", async () => {
+		render(<BoardViewer />)
+		send({ ...data, focus: { run: "release-1" } })
+		fireEvent.click(screen.getByText("card ship"))
+		const inspector = () => screen.getByRole("complementary", { name: "Inspector" })
+		expect(inspector().textContent).toContain("Retry runs ship again")
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+		expect(sentOf("boardViewer/runAction").at(-1)).toMatchObject({ op: "retry", run: "release-1", node: "ship" })
+		answer("boardViewer/runAction", { ok: true, lines: ["Retrying ship: release-1 resumed."], run: "release-1" })
+		expect(await screen.findByText("Retrying ship: release-1 resumed.")).toBeTruthy()
+
+		// A node that finished is re-run from, not retried; the new run is shown once it is read.
+		fireEvent.click(screen.getByText("card build"))
+		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
+		expect(screen.queryByRole("button", { name: "Skip" })).toBeNull()
+		fireEvent.click(screen.getByRole("button", { name: "Re-run from here" }))
+		expect(sentOf("boardViewer/runAction").at(-1)).toMatchObject({ op: "rerun", run: "release-1", node: "build" })
+		answer("boardViewer/runAction", { ok: true, lines: ["Re-running release-1 from build as release-2."], run: "release-2" })
+		await screen.findByText("Re-running release-1 from build as release-2.")
+		const second = { ...data.runs[0], id: "release-2", status: "running", from: "release-1" }
+		send({ ...data, runs: [second, data.runs[0]] })
+		await waitFor(() => expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Run release-2"))
+
+		// While it runs, the only action is Stop.
+		fireEvent.click(screen.getByText("card build"))
+		expect(screen.queryByRole("button", { name: "Re-run from here" })).toBeNull()
+		fireEvent.click(screen.getByRole("button", { name: "Stop run" }))
+		expect(sentOf("boardViewer/runAction").at(-1)).toEqual(expect.objectContaining({ op: "stop", run: "release-2" }))
+		expect(sentOf("boardViewer/runAction").at(-1)).not.toHaveProperty("node")
+	})
+
+	it("offers no Skip for a node that picks an output", () => {
+		const branch = {
+			...data.pipelines[0],
+			definition: { name: "release", nodes: [{ id: "gate", type: "if", when: "{{ true }}" }] },
+		}
+		const run = {
+			...data.runs[0],
+			definition: branch.definition,
+			nodes: { gate: { status: "failed", attempts: 1, error: "bad expression" } },
+		}
+		render(<BoardViewer />)
+		send({ ...data, pipelines: [branch], runs: [run], focus: { run: "release-1" } })
+		fireEvent.click(screen.getByText("card gate"))
+		expect((screen.getByRole("button", { name: "Skip" }) as HTMLButtonElement).disabled).toBe(true)
+		expect(screen.getByRole("complementary", { name: "Inspector" }).textContent).toContain("so it is not skipped")
 	})
 })

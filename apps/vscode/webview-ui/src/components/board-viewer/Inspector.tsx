@@ -2,12 +2,28 @@ import { type ReactNode, useState } from "react"
 import type { TaskGraphPanelTask } from "@/components/chat/task-header/TaskGraphPanel"
 import { nodeJson } from "./edit"
 import { taskStatus } from "./graph"
-import { formatDuration, type ViewerEvent, type ViewerNodeState, type ViewerPipelineNode, type ViewerReply } from "./model"
+import {
+	formatDuration,
+	type ViewerEvent,
+	type ViewerNodeState,
+	type ViewerPipelineNode,
+	type ViewerReply,
+	type ViewerRunOp,
+} from "./model"
 import { eventSummary } from "./report"
 
 /** What the inspector shows: the selected card, and how it is edited when it can be (phase 4). */
 export type InspectorSubject =
-	| { kind: "node"; id: string; node?: ViewerPipelineNode; state?: ViewerNodeState; events: ViewerEvent[]; runStart?: number }
+	| {
+			kind: "node"
+			id: string
+			node?: ViewerPipelineNode
+			state?: ViewerNodeState
+			events: ViewerEvent[]
+			runStart?: number
+			/** The run shown, when it is a run: what the run controls act on. */
+			run?: { id: string; status: string; parent?: string }
+	  }
 	| { kind: "task"; task: TaskGraphPanelTask }
 	| { kind: "gate"; spec: string; status: string; task: string }
 
@@ -49,20 +65,35 @@ export interface NodeEdit {
 /** A change to a task, as the task panel sends it. */
 export type TaskEdit = (fields: Record<string, unknown>) => Promise<ViewerReply>
 
+/** Retry, Skip, Re-run from a node, or Stop, on the run shown. */
+export type RunAction = (op: ViewerRunOp, node?: string) => void
+
 export function Inspector({
 	subject,
 	onOpenRun,
 	nodeEdit,
 	taskEdit,
+	runAction,
+	busy = false,
 }: {
 	subject: InspectorSubject
 	onOpenRun: (run: string) => void
 	nodeEdit?: NodeEdit
 	taskEdit?: TaskEdit
+	runAction?: RunAction
+	busy?: boolean
 }) {
 	switch (subject.kind) {
 		case "node":
-			return <NodeInspector edit={nodeEdit} key={subject.node ? nodeJson(subject.node) : subject.id} subject={subject} />
+			return (
+				<NodeInspector
+					act={runAction}
+					busy={busy}
+					edit={nodeEdit}
+					key={subject.node ? nodeJson(subject.node) : subject.id}
+					subject={subject}
+				/>
+			)
 		case "task":
 			return <TaskInspector edit={taskEdit} key={subject.task.id} onOpenRun={onOpenRun} task={subject.task} />
 		case "gate":
@@ -123,7 +154,94 @@ function NodeEditor({ node, edit }: { node: ViewerPipelineNode; edit: NodeEdit }
 	)
 }
 
-function NodeInspector({ subject, edit }: { subject: Extract<InspectorSubject, { kind: "node" }>; edit?: NodeEdit }) {
+/** A node that picks one of its outputs: skipping it would leave no output to go on through. */
+const PICKS_AN_OUTPUT = new Set(["if", "switch", "approval"])
+
+/**
+ * The person's actions on the run shown (ol-177): Stop while it runs;
+ * Retry or Skip a node that failed; Re-run from any node once it ended.
+ * The extension confirms each and the run's conversation carries it out.
+ */
+function RunControls({
+	id,
+	node,
+	state,
+	run,
+	act,
+	busy,
+}: {
+	id: string
+	node?: ViewerPipelineNode
+	state?: ViewerNodeState
+	run: { id: string; status: string; parent?: string }
+	act: RunAction
+	busy: boolean
+}) {
+	if (run.parent) {
+		return (
+			<Section title="Run">
+				<div className="bv-note">This is a sub-run of {run.parent}: act on that run's node.</div>
+			</Section>
+		)
+	}
+	if (run.status === "running" || run.status === "waiting") {
+		return (
+			<Section title="Run">
+				<div className="bv-actions">
+					<button className="bv-button bv-danger" disabled={busy} onClick={() => act("stop")} type="button">
+						Stop run
+					</button>
+				</div>
+				<div className="bv-note">The run is going. Stop it to retry, skip or re-run a node.</div>
+			</Section>
+		)
+	}
+	const failed = state?.status === "failed" && run.status !== "done"
+	const picks = !!node && PICKS_AN_OUTPUT.has(node.type)
+	return (
+		<Section title="Run">
+			<div className="bv-actions">
+				{failed && (
+					<button className="bv-button bv-primary" disabled={busy} onClick={() => act("retry", id)} type="button">
+						Retry
+					</button>
+				)}
+				{failed && (
+					<button
+						className="bv-button"
+						disabled={busy || picks}
+						onClick={() => act("skip", id)}
+						title={picks ? `${node?.type} picks one of its outputs: retry it or re-run from it` : undefined}
+						type="button">
+						Skip
+					</button>
+				)}
+				<button className="bv-button" disabled={busy || !node} onClick={() => act("rerun", id)} type="button">
+					Re-run from here
+				</button>
+			</div>
+			<div className="bv-note">
+				{failed
+					? picks
+						? `Retry runs ${id} again and the run goes on. An ${node?.type} picks an output, so it is not skipped.`
+						: `Retry runs ${id} again; Skip passes its input on without running it. Either way the run resumes.`
+					: "Re-run from here starts a new run that reuses what came before this node."}
+			</div>
+		</Section>
+	)
+}
+
+function NodeInspector({
+	subject,
+	edit,
+	act,
+	busy,
+}: {
+	subject: Extract<InspectorSubject, { kind: "node" }>
+	edit?: NodeEdit
+	act?: RunAction
+	busy: boolean
+}) {
 	const { id, node, state, events, runStart } = subject
 	const fields = node
 		? Object.fromEntries(Object.entries(node).filter(([key]) => !["id", "type", "after", "name"].includes(key)))
@@ -168,10 +286,12 @@ function NodeInspector({ subject, edit }: { subject: Extract<InspectorSubject, {
 				)}
 				{state?.reused && <Pair label="Reused from">{state.reused}</Pair>}
 				{state?.reason && <Pair label="Skipped">{state.reason}</Pair>}
+				{state?.bypassed && <Pair label="Skipped">by you, after it failed; its input went on</Pair>}
 			</dl>
+			{subject.run && act && <RunControls act={act} busy={busy} id={id} node={node} run={subject.run} state={state} />}
 			{!node && <div className="bv-note">This node is not in the definition shown.</div>}
 			{(state?.error || state?.lastError) && (
-				<Section title="Error">
+				<Section title={state.bypassed ? "Failed with, before it was skipped" : "Error"}>
 					<div className="bv-error">{state.error ?? `Last attempt: ${state.lastError}`}</div>
 				</Section>
 			)}

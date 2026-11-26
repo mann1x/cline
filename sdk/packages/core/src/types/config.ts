@@ -459,6 +459,23 @@ export interface CorePipelinesConfig {
 	enabled: boolean;
 	/** A run started, changed or ended, for the host's panel. */
 	onRunChange?: (run: { id: string; view: () => unknown }) => void;
+	/**
+	 * Called once the session's pipeline runs exist, with the handle the
+	 * board viewer's Retry, Skip, Re-run and Stop go through. The model is
+	 * told what the person did.
+	 */
+	onAttach?: (control: CorePipelineControl) => void;
+}
+
+/** The board viewer's handle on a live session's pipeline runs. */
+export interface CorePipelineControl {
+	/** The session whose runs these are. */
+	sessionId: string;
+	act(action: {
+		op: "retry" | "skip" | "rerun" | "stop";
+		run: string;
+		node?: string;
+	}): { ok: boolean; lines: string[]; run?: string };
 }
 
 export interface CoreTaskGraphConfig {

@@ -13,6 +13,7 @@ import type {
 	BackgroundDelegationView,
 	ConfiguredAgentDelegationResult,
 	ConfiguredAgentSummary,
+	CorePipelineControl,
 	CoreTaskGraphControl,
 } from "@cline/core"
 import {
@@ -218,6 +219,8 @@ export class Controller {
 	private sessions: SdkSessionLifecycle
 	/** The newest session's board handle; edits go to it only while it is the active session. */
 	private taskGraphControl: CoreTaskGraphControl | undefined
+	/** The newest session's pipeline runs; acted on only while it is the active session. */
+	private pipelineControl: CorePipelineControl | undefined
 	/** Saving the board into Memory, starting from a saved one, keeping one updated. */
 	private readonly taskBoardMemory = new TaskBoardMemory({
 		cwd: () => this.getWorkspaceRoot(),
@@ -444,6 +447,9 @@ export class Controller {
 			onTaskGraphAttach: (control) => {
 				this.taskGraphControl = control
 				this.taskBoardMemory.attach(control)
+			},
+			onPipelineAttach: (control) => {
+				this.pipelineControl = control
 			},
 			onTaskGraphChange: () => {
 				this.taskBoardMemory.changed()
@@ -961,6 +967,25 @@ export class Controller {
 		}
 		const outcome = control.edit(action)
 		return { ok: outcome.changed, lines: outcome.lines }
+	}
+
+	/**
+	 * The board viewer's Retry, Skip, Re-run and Stop on a pipeline run, as
+	 * the person's. A run belongs to the session that started it, which acts
+	 * on it only while it is the active one; the model is told.
+	 */
+	pipelineRunAction(action: Parameters<CorePipelineControl["act"]>[0]): { ok: boolean; lines: string[]; run?: string } {
+		const control = this.pipelineControl
+		const active = this.sessions.getActiveSession()?.sessionId
+		if (!control || !active || control.sessionId !== active) {
+			return {
+				ok: false,
+				lines: [
+					"A run is acted on from its conversation while that conversation is open, with Pipelines on in Features. Open it and send a message to resume it.",
+				],
+			}
+		}
+		return control.act(action)
 	}
 
 	/**

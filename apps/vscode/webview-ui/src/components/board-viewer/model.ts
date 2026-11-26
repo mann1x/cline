@@ -30,6 +30,7 @@ export type {
 	ViewerReplyMessage,
 	ViewerRequest,
 	ViewerRun,
+	ViewerRunOp,
 	ViewerVersion,
 } from "@shared/board-viewer"
 
@@ -113,6 +114,8 @@ export interface ViewerReply {
 	ok: boolean
 	errors: string[]
 	lines: string[]
+	/** The run a run action left running. */
+	run?: string
 }
 
 type Asked = Extract<ViewerRequest, { id: number }>
@@ -140,6 +143,7 @@ export function settleReply(message: unknown): boolean {
 		ok: message.ok === true,
 		errors: Array.isArray(message.errors) ? message.errors.map(String) : [],
 		lines: Array.isArray(message.lines) ? message.lines.map(String) : [],
+		...(typeof message.run === "string" ? { run: message.run } : {}),
 	})
 	return true
 }

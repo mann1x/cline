@@ -154,6 +154,24 @@ export function unpinnedSideEffects(definition: PipelineDefinition): string[] {
 		.map((node: PipelineNode) => node.id);
 }
 
+/** What the person can do to a run from the board viewer. */
+export interface PipelineRunAction {
+	op: "retry" | "skip" | "rerun" | "stop";
+	run: string;
+	/** The node acted on; not needed to stop. */
+	node?: string;
+}
+
+export interface PipelineActOutcome {
+	ok: boolean;
+	/** What the person is told. */
+	lines: string[];
+	/** The run that is now running: the same one, or a re-run's new one. */
+	run?: string;
+	/** What the model is told, when something changed. */
+	tell?: string;
+}
+
 export class PipelineSession {
 	readonly journalDir: string;
 	private readonly options: PipelineSessionOptions;
@@ -682,8 +700,12 @@ export class PipelineSession {
 		return true;
 	}
 
-	/** Resume a stopped or failed run, or pick up one the host was running when it stopped. */
-	resume(runId: string): PipelineRun {
+	/**
+	 * Resume a stopped or failed run, or pick up one the host was running
+	 * when it stopped. `skip` names a failed node to skip instead of running
+	 * again (the person's Skip).
+	 */
+	resume(runId: string, skip?: string): PipelineRun {
 		if (this.live.has(runId)) throw new Error(`${runId} is running`);
 		const fold = foldJournal(
 			readJournal(join(this.journalDir, `${runId}.jsonl`)),
@@ -712,7 +734,10 @@ export class PipelineSession {
 		const run =
 			fold.status === "running" || fold.status === "waiting"
 				? PipelineRun.recover(options)
-				: PipelineRun.resume(options);
+				: PipelineRun.resume({
+						...options,
+						...(skip !== undefined ? { skip } : {}),
+					});
 		if (!run) throw new Error(`${runId} cannot be resumed`);
 		return this.track(run, {
 			test: fold.run.pipeline.endsWith("-test"),
@@ -760,6 +785,91 @@ export class PipelineSession {
 			}),
 			{ test },
 		);
+	}
+
+	/**
+	 * The person's action on a run, from the board viewer: Retry a failed
+	 * node (the run resumes), Skip it (it counts as done and its input goes
+	 * on), Re-run from a node (a new run reusing what came before), or Stop.
+	 * Only this conversation's runs: another one's run has its task on that
+	 * conversation's board. `lines` answer the person; `tell` is for the
+	 * model, whose board the run is on.
+	 */
+	act(action: PipelineRunAction): PipelineActOutcome {
+		const refuse = (line: string): PipelineActOutcome => ({
+			ok: false,
+			lines: [line],
+		});
+		const { op, run: runId, node } = action;
+		const fold = foldJournal(
+			readJournal(join(this.journalDir, `${runId}.jsonl`)),
+		);
+		if (!fold.run) return refuse(`There is no run ${runId} in this workspace.`);
+		if (fold.run.session !== this.options.sessionId)
+			return refuse(
+				`${runId} belongs to another conversation. Open that conversation and send a message there to act on its runs.`,
+			);
+		if (fold.run.parent)
+			return refuse(
+				`${runId} is a sub-run of ${fold.run.parent}: act on that run's node instead.`,
+			);
+		const live = this.live.has(runId);
+		if (op === "stop") {
+			if (!live)
+				return refuse(
+					fold.status === "running" || fold.status === "waiting"
+						? `${runId} is not running in this window. Send a message to the conversation: it picks its runs up.`
+						: `${runId} is not running (it is ${fold.status}).`,
+				);
+			this.stop(runId, "stopped by the person");
+			return {
+				ok: true,
+				lines: [`Stopped ${runId}.`],
+				run: runId,
+				tell: `The person stopped pipeline run ${runId}.`,
+			};
+		}
+		if (!node) return refuse(`Pick a node of ${runId} first.`);
+		const state = fold.nodes.get(node);
+		if (live || fold.status === "running" || fold.status === "waiting")
+			return refuse(`${runId} is still running. Stop it first.`);
+		try {
+			if (op === "rerun") {
+				const next = this.rerun(runId, node);
+				return {
+					ok: true,
+					lines: [`Re-running ${runId} from ${node} as ${next.id}.`],
+					run: next.id,
+					tell: `The person re-ran pipeline run ${runId} from node ${node}, as ${next.id}; it is running.`,
+				};
+			}
+			if (fold.status === "done")
+				return refuse(
+					`${runId} finished. Re-run it from ${node} to run that node again.`,
+				);
+			if (state?.status !== "failed")
+				return refuse(
+					`${node} did not fail (it is ${state?.status ?? "not reached"}): only a failed node is ${op === "skip" ? "skipped" : "retried"}. Re-run from it instead.`,
+				);
+			if (op === "retry") {
+				this.resume(runId);
+				return {
+					ok: true,
+					lines: [`Retrying ${node}: ${runId} resumed.`],
+					run: runId,
+					tell: `The person retried node ${node} of pipeline run ${runId}; the run resumed.`,
+				};
+			}
+			this.resume(runId, node);
+			return {
+				ok: true,
+				lines: [`Skipped ${node}: its input went on, and ${runId} resumed.`],
+				run: runId,
+				tell: `The person skipped node ${node} of pipeline run ${runId} after it failed (${state.error ?? "no error recorded"}); its input items went on and the run resumed.`,
+			};
+		} catch (error) {
+			return refuse((error as Error).message);
+		}
 	}
 
 	/**

@@ -426,9 +426,19 @@ pandorum as a local vsix, and keeps the feature off by default.
      dependencies through; a `check` becomes an acceptance item of the
      tasks before it; an `approval` or `human:` wait becomes a gate on the
      tasks after it; `{{ $vars.x }}` becomes the template's `{{x}}`.
-   - Retry, Skip and Re-run from a node in the inspector are not built:
-     they act on a live run, which is the session's, and belong with
-     phase 5's run handling.
+   - Retry, Skip and Re-run from a node in the inspector were left out of
+     phase 4 and built after phase 5 (ol-177): they act on a run, which is
+     the session's. The viewer asks the extension (`boardViewer/runAction`,
+     confirmed in a modal); the controller passes it to the active
+     session's `CorePipelineControl` (core `pipelines.onAttach`), whose
+     `PipelineSession.act` refuses another conversation's run, a sub-run,
+     and anything but Stop on a run still going. Retry is `resume`; Skip is
+     `resume` with the failed node settled as done, its input items going
+     on through `out` (journal `end` with `bypassed`; refused for `if`,
+     `switch` and `approval`, which pick a port); Re-run is `rerun` from
+     the node, and the viewer moves to the new run once its journal is
+     read. The model is told each action with the next tool result
+     (`notePipelineNews`).
 5. **Measured.** A tg-bench-like set of pipeline tasks (write a pipeline from
    a description; run, fix and re-run a failing one; gate a task on a run),
    on qwen3.6 27B dense and on a cloud model. A model that fails it gets the

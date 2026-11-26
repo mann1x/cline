@@ -66,6 +66,11 @@ import { openBoardViewerPanel } from "./panel"
 
 let root: string
 const boardEdit = vi.fn((_action: { op: "update"; updates: unknown[] }) => ({ ok: true, lines: ["T1: renamed."] }))
+const runAction = vi.fn((action: { op: string; run: string; node?: string }): { ok: boolean; lines: string[]; run?: string } =>
+	action.op === "rerun"
+		? { ok: true, lines: ["Re-running deploy-1 from up as deploy-2."], run: "deploy-2" }
+		: { ok: false, lines: ["deploy-1 is still running. Stop it first."] },
+)
 
 beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "board-viewer-panel-"))
@@ -74,11 +79,13 @@ beforeEach(() => {
 	ui.warning = undefined
 	ui.input = undefined
 	boardEdit.mockClear()
+	runAction.mockClear()
 	openBoardViewerPanel({
 		extensionUri: {} as never,
 		workspaceRoot: () => root,
 		boardText: () => undefined,
 		boardEdit,
+		runAction,
 	})
 })
 afterEach(() => {
@@ -202,5 +209,27 @@ describe("the board viewer's requests", () => {
 		const reply = await request({ type: "boardViewer/editTask", updates: [{ id: "T1", title: "Build it" }] })
 		expect(boardEdit).toHaveBeenCalledWith({ op: "update", updates: [{ id: "T1", title: "Build it" }] })
 		expect(reply).toMatchObject({ ok: true, lines: ["T1: renamed."] })
+	})
+
+	it("acts on a run only once the person confirms, and says what the conversation answered", async () => {
+		ui.warning = undefined
+		const declined = await request({ type: "boardViewer/runAction", op: "rerun", run: "deploy-1", node: "up" })
+		expect(declined).toMatchObject({ ok: false })
+		expect(runAction).not.toHaveBeenCalled()
+
+		ui.warning = "Re-run"
+		const rerun = await request({ type: "boardViewer/runAction", op: "rerun", run: "deploy-1", node: "up" })
+		expect(runAction).toHaveBeenCalledWith({ op: "rerun", run: "deploy-1", node: "up" })
+		expect(rerun).toMatchObject({ ok: true, run: "deploy-2", lines: ["Re-running deploy-1 from up as deploy-2."] })
+
+		ui.warning = "Retry"
+		const refused = await request({ type: "boardViewer/runAction", op: "retry", run: "deploy-1", node: "up" })
+		expect(refused).toMatchObject({ ok: false, errors: ["deploy-1 is still running. Stop it first."] })
+
+		// A node action without a node is not asked about.
+		runAction.mockClear()
+		const noNode = await request({ type: "boardViewer/runAction", op: "skip", run: "deploy-1" })
+		expect(noNode).toMatchObject({ ok: false, errors: ["Pick a node of the run first."] })
+		expect(runAction).not.toHaveBeenCalled()
 	})
 })

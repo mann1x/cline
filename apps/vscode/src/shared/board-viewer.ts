@@ -83,6 +83,8 @@ export interface ViewerNodeState {
 	waitingOn?: string
 	lastError?: string
 	reused?: string
+	/** The person skipped it after it failed; `error` is what it failed with. */
+	bypassed?: boolean
 }
 
 /** One line of a run's journal. */
@@ -92,6 +94,9 @@ export interface ViewerEvent {
 	node?: string
 	[field: string]: unknown
 }
+
+/** What the person can do to a run from the inspector. */
+export type ViewerRunOp = "retry" | "skip" | "rerun" | "stop"
 
 export interface ViewerRun {
 	id: string
@@ -156,6 +161,8 @@ export interface ViewerReplyMessage {
 	errors?: string[]
 	/** What the board said back to a task edit. */
 	lines?: string[]
+	/** The run a run action left running: the same one, or a re-run's new one. */
+	run?: string
 }
 
 /** A task from the board, as board → pipeline takes it. */
@@ -187,3 +194,5 @@ export type ViewerRequest =
 	| { type: "boardViewer/toTemplate"; id: number; slug: string }
 	/** A change to the conversation's board, as the task panel sends it (`task_update`'s fields). */
 	| { type: "boardViewer/editTask"; id: number; updates: Record<string, unknown>[] }
+	/** The person's Retry, Skip, Re-run from a node, or Stop, on a pipeline run. */
+	| { type: "boardViewer/runAction"; id: number; op: ViewerRunOp; run: string; node?: string }

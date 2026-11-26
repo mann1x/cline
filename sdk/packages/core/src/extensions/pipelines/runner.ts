@@ -40,6 +40,7 @@ import {
 	type LoopNode,
 	type MergeNode,
 	type NodeOutput,
+	nodePorts,
 	type PipelineDefinition,
 	type PipelineNode,
 	parseRef,
@@ -447,8 +448,14 @@ export class PipelineRun {
 	/**
 	 * Run a failed or stopped run again from where it stopped: its failed
 	 * nodes and the ones never reached run; what finished keeps its output.
+	 * `skip` names a failed node the person skips instead: it counts as done
+	 * and its input items go on through `out`. A node that picks an output
+	 * (`if`, `switch`, `approval`) has no one output to go on through, so it
+	 * is not skipped.
 	 */
-	static resume(options: PipelineRunOptions & { run: string }): PipelineRun {
+	static resume(
+		options: PipelineRunOptions & { run: string; skip?: string },
+	): PipelineRun {
 		const run = PipelineRun.load(options);
 		if (!run)
 			throw new Error(`no run "${options.run}" in ${options.journalDir}`);
@@ -458,7 +465,25 @@ export class PipelineRun {
 		if (fold.status === "running" || fold.status === "waiting") {
 			throw new Error(`run "${options.run}" is still running`);
 		}
+		const skip = options.skip;
+		if (skip !== undefined) {
+			const node = run.nodes.get(skip);
+			const state = run.states.get(skip);
+			if (!node || !state)
+				throw new Error(
+					`no node "${skip}" in ${options.run} (it has ${[...run.nodes.keys()].join(", ")})`,
+				);
+			if (state.status !== "failed")
+				throw new Error(
+					`"${skip}" did not fail (it is ${state.status}); only a failed node is skipped`,
+				);
+			if (nodePorts(node)[0] !== DEFAULT_PORT)
+				throw new Error(
+					`"${skip}" is ${node.type === "if" ? "an" : "a"} ${node.type}: it picks one of ${nodePorts(node).join(", ")}, so skipping it has no output to go on through. Retry it, or re-run from it.`,
+				);
+		}
 		for (const [id, state] of run.states) {
+			if (id === skip) continue;
 			if (state.status === "failed" || state.status === "running") {
 				state.status = "pending";
 				delete state.error;
@@ -466,9 +491,34 @@ export class PipelineRun {
 			}
 		}
 		run.write({ t: "resume", ts: run.now() });
+		if (skip !== undefined) run.bypass(skip);
 		run.reopenConversationTask();
 		run.finished = run.execute();
 		return run;
+	}
+
+	/** The person's skip: the failed node is done, and its input items go on. */
+	private bypass(id: string): void {
+		const node = this.nodes.get(id) as PipelineNode;
+		const state = this.states.get(id) as NodeState;
+		const output: NodeOutput = {
+			items: this.inputItems(node),
+			port: DEFAULT_PORT,
+		};
+		state.status = "done";
+		state.output = output;
+		state.bypassed = true;
+		this.write({
+			t: "end",
+			ts: this.now(),
+			node: id,
+			output,
+			bypassed: true,
+		});
+		this.boardUpdate(id, {
+			status: "done",
+			note: `skipped by the person after it failed; its ${output.items.length} input item${output.items.length === 1 ? "" : "s"} went on`,
+		});
 	}
 
 	private static load(

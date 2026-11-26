@@ -50,6 +50,8 @@ export type JournalEvent =
 			pinned?: boolean;
 			/** Taken from this earlier run, not run again. */
 			reused?: string;
+			/** The person skipped it after it failed: its input items went on. */
+			bypassed?: boolean;
 	  }
 	| {
 			t: "retry";
@@ -84,6 +86,8 @@ export interface NodeState {
 	lastError?: string;
 	/** Its output was taken from this earlier run. */
 	reused?: string;
+	/** The person skipped it after it failed; `error` is what it failed with. */
+	bypassed?: boolean;
 }
 
 export interface JournalFold {
@@ -148,6 +152,11 @@ export function foldJournal(events: readonly JournalEvent[]): JournalFold {
 				state.output = event.output;
 				state.endedAt = event.ts;
 				if (event.reused) state.reused = event.reused;
+				// A node that failed and then ran again carries no error; a
+				// skipped one keeps it, as what it was skipped over.
+				if (event.bypassed) state.bypassed = true;
+				else delete state.error;
+				delete state.lastError;
 				delete state.waitingOn;
 				break;
 			}

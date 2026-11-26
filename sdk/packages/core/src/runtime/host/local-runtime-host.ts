@@ -1455,6 +1455,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 						},
 					})
 				: undefined;
+		if (pipelineSession) {
+			configWithProvider.pipelines?.onAttach?.({
+				sessionId,
+				act: (action) => {
+					const outcome = pipelineSession.act(action);
+					if (outcome.tell) taskGraphTracker?.notePipelineNews([outcome.tell]);
+					return {
+						ok: outcome.ok,
+						lines: outcome.lines,
+						...(outcome.run ? { run: outcome.run } : {}),
+					};
+				},
+			});
+		}
 		const checklessTools = pipelineSession
 			? [
 					...mergedToolsWithChecklist,
