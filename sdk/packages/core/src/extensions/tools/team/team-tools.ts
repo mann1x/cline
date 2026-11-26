@@ -73,6 +73,7 @@ import {
 	validateWithZod,
 	zodToJsonSchema,
 } from "@cline/shared";
+import { primeAgentModelWindow } from "./agent-model-window";
 import {
 	AGENT_SUMMARY_MAX_CHARS,
 	READ_AGENT_REPORT_TOOL_NAME,
@@ -595,6 +596,11 @@ export function createAgentTeamsTools(
 						sampling,
 						options.teammateConfigProvider.getConnectionConfig(),
 					);
+					// And the window of a model the session does not run.
+					const priming = primeAgentModelWindow(
+						options.teammateConfigProvider.getConnectionConfig(),
+					);
+					if (priming) await priming;
 					spawnTeamTeammate({
 						runtime: options.runtime,
 						requesterId: options.requesterId,

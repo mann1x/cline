@@ -13,6 +13,7 @@ import { renderBoard, renderLayers, renderMermaid, renderTask } from "./board";
 import { isBlocked, type Task, waitsOn } from "./model";
 import { normalizeTaskId } from "./readers";
 import {
+	TASK_DONE_PARAM,
 	TASK_PLAN_TOOL_NAME,
 	TASK_UPDATE_TOOL_NAME,
 	TASK_VIEW_TOOL_NAME,
@@ -274,6 +275,10 @@ export function createTaskUpdateTool(
 ): AgentTool<unknown, ToolOperationResult[]> {
 	return createTool<unknown, ToolOperationResult[]>({
 		name: TASK_UPDATE_TOOL_NAME,
+		// `task_done` is a field for the call that finishes a task; called on
+		// its own, as a tool, it closes the tasks it names here rather than
+		// failing as an unavailable tool (mann1x/cline#118).
+		aliases: [TASK_DONE_PARAM],
 		description:
 			"Change tasks: start one (status active), finish it (status done, with a `note` saying what was done and how it was checked; its acceptance is ticked with it unless you send `check` or `uncheck`), cancel it (with the reason), tick acceptance items (`check`: their numbers or text), or change dependencies. " +
 			"Several tasks in one call. A task cannot start while a task it depends on is open.",

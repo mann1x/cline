@@ -801,6 +801,45 @@ export class TaskGraphStore {
 		options: { silent?: boolean } = {},
 	): TaskOperationOutcome {
 		const { items, ignored } = readUpdateInput(input);
+		// `task_done` on `task_update` itself, or on a `task_done` call the
+		// runtime handed here (the tool answers to that name): closed as
+		// `finish` closes, with its note as the outcome. It was read nowhere on
+		// this tool, so the close was lost, or made without the note.
+		const done =
+			typeof input === "object" && input !== null && !Array.isArray(input)
+				? (input as Record<string, unknown>)[TASK_DONE_PARAM]
+				: undefined;
+		if (done !== undefined) {
+			for (const entry of readTaskDone(done)) {
+				if (!entry.id) {
+					ignored.push(
+						`\`task_done\` ${JSON.stringify(entry.raw)}, which names no task: send its id, as "T3: what was done"`,
+					);
+					continue;
+				}
+				const listed = items.find((item) => item.id === entry.id);
+				if (listed) {
+					listed.status ??= "done";
+					if (!listed.note && entry.note) listed.note = entry.note;
+					if (listed.check.length === 0 && listed.uncheck.length === 0) {
+						listed.check = ["*"];
+					}
+				} else {
+					items.push(
+						...readUpdateInput({
+							updates: [
+								{
+									id: entry.id,
+									status: "done",
+									check: ["*"],
+									...(entry.note ? { note: entry.note } : {}),
+								},
+							],
+						}).items,
+					);
+				}
+			}
+		}
 		const lines: string[] = [];
 		let changed = false;
 		const readyBefore = new Set(readyTasks(this.state).map((task) => task.id));

@@ -4405,6 +4405,108 @@ describe("AgentRuntime", () => {
 		expect(result.outputText).toBe("recovered");
 	});
 
+	it("runs a call made under a tool's alias instead of rejecting it as unavailable", async () => {
+		// mann1x/cline#118: `task_done` called as a tool; `task_update` answers to it.
+		const executed: unknown[] = [];
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_alias",
+					toolName: "task_done",
+					inputText: '{"task_done":"T2: built and tested"}',
+					metadata: {
+						inputParseError:
+							"Tool call task_done was rejected before execution: AI_NoSuchToolError: Model tried to call unavailable tool 'task_done'.",
+					},
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			(request) => {
+				const toolResult = request.messages.at(-1)?.content[0];
+				expect(toolResult).toMatchObject({
+					type: "tool-result",
+					toolName: "task_done",
+					output: { ok: true },
+				});
+				expect((toolResult as { isError?: boolean }).isError).not.toBe(true);
+				return [
+					{ type: "text-delta", text: "closed" },
+					{ type: "finish", reason: "stop" },
+				];
+			},
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [
+				{
+					name: "task_update",
+					description: "Change tasks.",
+					inputSchema: { type: "object", properties: {} },
+					aliases: ["task_done"],
+					execute: async (input: unknown) => {
+						executed.push(input);
+						return { ok: true };
+					},
+				},
+			],
+		});
+
+		const result = await runtime.run("Start");
+
+		expect(result.outputText).toBe("closed");
+		expect(executed).toEqual([{ task_done: "T2: built and tested" }]);
+	});
+
+	it("still rejects a name no tool answers to", async () => {
+		const executed: unknown[] = [];
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_unknown",
+					toolName: "linearia_list_issues",
+					inputText: "{}",
+					metadata: {
+						inputParseError:
+							"Tool call linearia_list_issues was rejected before execution: AI_NoSuchToolError",
+					},
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			(request) => {
+				const toolResult = request.messages.at(-1)?.content[0];
+				expect(toolResult).toMatchObject({
+					type: "tool-result",
+					isError: true,
+				});
+				return [
+					{ type: "text-delta", text: "ok" },
+					{ type: "finish", reason: "stop" },
+				];
+			},
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [
+				{
+					name: "task_update",
+					description: "Change tasks.",
+					inputSchema: { type: "object", properties: {} },
+					aliases: ["task_done"],
+					execute: async (input: unknown) => {
+						executed.push(input);
+						return { ok: true };
+					},
+				},
+			],
+		});
+
+		await runtime.run("Start");
+
+		expect(executed).toEqual([]);
+	});
+
 	it("accepts corrected full argument snapshots for the same streamed tool call", async () => {
 		const model = new ScriptedModel([
 			() => [

@@ -609,6 +609,9 @@ export function readPlanInput(input: unknown): ReadResult<PlanItem> {
 	return { items, ignored };
 }
 
+/** The keys that name the task an update is for. */
+const UPDATE_ID_KEYS = new Set(["id", "task", "task_id", "taskId"]);
+
 const UPDATE_KEYS = new Set([
 	"id",
 	"task",
@@ -674,9 +677,43 @@ export function readUpdateInput(input: unknown): ReadResult<UpdateItem> {
 	const record = unwrapJson(input);
 	let raw: unknown[];
 	if (typeof record === "object" && record !== null && !Array.isArray(record)) {
-		const obj = record as Record<string, unknown>;
+		// `task_done` is a close the store reads itself (`TaskGraphStore.update`).
+		const { task_done: _taskDone, ...obj } = record as Record<string, unknown>;
 		const list = obj.updates ?? obj.tasks ?? obj.items;
-		raw = list !== undefined ? asList(list) : [obj];
+		if (list !== undefined) {
+			raw = asList(list);
+			// Fields sent beside `updates` instead of inside it: `{status: "done",
+			// note: "…", updates: [{id: "T13"}]}`, three times in one report
+			// (mann1x/cline#118). With one update they can only be its; the
+			// update's own value wins where it has one. With several, which
+			// update they were for is a guess, so they are named instead.
+			const loose = Object.keys(obj).filter(
+				(key) => UPDATE_KEYS.has(key) && !UPDATE_ID_KEYS.has(key),
+			);
+			if (loose.length > 0) {
+				const only =
+					raw.length === 1 &&
+					typeof raw[0] === "object" &&
+					raw[0] !== null &&
+					!Array.isArray(raw[0])
+						? (raw[0] as Record<string, unknown>)
+						: undefined;
+				if (only) {
+					raw = [
+						{
+							...Object.fromEntries(loose.map((key) => [key, obj[key]])),
+							...only,
+						},
+					];
+				} else {
+					ignored.push(
+						`${loose.map((key) => `\`${key}\``).join(", ")} beside \`updates\`, which lists ${raw.length} tasks: put each inside the update it is for`,
+					);
+				}
+			}
+		} else {
+			raw = Object.keys(obj).length > 0 ? [obj] : [];
+		}
 	} else {
 		raw = asList(record);
 	}

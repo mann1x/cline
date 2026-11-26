@@ -5007,7 +5007,12 @@ export class AgentRuntime {
 	private async prepareToolExecution(
 		toolCall: AgentToolCallPart,
 	): Promise<PreparedToolExecution> {
-		const tool = this.tools.get(toolCall.toolName);
+		// A name no tool has may be one a tool answers to (`AgentTool.aliases`).
+		// The provider rejected it as unavailable before it got here; that
+		// rejection is moot once a tool takes the call.
+		const named = this.tools.get(toolCall.toolName);
+		const tool = named ?? this.aliasedTool(toolCall.toolName);
+		const aliased = !named && tool !== undefined;
 		let input = toolCall.input;
 		let skipReason: string | undefined;
 		const metadata =
@@ -5017,7 +5022,7 @@ export class AgentRuntime {
 				? (toolCall.metadata as Record<string, unknown>)
 				: undefined;
 
-		if (typeof metadata?.inputParseError === "string") {
+		if (typeof metadata?.inputParseError === "string" && !aliased) {
 			skipReason = metadata.inputParseError;
 		}
 		// A tool the session withholds on purpose has a reason, and the reason
@@ -5087,7 +5092,8 @@ export class AgentRuntime {
 
 		if (tool && !skipReason) {
 			const policy = {
-				...resolveToolPolicy(toolCall.toolName, this.config.toolPolicies),
+				// The tool's own policy, for a call made under one of its aliases too.
+				...resolveToolPolicy(tool.name, this.config.toolPolicies),
 				...policyOverride,
 			};
 			if (policy.enabled === false) {
@@ -5111,6 +5117,14 @@ export class AgentRuntime {
 			input,
 			skipReason,
 		};
+	}
+
+	/** The tool that answers to `name` as one of its aliases, when one does. */
+	private aliasedTool(name: string): AgentTool | undefined {
+		for (const tool of this.tools.values()) {
+			if (tool.aliases?.includes(name)) return tool;
+		}
+		return undefined;
 	}
 
 	private async requestToolApproval(

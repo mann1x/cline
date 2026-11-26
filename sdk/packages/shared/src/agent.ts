@@ -419,6 +419,14 @@ export interface AgentTool<TInput = unknown, TOutput = unknown>
 	timeoutMs?: number;
 	retryable?: boolean;
 	maxRetries?: number;
+	/**
+	 * Other names this tool answers to, never offered to the model. For a name
+	 * models call although no tool has it: `task_done`, which the prompt names
+	 * as a field to add to a working call, called on its own when the work has
+	 * no call to carry it (mann1x/cline#118). The runtime runs this tool for
+	 * such a call instead of rejecting it as unavailable.
+	 */
+	aliases?: readonly string[];
 	execute: (
 		input: TInput,
 		context: AgentToolContext,

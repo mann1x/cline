@@ -182,6 +182,33 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ### Fixes
 
+- **An agent on another Ollama model now gets that model's context window
+  (#118).** When a configured agent, a spawned agent or a teammate named a
+  different model on the same Ollama provider as the session, it inherited
+  the session's model list, which says nothing about that model. Ollama
+  was still sent a window (the model's declared `num_ctx`, its published
+  window for a cloud model, or 32,768), but the agent itself saw no window
+  at all. Its output was left uncapped and compaction never fired, so the
+  conversation grew past what the model could hold. The agent now records
+  the same window it sends, after asking Ollama for the model's declared
+  one first.
+- **`task_done` sent as a tool of its own now closes the task (#118).**
+  `task_done` is a field on `editor`, `apply_patch`, `run_commands` and
+  `check_file`, but a model sometimes called it as a tool, and the call
+  was rejected as unavailable. `task_update` now answers to that name. The
+  tool list offered to the model is unchanged.
+- **`task_update` no longer drops fields sent beside `updates` (#118).** A
+  model sent `{status: "done", task_done: "T1: …", updates: [{id: "T1"}]}`.
+  The `status` and the `task_done` text outside the list were dropped, and
+  the reply said there was nothing to change. Fields beside a single
+  update now go into it, and a field set inside the update wins. Beside
+  several updates, the reply names the stray fields and asks for them
+  inside the right update. `task_done` on `task_update` closes the task it
+  names, with its text as the outcome. If it names no task, the reply asks
+  for the id.
+- **A failed compaction summary now logs its reason.** The extension's
+  log keeps only the message text, so "Compaction summarizer call failed"
+  never said why. The attempt number and the error are now in the message.
 - **A long line no longer blocks every edit through it.** `read_files`
   shows at most 2,000 characters of a line, and the editor refuses an edit
   that would overwrite characters the model was never shown, so that a

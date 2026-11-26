@@ -45,6 +45,7 @@ import {
 	runDelegatedWithCap,
 	runWrapUpReport,
 } from "./agent-iteration-cap";
+import { primeAgentModelWindow } from "./agent-model-window";
 import { describeRenamedAgents, uniqueAgentNames } from "./agent-names";
 import { summarizeForLead } from "./agent-reports";
 import {
@@ -1471,6 +1472,9 @@ async function runSpawnedAgent(
 		// A random temperature is drawn around the model's own: read it from
 		// the server now if nothing local states it.
 		await primeModelTemperature(sampling, connection);
+		// And the window of a model the session does not run.
+		const priming = primeAgentModelWindow(connection);
+		if (priming) await priming;
 		// A graceful stop's report turn is not a completion to judge.
 		if (carry?.wrapUp && carry.messages.length === 0) {
 			throw new DOMException(

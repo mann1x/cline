@@ -14,6 +14,7 @@ import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-o
 import type { WorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import type { DelegatedAgentCheck } from "./agent-check";
 import { createCapWarning } from "./agent-iteration-cap";
+import { withAgentModelWindow } from "./agent-model-window";
 import type { AgentNodePlacement } from "./agent-node-placement";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
 import {
@@ -396,7 +397,11 @@ export function buildDelegatedAgentConfig(
 	options: BuildDelegatedAgentConfigOptions,
 ): AgentConfig & { role?: string } {
 	const runtimeConfig = options.configProvider.getRuntimeConfig();
-	const connection = options.configProvider.getConnectionConfig();
+	// A model the session does not run gets its window stated here, the one
+	// funnel every spawn path builds through (`agent-model-window.ts`).
+	const connection = withAgentModelWindow(
+		options.configProvider.getConnectionConfig(),
+	);
 	const polykvWorker = withPolykvLeadOwner(
 		options.polykvWorker,
 		runtimeConfig.polykvLeadOwner,

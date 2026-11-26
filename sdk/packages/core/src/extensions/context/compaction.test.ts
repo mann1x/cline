@@ -2664,8 +2664,11 @@ describe("createContextCompactionPrepareTurn", () => {
 
 		expect(result?.messages).toBeDefined();
 		expect(result?.messages[0]?.metadata?.kind).not.toBe("compaction_summary");
+		// The reason is in the message itself: the extension's logger keeps nothing else.
 		expect(log).toHaveBeenCalledWith(
-			"Compaction summarizer call failed; retrying",
+			expect.stringContaining(
+				`Compaction summarizer call failed (attempt 1 of 3): ${providerError.message}`,
+			),
 			expect.objectContaining({
 				severity: "warn",
 				errorMessage: providerError.message,

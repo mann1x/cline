@@ -1025,12 +1025,19 @@ export async function runAgenticCompaction(options: {
 				);
 				break;
 			}
-			options.logger?.log("Compaction summarizer call failed; retrying", {
-				severity: "warn",
-				attempt,
-				attempts: SUMMARY_ATTEMPTS,
-				errorMessage: error instanceof Error ? error.message : String(error),
-			});
+			// The reason goes in the message: the extension's logger drops the
+			// structured fields, and a report (mann1x/cline#118) showed fifteen of
+			// these, 20 ms apart, with nothing to say why.
+			const reason = error instanceof Error ? error.message : String(error);
+			options.logger?.log(
+				`Compaction summarizer call failed (attempt ${attempt} of ${SUMMARY_ATTEMPTS}): ${reason.replace(/\s+/g, " ").slice(0, 300)}; retrying`,
+				{
+					severity: "warn",
+					attempt,
+					attempts: SUMMARY_ATTEMPTS,
+					errorMessage: reason,
+				},
+			);
 			continue;
 		}
 		// A model can answer with more than the summary. It can copy the

@@ -95,6 +95,7 @@ export function createTool<TInput, TOutput>(config: {
 	maxRetries?: number;
 	source?: AgentToolDefinition["source"];
 	readOnly?: boolean;
+	aliases?: AgentTool["aliases"];
 }): AgentTool<TInput, TOutput>;
 export function createTool<TSchema extends z.ZodTypeAny, TOutput>(config: {
 	name: string;
@@ -112,6 +113,7 @@ export function createTool<TSchema extends z.ZodTypeAny, TOutput>(config: {
 	maxRetries?: number;
 	source?: AgentToolDefinition["source"];
 	readOnly?: boolean;
+	aliases?: AgentTool["aliases"];
 }): AgentTool<z.infer<TSchema>, TOutput>;
 export function createTool<TInput, TOutput>(config: {
 	name: string;
@@ -126,6 +128,7 @@ export function createTool<TInput, TOutput>(config: {
 	maxRetries?: number;
 	source?: AgentToolDefinition["source"];
 	readOnly?: boolean;
+	aliases?: AgentTool["aliases"];
 }): AgentTool<TInput, TOutput> {
 	const inputSchema = normalizeToolInputSchema(
 		config.inputSchema instanceof z.ZodType
@@ -140,6 +143,7 @@ export function createTool<TInput, TOutput>(config: {
 		inputSchema,
 		...(config.source ? { source: config.source } : {}),
 		...(config.readOnly ? { readOnly: true } : {}),
+		...(config.aliases?.length ? { aliases: config.aliases } : {}),
 		lifecycle: config.lifecycle,
 		executionMode: config.executionMode,
 		timeoutMs: config.timeoutMs ?? 30_000,
