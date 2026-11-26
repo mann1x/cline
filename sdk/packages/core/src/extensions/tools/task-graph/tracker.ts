@@ -15,8 +15,19 @@
  * | S4 verified | a test or build command passes while a task is active |
  * | S5 drift | a command fails after changes, or 8 calls pass, while the active task is not touched |
  * | S5 ready | a close unblocked tasks (said in `task_update`'s own result) |
+ * | S6 struggle | the struggle detector fires while a task is active (joined to its message) |
  * | S7 resume | the board, after a compaction or on resume |
  * | S8 close-out | the run ends with active or ready tasks (completion guard) |
+ *
+ * The team nudges (phase 4), with a team on the board:
+ *
+ * | id | when | to |
+ * |---|---|---|
+ * | T1 parallel | a plan's first layer has 2+ tasks nobody holds | lead, with the plan |
+ * | T2 claim | a teammate's run starts | teammate, in its run message (team-board.ts) |
+ * | T3 report | a teammate's run ends holding an active task | teammate, completion guard |
+ * | T4 idle ready | the lead waits on runs while ready tasks have no holder | lead |
+ * | T5 unblocked | a close made a held task ready | teammate, team mailbox |
  *
  * Rules shared by all of them:
  * - **Once per situation.** Each has a key (S3's is the task and the event
@@ -32,11 +43,6 @@
 
 import type { AgentTool } from "@cline/shared";
 import { WRITE_CLASS_TOOL_NAMES } from "../../../runtime/safety/loop-detection";
-import {
-	parseTaskProgress,
-	readTaskProgress,
-	TASK_PROGRESS_PARAM,
-} from "../task-progress";
 import { renderBoard, shortTitle } from "./board";
 import {
 	decideCommitGate,
@@ -56,6 +62,14 @@ import {
 	TaskGraphStore,
 	type TaskGraphStoreOptions,
 } from "./store";
+import {
+	boardToTemplate,
+	expandTaskTemplate,
+	findTaskTemplate,
+	loadTaskTemplates,
+	saveTaskTemplate,
+	type TaskTemplate,
+} from "./templates";
 import { createTaskGraphTools } from "./tools";
 
 /** The schema field: optional, short, and the same on every tool that has it. */
@@ -84,14 +98,13 @@ export interface TaskGraphTrackerOptions extends TaskGraphStoreOptions {
 	writeInterval?: number;
 	/** Called with a nudge's id each time one is queued, for logs and counts. */
 	onNudge?: (id: string, key: string) => void;
-	/**
-	 * Called on each `task_progress` a model still sends out of habit, with the
-	 * session's count so far: the reader goes once these reach zero (plan,
-	 * phase 3).
-	 */
-	onHabitualChecklist?: (count: number) => void;
 	/** Where `commit:` and GitHub gates are checked. */
 	cwd?: string;
+	/**
+	 * Where saved plans are read from, the workspace's first (phase 3
+	 * templates). The first is where the panel saves one.
+	 */
+	templateDirs?: string[];
 	// `planMode` (from the store options): the plan goes on the board, and
 	// nothing asks for work to be done, started or closed (that is act
 	// mode's, once the person agrees). Fixed for a session; a switch rebuilds it.
@@ -515,12 +528,10 @@ export class TaskGraphTracker {
 	private readonly spacing: number;
 	private readonly onNudge: ((id: string, key: string) => void) | undefined;
 	private readonly planMode: boolean;
-	private readonly onHabitualChecklist: ((count: number) => void) | undefined;
 	private readonly cwd: string | undefined;
+	private readonly templateDirs: string[];
 	/** The team, once there is one: T1 and T4 speak only then. */
 	private team: { idleReady: () => string | undefined } | undefined;
-	/** `task_progress` sends this session, read onto the board. */
-	private habitualSends = 0;
 	private calls = 0;
 	/** S5: the active task as last touched, and what has happened under it since. */
 	private drift:
@@ -560,16 +571,93 @@ export class TaskGraphTracker {
 		this.store = new TaskGraphStore(options);
 		this.spacing = Math.max(1, options.writeInterval ?? DEFAULT_NUDGE_SPACING);
 		this.onNudge = options.onNudge;
-		this.onHabitualChecklist = options.onHabitualChecklist;
 		this.cwd = options.cwd;
+		this.templateDirs = options.templateDirs ?? [];
 		this.planMode = this.store.planMode;
 	}
 
 	/** The three tools, writing to this tracker's store. */
 	tools(author?: () => string): AgentTool<unknown, unknown>[] {
-		return createTaskGraphTools(this.store, author, {
-			beforeView: () => this.checkRemoteGates(),
-		}) as AgentTool<unknown, unknown>[];
+		return createTaskGraphTools(
+			this.store,
+			author,
+			{ beforeView: () => this.checkRemoteGates() },
+			() => this.templates(),
+		) as AgentTool<unknown, unknown>[];
+	}
+
+	// -------------------------------------------------------------------------
+	// Templates (phase 3)
+	// -------------------------------------------------------------------------
+
+	/** The saved plans this session can use, read fresh each time. */
+	templates(): TaskTemplate[] {
+		return loadTaskTemplates(this.templateDirs);
+	}
+
+	/** The person starts from a saved plan, from the panel. */
+	useTemplate(
+		name: string,
+		vars: Record<string, string> = {},
+	): TaskGraphEditOutcome {
+		const template = findTaskTemplate(this.templates(), name);
+		if (!template) {
+			return { lines: [`No saved plan named "${name}".`], changed: false };
+		}
+		const { tasks, missing } = expandTaskTemplate(template, vars);
+		const outcome = this.edit({ op: "plan", tasks });
+		return {
+			lines: [
+				...outcome.lines,
+				...(missing.length
+					? [`Not filled: ${missing.map((key) => `{{${key}}}`).join(", ")}.`]
+					: []),
+			],
+			changed: outcome.changed,
+		};
+	}
+
+	/**
+	 * The board saved as a plan to repeat, into the workspace's template
+	 * folder (or the user's, `where: "user"`). Returns the file.
+	 */
+	saveTemplate(
+		name: string,
+		description?: string,
+		where: "workspace" | "user" = "workspace",
+	): string | undefined {
+		if (this.store.isEmpty()) return undefined;
+		const dir =
+			where === "user"
+				? this.templateDirs[this.templateDirs.length - 1]
+				: this.templateDirs[0];
+		if (!dir) return undefined;
+		return saveTaskTemplate(
+			dir,
+			boardToTemplate(this.store.getState(), name, description),
+		);
+	}
+
+	/**
+	 * S6: the struggle detector found the run stuck while a task is active.
+	 * Returns the sentence that goes with the detector's own message (joined
+	 * to it, not sent apart), or undefined when there is no active task or
+	 * this task's two asks are spent.
+	 */
+	noteStruggle(): string | undefined {
+		if (this.planMode) return undefined;
+		const active = this.activeTask();
+		if (!active) return undefined;
+		const key = `struggle:${active.id}`;
+		const made = this.attempts.get(key) ?? 0;
+		if (made >= MAX_ATTEMPTS) return undefined;
+		this.attempts.set(key, made + 1);
+		this.onNudge?.("S6", key);
+		const named = `${active.id} (${shortTitle(active.title, 50)})`;
+		if (made === 0) {
+			return `On the task board this is ${named}. Write down what failed on it (\`task_update\` with a \`note\`), then split it into smaller tasks with \`task_plan\` (parent "${active.id}"), or, if you are stuck on something only the person can settle, park it with a gate: \`"gate": ["human:<what you need decided>"]\`.`;
+		}
+		return `${named} is still where the run is stuck. Note on it what you have tried and what failed, and either split it (\`task_plan\`, parent "${active.id}") or give it a \`human:\` gate saying what you need decided.`;
 	}
 
 	// -------------------------------------------------------------------------
@@ -1207,60 +1295,6 @@ export class TaskGraphTracker {
 		return parts.length ? parts.join("\n\n") : undefined;
 	}
 
-	/**
-	 * A `task_progress` the model sent out of habit: the checklist is gone
-	 * (4.100.292), the field is advertised nowhere, and what it says is put on
-	 * the board rather than dropped. An item matched by title updates that task
-	 * (ticked closes it; a task already closed is never reopened by an unticked
-	 * box); an item matching nothing becomes a top-level task. Said once to the
-	 * model, so it moves to the board's own calls.
-	 */
-	recordHabitualChecklist(markdown: string, call?: string): void {
-		const items = parseTaskProgress(markdown);
-		if (items.length === 0) return;
-		this.habitualSends += 1;
-		this.onHabitualChecklist?.(this.habitualSends);
-		const key = (title: string) =>
-			title.toLowerCase().replace(/\s+/g, " ").trim();
-		const origin = { by: "model" as const, ...(call ? { call } : {}) };
-		const state = this.store.getState();
-		const byTitle = new Map<string, Task>();
-		for (const id of state.order) {
-			const task = state.tasks.get(id) as Task;
-			byTitle.set(key(task.title), task);
-		}
-		const fresh = items.filter((item) => !byTitle.has(key(item.text)));
-		if (fresh.length > 0) {
-			this.store.plan(
-				{ tasks: fresh.map((item) => ({ title: item.text })) },
-				origin,
-			);
-		}
-		const after = this.store.getState();
-		const toClose: string[] = [];
-		for (const item of items) {
-			if (!item.done) continue;
-			const task = after.order
-				.map((id) => after.tasks.get(id) as Task)
-				.find((candidate) => key(candidate.title) === key(item.text));
-			if (task && task.status !== "done" && task.status !== "cancelled") {
-				toClose.push(task.id);
-			}
-		}
-		if (toClose.length > 0) {
-			this.store.update(
-				{ updates: toClose.map((id) => ({ id, status: "done" })) },
-				origin,
-			);
-		}
-		if (this.habitualSends === 1) {
-			this.doneNotes.push(
-				"[SYSTEM] There is no `task_progress` checklist any more: the list you sent was put on the task board. Keep the plan there: `task_plan` for steps, `task_done` on the call that finishes one.",
-			);
-		}
-		this.boardDue = true;
-	}
-
 	/** S8, the completion guard: at most two different asks per session. */
 	completionGuard(): () => string | undefined {
 		return () => {
@@ -1321,15 +1355,6 @@ export function withTaskGraphCapture<TInput, TOutput>(
 					? (input as Record<string, unknown>)[TASK_DONE_PARAM]
 					: undefined;
 			tracker.recordToolCall(input, tool.name);
-			// A checklist sent out of habit, read off the raw input too.
-			const habitual =
-				TASK_GRAPH_TOOL_NAMES.has(tool.name) ||
-				tool.name === TASK_PROGRESS_PARAM
-					? undefined
-					: readTaskProgress(input);
-			if (habitual !== undefined) {
-				tracker.recordHabitualChecklist(habitual, context?.toolCallId);
-			}
 			const graphCall = TASK_GRAPH_TOOL_NAMES.has(tool.name);
 			const doneBefore = graphCall ? tracker.doneIds() : undefined;
 			let result: TOutput;

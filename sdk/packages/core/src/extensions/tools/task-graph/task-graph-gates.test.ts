@@ -488,3 +488,25 @@ describe("tracker gates", () => {
 		expect(renderMermaid(tracker.store.getState())).toContain("T2_1");
 	});
 });
+
+describe("S6 struggle", () => {
+	it("names the active task, twice at most, worded differently", () => {
+		const fired: string[] = [];
+		const tracker = new TaskGraphTracker({ onNudge: (id) => fired.push(id) });
+		expect(tracker.noteStruggle()).toBeUndefined();
+		tracker.store.plan({ tasks: [{ title: "Fix the parser", start: true }] });
+		const first = tracker.noteStruggle();
+		const second = tracker.noteStruggle();
+		expect(first).toContain("T1 (Fix the parser)");
+		expect(first).toContain("human:");
+		expect(second).toContain("still where the run is stuck");
+		expect(tracker.noteStruggle()).toBeUndefined();
+		expect(fired).toEqual(["S6", "S6"]);
+	});
+
+	it("says nothing in plan mode", () => {
+		const tracker = new TaskGraphTracker({ planMode: true });
+		tracker.store.plan({ tasks: [{ title: "x" }] });
+		expect(tracker.noteStruggle()).toBeUndefined();
+	});
+});

@@ -18,6 +18,11 @@ import {
 	TASK_VIEW_TOOL_NAME,
 	type TaskGraphStore,
 } from "./store";
+import {
+	expandTaskTemplate,
+	findTaskTemplate,
+	type TaskTemplate,
+} from "./templates";
 
 const STATUS_ENUM = ["pending", "active", "waiting", "done", "cancelled"];
 const GATE_DESCRIPTION =
@@ -37,10 +42,96 @@ function answer(
 	return [{ query, result: lines.join("\n"), success }];
 }
 
+/**
+ * `task_plan`'s `template` and `vars`: offered only when the workspace or
+ * the user has templates, so a session without any pays nothing for them.
+ */
+function templateFields(templates: readonly TaskTemplate[]): {
+	properties: Record<string, unknown>;
+	sentence: string;
+} {
+	if (templates.length === 0) return { properties: {}, sentence: "" };
+	const names = templates
+		.slice(0, 8)
+		.map((template) =>
+			template.vars.length
+				? `${template.name} (${template.vars.join(", ")})`
+				: template.name,
+		);
+	return {
+		properties: {
+			template: {
+				type: "string",
+				description:
+					"Put a saved plan on the board: its tasks are added after any in `tasks`.",
+			},
+			vars: {
+				type: "object",
+				description: "Values for the template's {{names}}.",
+				additionalProperties: { type: "string" },
+			},
+		},
+		sentence: ` Saved plans (\`template\`): ${names.join("; ")}${templates.length > names.length ? `; +${templates.length - names.length} more` : ""}.`,
+	};
+}
+
+/** The call's input with a named template's tasks added, or why it could not be. */
+function withTemplate(
+	input: unknown,
+	templates: readonly TaskTemplate[],
+): { input: unknown; lines: string[]; refused?: string } {
+	if (!input || typeof input !== "object" || Array.isArray(input)) {
+		return { input, lines: [] };
+	}
+	const record = input as Record<string, unknown>;
+	const name =
+		typeof record.template === "string" ? record.template.trim() : "";
+	if (!name) return { input, lines: [] };
+	const template = findTaskTemplate(templates, name);
+	if (!template) {
+		return {
+			input,
+			lines: [],
+			refused: `No saved plan named "${name}".${
+				templates.length
+					? ` Saved plans: ${templates.map((entry) => entry.name).join(", ")}.`
+					: " There are none in this workspace."
+			}`,
+		};
+	}
+	const own = Array.isArray(record.tasks) ? record.tasks : [];
+	const vars =
+		record.vars &&
+		typeof record.vars === "object" &&
+		!Array.isArray(record.vars)
+			? Object.fromEntries(
+					Object.entries(record.vars as Record<string, unknown>).map(
+						([key, value]) => [key, String(value)],
+					),
+				)
+			: {};
+	const expanded = expandTaskTemplate(template, vars, own.length);
+	const { template: _t, vars: _v, ...rest } = record;
+	return {
+		input: { ...rest, tasks: [...own, ...expanded.tasks] },
+		lines: [
+			`From the saved plan "${template.name}": ${expanded.tasks.length} tasks.`,
+			...(expanded.missing.length
+				? [
+						`Not filled: ${expanded.missing.map((key) => `{{${key}}}`).join(", ")}; send them in \`vars\`, or edit the tasks.`,
+					]
+				: []),
+		],
+	};
+}
+
 export function createTaskPlanTool(
 	store: TaskGraphStore,
 	author: () => string = () => "model",
+	templates: () => readonly TaskTemplate[] = () => [],
 ): AgentTool<unknown, ToolOperationResult[]> {
+	const offered = templates();
+	const templateExtra = templateFields(offered);
 	return createTool<unknown, ToolOperationResult[]>({
 		name: TASK_PLAN_TOOL_NAME,
 		description: store.planMode
@@ -52,7 +143,8 @@ export function createTaskPlanTool(
 			: "Write down the work as tasks, with the order between them, in one call. " +
 				"Plan before you change files: list every step the request needs, each with what has to be true when it is done (`acceptance`). " +
 				'In `depends` and `parent`, "#2" means the second task of this same call, so the whole plan goes in at once; an existing task is named by its id (T3). ' +
-				"Returns the ids and the order; the first ready task is started for you.",
+				"Returns the ids and the order; the first ready task is started for you." +
+				templateExtra.sentence,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -96,18 +188,27 @@ export function createTaskPlanTool(
 						required: ["title"],
 					},
 				},
+				...templateExtra.properties,
 			},
-			required: ["tasks"],
+			...(offered.length ? {} : { required: ["tasks"] }),
 		},
 		retryable: false,
 		maxRetries: 0,
 		execute: async (input, context) => {
-			const outcome = store.plan(input, {
+			const expanded = withTemplate(input, templates());
+			if (expanded.refused) {
+				return answer(TASK_PLAN_TOOL_NAME, [expanded.refused], false);
+			}
+			const outcome = store.plan(expanded.input, {
 				by: author(),
 				...(context?.toolCallId ? { call: context.toolCallId } : {}),
 			});
 			// The store starts the first ready task when nothing is active.
-			return answer(TASK_PLAN_TOOL_NAME, outcome.lines, outcome.changed);
+			return answer(
+				TASK_PLAN_TOOL_NAME,
+				[...expanded.lines, ...outcome.lines],
+				outcome.changed,
+			);
 		},
 	});
 }
@@ -296,9 +397,10 @@ export function createTaskGraphTools(
 	store: TaskGraphStore,
 	author?: () => string,
 	viewHooks?: TaskViewHooks,
+	templates?: () => readonly TaskTemplate[],
 ): AgentTool<unknown, ToolOperationResult[]>[] {
 	return [
-		createTaskPlanTool(store, author),
+		createTaskPlanTool(store, author, templates),
 		createTaskUpdateTool(store, author),
 		createTaskViewTool(store, viewHooks),
 	];

@@ -489,6 +489,27 @@ export interface CoreTaskGraphControl {
 		tasks: number;
 		open: number;
 	};
+	/** Saved plans this session can use (phase 3 templates). */
+	templates?(): {
+		name: string;
+		description?: string;
+		vars: string[];
+		tasks: number;
+		source: string;
+	}[];
+	/** The person starts from a saved plan: its tasks go on the board as theirs. */
+	useTemplate?(
+		name: string,
+		vars?: Record<string, string>,
+	): TaskGraphEditOutcome;
+	/** Save the board as a plan to repeat; returns the file, or undefined with no board. */
+	saveTemplate?(
+		name: string,
+		description?: string,
+		where?: "workspace" | "user",
+	): string | undefined;
+	/** The board as a Mermaid flowchart, for the panel's drawing. */
+	mermaid?(): string;
 }
 
 /**

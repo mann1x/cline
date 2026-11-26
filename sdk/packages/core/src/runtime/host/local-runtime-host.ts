@@ -57,7 +57,9 @@ import {
 } from "../../extensions/tools/list-files";
 import {
 	createGraphTeamBoard,
+	renderMermaid,
 	TaskGraphTracker,
+	taskTemplateDirs,
 	withTaskBoardRules,
 	withTaskGraphCapture,
 } from "../../extensions/tools/task-graph";
@@ -1293,14 +1295,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 					logPath: join(sessionDir, `${sessionId}.tasks.jsonl`),
 					planMode: configWithProvider.mode === "plan",
 					...(configWithProvider.cwd ? { cwd: configWithProvider.cwd } : {}),
+					templateDirs: taskTemplateDirs(
+						configWithProvider.workspaceRoot ?? configWithProvider.cwd,
+					),
 					onForcedClaim: (id, from, to) =>
 						configWithProvider.logger?.log?.(
 							`[task-graph] ${to} took ${id} over from ${from} (forced)`,
-							{ sessionId },
-						),
-					onHabitualChecklist: (count) =>
-						configWithProvider.logger?.log?.(
-							`[task-graph] habitual task_progress send #${count}, read onto the board`,
 							{ sessionId },
 						),
 					onNudge: (id, key) =>
@@ -1356,6 +1356,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 				snapshot: () => taskGraphTracker.store.snapshot(),
 				exportBoard: (header) =>
 					taskGraphTracker.exportBoard({ ...header, sessionId }),
+				templates: () =>
+					taskGraphTracker.templates().map((template) => ({
+						name: template.name,
+						...(template.description
+							? { description: template.description }
+							: {}),
+						vars: template.vars,
+						tasks: template.tasks.length,
+						source: template.source,
+					})),
+				useTemplate: (name, vars) => taskGraphTracker.useTemplate(name, vars),
+				saveTemplate: (name, description, where) =>
+					taskGraphTracker.saveTemplate(name, description, where),
+				mermaid: () => renderMermaid(taskGraphTracker.store.getState()),
 			});
 		}
 		// The checklist is gone (4.100.292); a host's toolset that still names a
@@ -2358,16 +2372,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 							verdict.files,
 							configWithProvider.workspaceRoot ?? configWithProvider.cwd,
 						).then(({ lines, high, broken }) => {
+							// S6: the task it is stuck on, joined to the same message.
+							const onTheBoard = taskGraphTracker?.noteStruggle();
+							const nudge = describeEscalationNudge({
+								diagnosis: verdict.message as string,
+								complexity: lines,
+								high,
+								broken,
+								...(verdict.reason ? { reason: verdict.reason } : {}),
+								canDelegate,
+								remaining,
+							});
 							struggleSuggestion.hold(
-								describeEscalationNudge({
-									diagnosis: verdict.message as string,
-									complexity: lines,
-									high,
-									broken,
-									...(verdict.reason ? { reason: verdict.reason } : {}),
-									canDelegate,
-									remaining,
-								}),
+								onTheBoard ? `${nudge}\n\n${onTheBoard}` : nudge,
 							);
 							// On the event stream as well as in the model's next
 							// tool result. The suggestion is what the model reads;

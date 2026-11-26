@@ -1348,11 +1348,10 @@ describe("a task_progress sent out of habit", () => {
 		execute: async () => ok,
 	} as unknown as Parameters<typeof withTaskGraphCapture>[0];
 
-	it("is read onto the board, never advertised, counted, and said once", async () => {
-		const counts: number[] = [];
-		const tracker = new TaskGraphTracker({
-			onHabitualChecklist: (n) => counts.push(n),
-		});
+	// The reader went once the sends reached zero (plan phase 3): 0 in the
+	// phase 3 A/B, 0 in six days of pandorum logs (2026-11-26).
+	it("is no longer read onto the board, and never advertised", async () => {
+		const tracker = new TaskGraphTracker();
 		const tool = withTaskGraphCapture(editTool, tracker);
 		expect(JSON.stringify(tool.inputSchema)).not.toContain("task_progress");
 		await tool.execute(
@@ -1361,40 +1360,6 @@ describe("a task_progress sent out of habit", () => {
 				task_progress: "- [x] Store cents\n- [ ] Report totals",
 			} as never,
 			{ toolCallId: "c1" } as never,
-		);
-		const board = tracker.store.snapshot();
-		expect(board.tasks.map((task) => [task.title, task.status])).toEqual([
-			["Store cents", "done"],
-			// Started by itself once the one before it closed, as any plan's is.
-			["Report totals", "active"],
-		]);
-		expect(tracker.takePendingReminder() ?? "").toContain(
-			"There is no `task_progress` checklist any more",
-		);
-		// A later send updates by title, and an unticked box never reopens.
-		await tool.execute(
-			{
-				path: "/w/a.py",
-				task_progress: ["- [ ] store cents", "- [x] Report totals"],
-			} as never,
-			{ toolCallId: "c2" } as never,
-		);
-		expect(tracker.store.snapshot().tasks.map((task) => task.status)).toEqual([
-			"done",
-			"done",
-		]);
-		expect(tracker.takePendingReminder() ?? "").not.toContain(
-			"There is no `task_progress`",
-		);
-		expect(counts).toEqual([1, 2]);
-	});
-
-	it("ignores a send with no items", async () => {
-		const tracker = new TaskGraphTracker();
-		const tool = withTaskGraphCapture(editTool, tracker);
-		await tool.execute(
-			{ path: "/w/a.py", task_progress: "working on it" } as never,
-			{} as never,
 		);
 		expect(tracker.store.snapshot().counts.total).toBe(0);
 	});

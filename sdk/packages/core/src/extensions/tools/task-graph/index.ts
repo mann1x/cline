@@ -46,6 +46,15 @@ export {
 	toolCallsInHistory,
 } from "./store";
 export { createGraphTeamBoard } from "./team-board";
+export {
+	boardToTemplate,
+	expandTaskTemplate,
+	loadTaskTemplates,
+	saveTaskTemplate,
+	TASK_TEMPLATE_DIR,
+	type TaskTemplate,
+	taskTemplateDirs,
+} from "./templates";
 export { createTaskGraphTools } from "./tools";
 export {
 	buildTaskBoardRules,
