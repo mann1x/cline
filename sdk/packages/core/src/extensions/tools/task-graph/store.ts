@@ -32,11 +32,13 @@ import {
 	emptyTaskGraphState,
 	foldTaskEvents,
 	isClosed,
+	isPipelineHeld,
 	isReady,
 	isTaskLinkType,
 	nextTaskId,
 	openDependencies,
 	openGates,
+	PIPELINE_HOLDER_PREFIX,
 	readyTasks,
 	type Task,
 	type TaskAuthor,
@@ -382,6 +384,7 @@ export class TaskGraphStore {
 	private readonly now: () => number;
 	readonly planMode: boolean;
 	private isHolderLive: ((holder: string) => boolean) | undefined;
+	private readonly livePipelines = new Set<string>();
 	private readonly onForcedClaim:
 		| ((id: string, from: string, to: string) => void)
 		| undefined;
@@ -729,9 +732,12 @@ export class TaskGraphStore {
 		// A teammate's close starts nothing for it: it claims its next task,
 		// and the lead hands the rest out.
 		if (this.planMode || isAgentAuthor(origin.by)) return;
-		const active = this.state.order.some(
-			(id) => this.state.tasks.get(id)?.status === "active",
-		);
+		// A pipeline run's task is the run's, done asynchronously: the model
+		// carries on with its own work beside it.
+		const active = this.state.order.some((id) => {
+			const task = this.state.tasks.get(id);
+			return task?.status === "active" && !isPipelineHeld(task);
+		});
 		if (active) return;
 		const next = readyTasks(this.state)[0];
 		if (!next) return;
@@ -974,7 +980,7 @@ export class TaskGraphStore {
 			holder !== (origin.by ?? "model") &&
 			origin.by !== "user" &&
 			!isClosed(task.status) &&
-			(this.isHolderLive?.(holder) ?? true);
+			this.holderLive(holder);
 		let statusAllowed = true;
 		if (wantsStatus && heldByOther) {
 			if (item.force) {
@@ -1314,6 +1320,22 @@ export class TaskGraphStore {
 	/** Whether a holder's claim still stands. Set once the team exists. */
 	setHolderLive(check: ((holder: string) => boolean) | undefined): void {
 		this.isHolderLive = check;
+	}
+
+	/**
+	 * A pipeline run holds its task while it runs. Its liveness is the
+	 * runner's to say, not the team's: a run is not a teammate.
+	 */
+	setPipelineLive(holder: string, live: boolean): void {
+		if (live) this.livePipelines.add(holder);
+		else this.livePipelines.delete(holder);
+	}
+
+	private holderLive(holder: string): boolean {
+		if (holder.startsWith(PIPELINE_HOLDER_PREFIX)) {
+			return this.livePipelines.has(holder);
+		}
+		return this.isHolderLive?.(holder) ?? true;
 	}
 
 	// -------------------------------------------------------------------------

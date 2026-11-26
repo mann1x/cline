@@ -50,7 +50,14 @@ import {
 	decideTimerGate,
 	humanGatesAnswered,
 } from "./gates";
-import { isReady, openWork, parseGate, type Task, taskLayers } from "./model";
+import {
+	isPipelineHeld,
+	isReady,
+	openWork,
+	parseGate,
+	type Task,
+	taskLayers,
+} from "./model";
 import { type ExportedTaskBoard, exportTaskEvents } from "./saved-board";
 import {
 	type GateDecision,
@@ -912,7 +919,7 @@ export class TaskGraphTracker {
 		const state = this.store.getState();
 		return state.order
 			.map((id) => state.tasks.get(id) as Task)
-			.find((task) => task.status === "active");
+			.find((task) => task.status === "active" && !isPipelineHeld(task));
 	}
 
 	/**

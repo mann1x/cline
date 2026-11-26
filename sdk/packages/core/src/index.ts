@@ -1234,6 +1234,17 @@ export {
 	workspaceLanguages,
 } from "./extensions/lsp/lsp-host";
 export {
+	NODE_TYPES,
+	type PipelineDefinition,
+	type PipelineHost,
+	PipelineRun,
+	type PipelineRunOptions,
+	type PipelineRunResult,
+	pipelineHash,
+	RUNNABLE_NODE_TYPES,
+	validatePipeline,
+} from "./extensions/pipelines";
+export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,
 	type ApplyPatchInput,

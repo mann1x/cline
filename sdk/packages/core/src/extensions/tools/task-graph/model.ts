@@ -39,6 +39,7 @@ export interface AcceptanceItem {
  * | `commit:<sha>@<branch>` | the branch contains the commit |
  * | `timer:<ISO time>` | the time passes |
  * | `gh-pr:<owner/repo#n>` / `gh-run:<owner/repo/id>` | merged / succeeded |
+ * | `pipeline:<run>` | a pipeline run ends (fails when the run fails) |
  *
  * A gate that can no longer open (the run failed, the PR was closed) is
  * marked failed once and stays, for the model or the person to remove.
@@ -58,6 +59,7 @@ export const GATE_KINDS = [
 	"timer",
 	"gh-pr",
 	"gh-run",
+	"pipeline",
 ] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
 
@@ -586,6 +588,22 @@ export function openWork(state: TaskGraphState): Task[] {
 		.filter(
 			(task) =>
 				!isParked(state, task) &&
+				!isPipelineHeld(task) &&
 				(task.status === "active" || isReady(state, task)),
 		);
+}
+
+/** The holder a pipeline run claims its task as: `pipeline:<run id>`. */
+export const PIPELINE_HOLDER_PREFIX = "pipeline:";
+
+/**
+ * A task a pipeline run holds: the run is doing it, asynchronously. It is
+ * not the model's active work, so it neither blocks the auto-start nor is
+ * asked to be closed at the end of a run; the run closes it.
+ */
+export function isPipelineHeld(task: Task): boolean {
+	return (
+		!!task.claimedBy?.startsWith(PIPELINE_HOLDER_PREFIX) &&
+		!isClosed(task.status)
+	);
 }
