@@ -648,3 +648,6 @@ Run an `awk` program over one or more files. This is the tool for column-based q
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

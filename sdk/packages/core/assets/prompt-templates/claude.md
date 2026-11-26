@@ -573,3 +573,6 @@ Only after the user approves the plan in a message sent *after* you presented it
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

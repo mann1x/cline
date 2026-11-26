@@ -403,3 +403,6 @@ Run an `awk` program over one or more files. This runs in-process and behaves id
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

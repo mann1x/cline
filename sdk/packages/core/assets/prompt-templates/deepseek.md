@@ -396,3 +396,6 @@ Output: one entry for the run, named by the program you sent as `awk:<program>`,
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

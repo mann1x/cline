@@ -41,7 +41,33 @@ export {
 	resolveInputs,
 } from "./runner";
 export {
+	type PipelineRunSummary,
+	PipelineSession,
+	type PipelineSessionOptions,
+	unpinnedSideEffects,
+} from "./session";
+export {
+	createPipelineTool,
+	PIPELINE_ACTIONS,
+	PIPELINE_RULES,
+	PIPELINE_TOOL_DESCRIPTION,
+	PIPELINE_TOOL_NAME,
+	withPipelineRules,
+} from "./tool";
+export {
 	type PipelineValidation,
 	pipelineHash,
 	validatePipeline,
 } from "./validate";
+export {
+	approvePipeline,
+	findPipeline,
+	listPipelines,
+	PIPELINES_DIR,
+	type PipelineApproval,
+	type PipelineFile,
+	pipelineSlug,
+	pipelinesDir,
+	readApprovals,
+	savePipeline,
+} from "./workspace";

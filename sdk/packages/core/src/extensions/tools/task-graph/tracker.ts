@@ -686,6 +686,17 @@ export class TaskGraphTracker {
 		this.boardDue = true;
 	}
 
+	/**
+	 * A pipeline run ended: what its close did to the board (its task
+	 * closed, `pipeline:` gates opened, what became ready), told with the
+	 * next request -- the model was working on something else meanwhile.
+	 */
+	notePipelineEnded(lines: readonly string[]): void {
+		if (lines.length === 0) return;
+		this.doneNotes.push(`[SYSTEM] A pipeline run ended. ${lines.join(" ")}`);
+		this.boardDue = true;
+	}
+
 	/** T1: a plan whose first layer has two or more tasks, with a team to run them. */
 	private nudgeParallel(input: unknown): void {
 		if (!this.team || this.planMode) return;

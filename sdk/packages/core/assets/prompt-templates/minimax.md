@@ -484,3 +484,6 @@ Output: one result, named `awk:<program>`, holding everything the program printe
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

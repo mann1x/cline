@@ -441,3 +441,6 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

@@ -381,3 +381,6 @@ Output: one result for the whole call, named `awk:<program>`, holding everything
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

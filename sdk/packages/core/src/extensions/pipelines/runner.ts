@@ -49,6 +49,8 @@ export interface NodeContext {
 	run: string;
 	node: string;
 	signal: AbortSignal;
+	/** The run's task on the conversation's board, when it has one. */
+	task?: string;
 }
 
 /** What a run needs from the session it runs in. */
@@ -649,7 +651,12 @@ export class PipelineRun {
 		extra: ExpressionScope,
 	): Promise<NodeOutput> {
 		const signal = this.signalFor(node);
-		const context: NodeContext = { run: this.id, node: node.id, signal };
+		const context: NodeContext = {
+			run: this.id,
+			node: node.id,
+			signal,
+			...(this.conversationTask ? { task: this.conversationTask } : {}),
+		};
 		const scope = this.scope(items, extra);
 		const raced = <T>(work: Promise<T>): Promise<T> =>
 			new Promise<T>((resolve, reject) => {

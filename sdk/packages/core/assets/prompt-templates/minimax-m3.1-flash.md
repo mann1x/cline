@@ -578,3 +578,6 @@ The result is a one-line plain-text confirmation. This call ends the current run
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

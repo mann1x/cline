@@ -356,3 +356,6 @@ Run an `awk` program over one or more files. Provide the program text (examples:
 
 # tool: task_view
 {{DEFAULT}}
+
+# tool: pipeline
+{{DEFAULT}}

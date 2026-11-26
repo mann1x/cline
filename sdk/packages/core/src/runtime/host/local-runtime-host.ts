@@ -34,6 +34,12 @@ import {
 import type { CompactionRevisions } from "../../extensions/context/compaction-revisions";
 import { releasePolykvSession } from "../../extensions/context/polykv-session";
 import { buildToolLedger } from "../../extensions/context/tool-ledger";
+import { PipelineSession } from "../../extensions/pipelines/session";
+import {
+	createPipelineTool,
+	PIPELINE_TOOL_NAME,
+	withPipelineRules,
+} from "../../extensions/pipelines/tool";
 import type { ToolExecutors } from "../../extensions/tools";
 import {
 	DefaultToolNames,
@@ -1288,6 +1294,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 					typeof runtime.teamRuntime?.useTaskBoard === "function",
 				) ?? configWithProvider.systemPrompt;
 		}
+		// Pipelines: off unless Features turns them on, and then off again for
+		// a provider whose tool selection drops `pipeline` (a small model).
+		// Not in plan mode: a pipeline writes files and runs commands.
+		const pipelinesOn =
+			configWithProvider.pipelines?.enabled === true &&
+			configWithProvider.mode !== "plan" &&
+			!(configWithProvider.providerConfig?.tools?.disabled ?? []).includes(
+				PIPELINE_TOOL_NAME,
+			);
+		if (pipelinesOn) {
+			configWithProvider.systemPrompt =
+				withPipelineRules(configWithProvider.systemPrompt) ??
+				configWithProvider.systemPrompt;
+		}
 		// On unless the host turns it off: the graph replaced the checklist
 		// (4.100.292), and an SDK session runs what the plugin runs.
 		const taskGraphOn = taskGraphConfig?.enabled !== false;
@@ -1400,7 +1420,41 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// cannot, and on the CLI the measured result of the latter was ten edits,
 		// no checks, and "the implementation is complete" on a file that does not
 		// parse.
-		const checklessTools = mergedToolsWithChecklist;
+		// The pipeline tool: its runs call this session's own tools (the final,
+		// wrapped list, read when a node runs) under this session's policies.
+		const pipelineWorkspace =
+			configWithProvider.workspaceRoot ?? configWithProvider.cwd;
+		const pipelineSession: PipelineSession | undefined =
+			pipelinesOn && pipelineWorkspace
+				? new PipelineSession({
+						workspaceRoot: pipelineWorkspace,
+						sessionId,
+						...(taskGraphTracker ? { board: taskGraphTracker.store } : {}),
+						tools: (): readonly AgentTool[] => tools as readonly AgentTool[],
+						...(bootstrap.toolPolicies
+							? { toolPolicies: bootstrap.toolPolicies }
+							: {}),
+						...(bootstrap.requestToolApproval
+							? { requestApproval: bootstrap.requestToolApproval }
+							: {}),
+						log: (line) =>
+							configWithProvider.logger?.log?.(line, { sessionId }),
+						onRunChange: (run) =>
+							configWithProvider.pipelines?.onRunChange?.({
+								id: run.id,
+								view: () => run.view(),
+							}),
+						onRunEnded: (_run, lines) => {
+							if (lines.length > 0) taskGraphTracker?.notePipelineEnded(lines);
+						},
+					})
+				: undefined;
+		const checklessTools = pipelineSession
+			? [
+					...mergedToolsWithChecklist,
+					createPipelineTool(pipelineSession, pipelineWorkspace as string),
+				]
+			: mergedToolsWithChecklist;
 		const mergedToolsWithChecker = checklessTools.some(
 			(tool) => tool.name === CHECK_FILE_TOOL_NAME,
 		)

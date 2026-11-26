@@ -1234,8 +1234,15 @@ export {
 	workspaceLanguages,
 } from "./extensions/lsp/lsp-host";
 export {
+	approvePipeline,
+	findPipeline,
+	listPipelines,
 	NODE_TYPES,
+	PIPELINE_TOOL_DESCRIPTION,
+	PIPELINE_TOOL_NAME,
+	PIPELINES_DIR,
 	type PipelineDefinition,
+	type PipelineFile,
 	type PipelineHost,
 	PipelineRun,
 	type PipelineRunOptions,

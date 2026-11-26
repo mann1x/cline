@@ -455,6 +455,12 @@ export interface CoreCompactionSummarizerConfig {
  * On unless `enabled` is false (plan: docs/protocols/PLAN-task-graph.md,
  * phase 3).
  */
+export interface CorePipelinesConfig {
+	enabled: boolean;
+	/** A run started, changed or ended, for the host's panel. */
+	onRunChange?: (run: { id: string; view: () => unknown }) => void;
+}
+
 export interface CoreTaskGraphConfig {
 	enabled: boolean;
 	/** File-changing calls between repeats of the untracked-edit nudge. */
@@ -1141,6 +1147,12 @@ export interface CoreSessionConfig
 	extraTools?: AgentTool[];
 	/** The task graph: on unless `enabled` is false. */
 	taskGraph?: CoreTaskGraphConfig;
+	/**
+	 * Pipelines (plan PLAN-n8n-pipelines.md): the `pipeline` tool and its
+	 * runs. Off unless `enabled` is true, as Features → Pipelines is; a
+	 * provider that lists `pipeline` in `tools.disabled` does not get it.
+	 */
+	pipelines?: CorePipelinesConfig;
 	/**
 	 * Whether the run may end with a file the model changed and never checked.
 	 *

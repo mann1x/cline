@@ -10,6 +10,8 @@
  * read by both.
  */
 import { createSessionRevisions } from "../../runtime/atomic/session-revisions";
+import { PipelineSession } from "../pipelines/session";
+import { createPipelineTool } from "../pipelines/tool";
 import {
 	createApplyPatchTool,
 	createAskQuestionTool,
@@ -101,5 +103,13 @@ export function templateToolInventory(): {
 			teammateConfigProvider: {} as never,
 		}),
 		...new TaskGraphTracker().tools(),
+		createPipelineTool(
+			new PipelineSession({
+				workspaceRoot: "/workspace",
+				sessionId: "s",
+				tools: () => [],
+			}),
+			"/workspace",
+		),
 	] as { name: string; description?: string }[];
 }

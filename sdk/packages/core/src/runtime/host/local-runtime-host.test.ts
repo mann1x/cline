@@ -526,6 +526,75 @@ describe("LocalRuntimeHost", () => {
 		expect(names).not.toContain("task_progress");
 	});
 
+	it.each([
+		{ label: "off by default", overrides: {}, expected: false },
+		{
+			label: "on",
+			overrides: { pipelines: { enabled: true } },
+			expected: true,
+		},
+		{
+			label: "on, but the provider's tool selection drops it",
+			overrides: {
+				pipelines: { enabled: true },
+				providerConfig: {
+					providerId: "mock-provider",
+					tools: { disabled: ["pipeline"] },
+				},
+			},
+			expected: false,
+		},
+		{
+			label: "on, in plan mode",
+			overrides: { pipelines: { enabled: true }, mode: "plan" },
+			expected: false,
+		},
+	] as const)("offers the pipeline tool only when it is on and allowed ($label)", async ({
+		overrides,
+		expected,
+	}) => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-pipelines"),
+			getConversationId: vi.fn().mockReturnValue("conv-pipelines"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig:
+			| { tools?: Array<{ name: string }>; systemPrompt?: string }
+			| undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: typeof agentConfig) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig(overrides as Partial<CoreSessionConfig>),
+				prompt: "hello",
+			}),
+		);
+		const names = (agentConfig?.tools ?? []).map((tool) => tool.name);
+		expect(names.includes("pipeline")).toBe(expected);
+		expect((agentConfig?.systemPrompt ?? "").includes("# Pipelines")).toBe(
+			expected,
+		);
+	});
+
 	it("runs the task graph in place of the checklist when it is on", async () => {
 		// The graph replaces the checklist: its three tools, no `task_progress`
 		// tool, no `task_progress` parameter on any other tool -- even with the
