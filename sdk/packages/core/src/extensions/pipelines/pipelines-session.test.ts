@@ -292,3 +292,55 @@ describe("the session host", () => {
 		expect(told).toContain("T2: pipeline:say-hello-1 opened.");
 	});
 });
+
+describe("pipeline wait", () => {
+	// Phase 5's smoke (deepseek-v4.1-flash, pgate): the model gated its task on the
+	// run and then waited with `sleep 60` in the shell, the only wait it had.
+	const slow = (seconds: number): PipelineDefinition => ({
+		name: "Slow",
+		nodes: [
+			{
+				id: "nap",
+				type: "command",
+				command: `sleep ${seconds} && echo rested`,
+			},
+		],
+	});
+
+	it("returns when the run ends, with how it ended", async () => {
+		savePipeline(root, slow(0.3));
+		approvePipeline(root, "slow");
+		const tool = createPipelineTool(session(), root);
+		const started = await call(tool, { action: "run", name: "slow" });
+		const runId = /Started (\S+?)[ :]/.exec(started.result)?.[1] as string;
+		expect(runId).toBeTruthy();
+		const waited = await call(tool, {
+			action: "wait",
+			run: runId,
+			timeout: 20,
+		});
+		expect(waited.success).toBe(true);
+		expect(waited.result).toContain(`${runId} (Slow): done`);
+		expect(waited.result).toContain("- nap: done");
+	});
+
+	it("gives up after its timeout and says the run is still going", async () => {
+		savePipeline(root, slow(3));
+		approvePipeline(root, "slow");
+		const s = session();
+		const tool = createPipelineTool(s, root);
+		const started = await call(tool, { action: "run", name: "slow" });
+		const runId = /Started (\S+?)[ :]/.exec(started.result)?.[1] as string;
+		const at = Date.now();
+		const waited = await call(tool, { action: "wait", run: runId, timeout: 1 });
+		expect(Date.now() - at).toBeLessThan(2500);
+		expect(waited.result).toContain("is still running after 1 s");
+		s.stop(runId);
+	});
+
+	it("refuses a run it does not know", async () => {
+		const tool = createPipelineTool(session(), root);
+		const missing = await call(tool, { action: "wait", run: "nope-1" });
+		expect(missing.success).toBe(false);
+	});
+});

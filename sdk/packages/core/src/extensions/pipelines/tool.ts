@@ -36,6 +36,7 @@ export const PIPELINE_ACTIONS = [
 	"run",
 	"test",
 	"status",
+	"wait",
 	"stop",
 	"resume",
 	"rerun",
@@ -49,7 +50,7 @@ export const PIPELINE_TOOL_DESCRIPTION =
 	"Actions: list; catalog (the node types and their fields: read it before writing one); show (name); " +
 	"save (pipeline: the JSON; base: the version `show` gave, to replace a file); validate (pipeline); " +
 	"run (name, inputs; task: a task id that waits on the run); test (name or pipeline, inputs, until?: a node to stop after; pinned, no side effects); " +
-	"status, stop, resume (run); rerun (run, node: run again from that node, reusing what came before); runs. " +
+	"status, stop, resume (run); wait (run, timeout?: s, 600, at most 1800: returns when the run ends); rerun (run, node: run again from that node, reusing what came before); runs. " +
 	"A saved pipeline is a proposal: only a version the person approved runs; `test` runs any version.";
 
 const CATALOG = [
@@ -123,7 +124,11 @@ export function createPipelineTool(
 				},
 				run: {
 					type: "string",
-					description: "A run id, for status, stop, resume and rerun.",
+					description: "A run id, for status, wait, stop, resume and rerun.",
+				},
+				timeout: {
+					type: "number",
+					description: "wait: seconds to wait at most (600; at most 1800).",
 				},
 				node: {
 					type: "string",
@@ -142,7 +147,7 @@ export function createPipelineTool(
 		},
 		retryable: false,
 		maxRetries: 0,
-		execute: async (input) => {
+		execute: async (input, context) => {
 			const args = record(input);
 			const action =
 				typeof args.action === "string" ? args.action.toLowerCase() : "";
@@ -152,6 +157,42 @@ export function createPipelineTool(
 			): ToolOperationResult[] => [
 				{ query: `pipeline ${action}`, result: lines.join("\n"), success },
 			];
+			/** A run's state in lines, live or from its journal; undefined when there is no such run. */
+			const statusLines = (runId: string): string[] | undefined => {
+				const live = session.get(runId);
+				const view =
+					live?.view() ??
+					(() => {
+						const fold = foldJournal(
+							readJournal(`${session.journalDir}/${runId}.jsonl`),
+						);
+						if (!fold.run) return undefined;
+						return {
+							run: runId,
+							pipeline: fold.run.pipeline,
+							status: fold.status,
+							error: fold.error,
+							nodes: [...fold.nodes.entries()].map(([id, state]) => ({
+								id,
+								status: state.status,
+								summary: state.output
+									? `${state.output.items.length} items`
+									: undefined,
+								error: state.error,
+								reason: state.reason,
+								waitingOn: state.waitingOn,
+							})),
+						};
+					})();
+				if (!view) return undefined;
+				return [
+					`${view.run} (${view.pipeline}): ${view.status}${view.error ? ` — ${view.error}` : ""}.`,
+					...view.nodes.map(
+						(node) =>
+							`- ${node.id}: ${node.status}${node.waitingOn ? `, waiting on ${node.waitingOn}` : ""}${node.summary ? `, ${node.summary}` : ""}${node.error ? `, ${node.error}` : ""}${node.reason ? ` (${node.reason})` : ""}`,
+					),
+				];
+			};
 			const name = typeof args.name === "string" ? args.name : "";
 			const runId = typeof args.run === "string" ? args.run : "";
 			const inputs = asObject(args.inputs) ?? {};
@@ -301,41 +342,41 @@ export function createPipelineTool(
 							result.status === "done",
 						);
 					}
-					case "status": {
+					case "wait": {
 						const live = session.get(runId);
-						const view =
-							live?.view() ??
-							(() => {
-								const fold = foldJournal(
-									readJournal(`${session.journalDir}/${runId}.jsonl`),
-								);
-								if (!fold.run) return undefined;
-								return {
-									run: runId,
-									pipeline: fold.run.pipeline,
-									status: fold.status,
-									error: fold.error,
-									nodes: [...fold.nodes.entries()].map(([id, state]) => ({
-										id,
-										status: state.status,
-										summary: state.output
-											? `${state.output.items.length} items`
-											: undefined,
-										error: state.error,
-										reason: state.reason,
-										waitingOn: state.waitingOn,
-									})),
-								};
-							})();
-						if (!view)
-							return answer([`No run "${runId}". \`runs\` lists them.`], false);
-						return answer([
-							`${view.run} (${view.pipeline}): ${view.status}${view.error ? ` — ${view.error}` : ""}.`,
-							...view.nodes.map(
-								(node) =>
-									`- ${node.id}: ${node.status}${node.waitingOn ? `, waiting on ${node.waitingOn}` : ""}${node.summary ? `, ${node.summary}` : ""}${node.error ? `, ${node.error}` : ""}${node.reason ? ` (${node.reason})` : ""}`,
-							),
-						]);
+						if (live) {
+							const seconds = Math.min(
+								WAIT_MAX_S,
+								Math.max(
+									1,
+									typeof args.timeout === "number" && args.timeout > 0
+										? args.timeout
+										: WAIT_DEFAULT_S,
+								),
+							);
+							const ended = await waitForRun(
+								live.result(),
+								seconds * 1000,
+								context?.signal,
+							);
+							if (!ended) {
+								const still = statusLines(runId);
+								return answer([
+									`${runId} is still running after ${seconds} s. \`wait\` again, or carry on with other work.`,
+									...(still ?? []),
+								]);
+							}
+						}
+						const lines = statusLines(runId);
+						return lines
+							? answer(lines)
+							: answer([`No run "${runId}". \`runs\` lists them.`], false);
+					}
+					case "status": {
+						const lines = statusLines(runId);
+						return lines
+							? answer(lines)
+							: answer([`No run "${runId}". \`runs\` lists them.`], false);
 					}
 					case "stop":
 						return session.stop(runId, "stopped by the model")
@@ -387,13 +428,38 @@ export function createPipelineTool(
 	});
 }
 
+const WAIT_DEFAULT_S = 600;
+const WAIT_MAX_S = 1800;
+
+/** True when `result` settles within `ms`; false on the timeout or when the call is cancelled. */
+function waitForRun(
+	result: Promise<unknown>,
+	ms: number,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => finish(false), ms);
+		const onAbort = () => finish(false);
+		function finish(ended: boolean) {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			resolve(ended);
+		}
+		signal?.addEventListener("abort", onAbort, { once: true });
+		result.then(
+			() => finish(true),
+			() => finish(true),
+		);
+	});
+}
+
 /** The system prompt's paragraph, with the tool on. */
 export const PIPELINE_RULES = [
 	"# Pipelines",
 	"",
 	"This workspace can keep pipelines: reusable DAGs of commands, tool calls, checks, waits and approvals, as JSON under `.cerebriline/pipelines/`, run by the `pipeline` tool in the background.",
 	"- When the person asks for repeatable automation (a release, a nightly check, a review flow), write it as a pipeline: read `pipeline catalog`, `save` it, `test` it with pins, and ask the person to approve it before it can `run`.",
-	"- A run is a task on the task board; a task that needs its result waits on it with the gate `pipeline:<run>`.",
+	"- A run is a task on the task board; a task that needs its result waits on it with the gate `pipeline:<run>`. Do other work meanwhile; when nothing else is left, `pipeline wait` (run) returns when the run ends. Never wait with `sleep`.",
 ].join("\n");
 
 export function withPipelineRules(

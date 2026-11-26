@@ -433,6 +433,30 @@ pandorum as a local vsix, and keeps the feature off by default.
    a description; run, fix and re-run a failing one; gate a task on a run),
    on qwen3.6 27B dense and on a cloud model. A model that fails it gets the
    per-provider switch off by default, as guidance.
+   **The bench, 2026-11-26.** Three tasks in `spool/tg-bench`, built by
+   `p5-src/p5-make.py` from one small project (`sitegen`: a Markdown site
+   generator with a docs linter and an archiver), each checked both ways
+   (the untouched repo scores 1/8, 2/6, 2/5; the reference, played by the
+   engine itself with `p5-src/ref-run.ts`, scores full):
+   - `pwrite`: write `site-check` from a description (tests and lint side by
+     side, the lint not failing the run, an `if` on its exit that builds on
+     one side and runs a `fix-docs` agent on the other, a check after the
+     build), and prove it with a green `pipeline test` of the saved version.
+     8 checks, read from the file and the test run's journal.
+   - `pfix`: run the approved `release`, which fails at `pack` (a bug in
+     `tools/archive.py`); fix the code, not the approved pipeline, and
+     `rerun` from the failing step. 6 checks: the pipeline unchanged, the
+     archive fixed, a failed run at `pack`, a green run that is a re-run
+     reusing the earlier steps, tests green.
+   - `pgate`: start the approved `stats` (75 s, then a word count and a
+     random stamp), fix the docs linter's two broken links meanwhile, and
+     write REPORT.md with what the run printed, the report task waiting on
+     the run through the board. 5 checks; whether a `pipeline:` gate was used
+     and how often the run was polled are process measures
+     (`agg-phase5.py`).
+   `run.sh` takes `PIPELINES=1`; `go-phase5.sh` needs `MODEL` (the user names
+   it). Smoke: `deepseek-v4.1-flash:cloud`, one run a task; the dense 27B arm
+   waits for eleven2go.
 
 ## To decide
 

@@ -179,6 +179,10 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   down a branch of its own (`onError`). A pipeline can name another to run
   when it fails (`onFailure`), given what failed. A web request asks you
   first, every time, unless all tools are auto-approved.
+- **The model can wait for a run without `sleep`.** `pipeline wait` returns
+  when the run ends (or after a timeout, 10 minutes by default). Before,
+  a model whose remaining work waited on a run had only the shell to wait
+  with, and slept for a minute at a time.
 - **`pipeline test`** runs a pipeline without approval but refuses any step
   with a side effect, such as a push, a write, an agent or a web request,
   unless that step is pinned to a stand-in result. Waits open at once, and
