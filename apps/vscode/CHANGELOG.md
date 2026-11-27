@@ -5,7 +5,7 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.306] — 2026-11-26
+## [4.100.307] — 2026-11-26
 
 ### Agents
 
@@ -193,9 +193,35 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 - **CLI:** `--pipelines` or `CLINE_PIPELINES=1` turns it on, and
   `/pipelines` lists pipelines, approves one (`/pipelines approve <name>`)
   and lists runs (`/pipelines runs`).
-- **Not in this version:** retrying, skipping or re-running a step from the
-  Board tab. Use `pipeline resume` and `pipeline rerun` for now.
-  Pipelines suit cloud models or a 27B-class local model; a small model
+- **Retry, Skip, Re-run and Stop from the Board tab.** Pick a step of a run
+  in the inspector. A step that failed can be retried (the run resumes and
+  the step runs again) or skipped (it counts as done, what it was given goes
+  on to the next steps, and the run resumes; a step that picks a branch,
+  such as an `if`, is not skipped). Any step of a finished run can be re-run
+  from: a new run starts that reuses what came before that step, and the
+  Board tab moves to it. A run that is going can be stopped. Each asks you
+  first, acts through the conversation that started the run (open it if it
+  is not the current one), and the model is told what you did.
+- **Open Board** is a button in the chat's title bar, so the Board tab opens
+  without a task panel to start from.
+- **Start from your own board.** With no conversation open (a new chat),
+  the Board tab is a draft board: add tasks with **Add task**, then set
+  each one up from its inspector (acceptance, gates, a pipeline to use).
+  **Start a conversation with this board** hands it to the next conversation
+  you start: the model is told it is your plan and works from it. The draft
+  stays until a conversation takes it, across reloads, or until you discard
+  it. With a conversation open, **Add task** adds to its board.
+- **New pipeline** (**+ New** beside Pipelines) asks for a name and saves
+  a one-step pipeline as yours, ready to edit in the Board tab.
+- **A task can be done by a pipeline.** In the Board tab, pick a task and
+  choose **Use pipeline**. The task is not held back by it: when the model
+  starts the task (or it starts on its own after the task before it), the
+  model is told to run that pipeline for it. Once the run starts the task
+  waits on it, and comes back to the model when the run ends. The model can
+  give a task a pipeline the same way, with the gate
+  `use-pipeline:<name>`. A run started without naming a task goes to the
+  one task that uses that pipeline, when there is exactly one.
+- Pipelines suit cloud models or a 27B-class local model; a small model
   writes them poorly.
 
 ### Settings
@@ -214,6 +240,12 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ### Fixes
 
+- **A running agent's transcript is saved as it works (#118).** An agent's
+  transcript was written only when it ended, so a report taken while it
+  worked showed it running with no messages (Chris's `docker-deploy`, at its
+  18th turn), and a window closed under it lost everything it had done. It
+  is now written after its turns, at most every few seconds, and its end
+  writes the final one.
 - **An agent on another Ollama model now gets that model's context window
   (#118).** When a configured agent, a spawned agent or a teammate named a
   different model on the same Ollama provider as the session, it inherited
