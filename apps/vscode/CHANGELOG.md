@@ -5,6 +5,26 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.314] — 2026-11-27
+
+### Board tab
+
+- **The Board tab is now built from the published packages.** Its screen
+  comes from `@cerebriline/ui` and its answers from `@cerebriline/taskboard`,
+  the same code another application embeds. It should look and behave as
+  before; the lock on a gate and the tick on an acceptance check are now
+  drawn as icons rather than with the editor's icon font.
+
+### SDK
+
+- **`@cerebriline/ui` and `@cerebriline/taskboard` on npm.** The task board,
+  pipelines and the Board tab can go into another application:
+  `attachTaskBoard()` gives any agent loop the board, `createBoardBackend()`
+  and `sessionBoardSlots()` answer the Board tab, and
+  `@cerebriline/ui/components/board-viewer` draws it over a transport you
+  give it. The guide is *Embedding the task board* in the SDK docs, and
+  `apps/examples/taskboard-web` is a whole example in a web page.
+
 ## [4.100.313] — 2026-11-27
 
 ### Fixes
