@@ -1,0 +1,155 @@
+---
+title: "Board tab"
+sidebarTitle: "Board tab"
+description: "An editor tab for the task board, your pipelines and their runs: see and change any board, keep drafts, copy boards between conversations, save them, edit pipelines and act on runs."
+---
+
+The **Board tab** is an editor tab that draws boards and pipelines as cards in columns, left to right, with their dependencies, gates and branches. It is where you change a board yourself, build one before a conversation starts, recover one from an earlier conversation, and write, approve and run [pipelines](/features/pipelines).
+
+## Opening it
+
+- The **Open board** button in the chat's title bar.
+- **Open board** under the task panel.
+- The command palette: **Cerebriline: Open Board**.
+- A pipeline file's title bar (`*.pipeline.json`), which opens the tab on that pipeline.
+
+The tab follows the files as runs progress and the board changes. It is shared by the whole workspace: pipelines and runs are workspace files, so every conversation in the workspace sees the same ones.
+
+## The layout
+
+| Part | What it holds |
+| --- | --- |
+| **Left column** | **Boards**, **Pipelines** and **Runs**. Pick one to show it. |
+| **Header** | What is shown, with a picker to switch, and the tabs for its views. |
+| **Action bar** | What you can do with what is shown: add a task, load, export, copy, save, start, approve. |
+| **Canvas** | The cards and the edges between them. Fit, zoom, a minimap; drag to wire. |
+| **Inspector** | Opens when you pick a card: the task's or step's details and what you can change. |
+
+Replies to what you do (what was created, copied, refused) appear under the action bar. A long reply scrolls within a few lines; close it with **×**.
+
+## Boards
+
+The **Boards** list in the left column has four groups:
+
+| Group | What it is | Changed in place? |
+| --- | --- | --- |
+| **This conversation** | The open conversation's board. | Yes, while its session is running. A conversation reopened from history is shown read-only until you send a message. |
+| **Drafts** (Draft 1, 2, 3) | Boards you build before a conversation, kept across reloads. | Yes |
+| **Recent conversations** | The boards of the workspace's ten newest conversations. | No: copy them |
+| **Saved in Memory** | Boards you saved into Memory (up to 20 are listed). | No: copy them |
+
+Each entry shows its number of tasks and how many are open. Recent conversations fill in a moment after the tab opens.
+
+A board has two views: **Workflow** (the cards) and **Plan** (the tasks as a list in order).
+
+### Copy a board
+
+**Copy to…** puts the board's tasks on **This conversation** or a draft.
+
+- If the target already has tasks, you choose **Add** (after them) or **Replace** (instead of them).
+- **Replace** on this conversation's board is refused while the model is working; **Add** works any time.
+- The model is told what changed either way.
+
+A copy comes in as a fresh plan: titles, descriptions, acceptance, order (dependencies and steps), priority, and the gates that recur (`human:` and `use-pipeline:`). Statuses, notes, run ids, timers and commits stay behind, and so do the tasks a pipeline run put on the board while it waited (`▶ name #3`).
+
+This is how you recover a board: a conversation whose board you lost, or one you want to redo, is under **Recent conversations**; copy it to a draft or to the open conversation.
+
+### Drafts: start from your own board
+
+With no conversation open, the board shown is **Draft 1**.
+
+1. **Add task** for each step (type a title in **New task**).
+2. Pick each task to set it up in the inspector: description, acceptance, the tasks it waits on, steps, gates, and a pipeline to use.
+3. **Start a conversation with this board**, then send your first message in the chat. The new conversation starts from the board: the model is told it is your plan and works from it.
+
+Any of the three drafts can start a conversation; it is emptied once the conversation takes it. **Discard** empties a draft. Otherwise a draft stays, across reloads, until you use it.
+
+With a conversation open, **Add task** adds to its board, and **Start a conversation with this board** is disabled.
+
+### Save, load and export
+
+- **Save to Memory** keeps any board in Memory, to copy or start from later. A board saved in Memory can be **Delete**d.
+- **Load…** adds tasks to the board shown (this conversation's, or a draft) from a board saved in Memory, a saved plan (task template), or a file: a board exported from here or a template. A draft that already has tasks asks Add or Replace.
+- **Export…** writes the board shown to a JSON file: its events (which replay it exactly) and the same tasks as a plan, which any board can load.
+
+### Change a task
+
+Pick a task's card. The inspector shows its status, description, acceptance, gates, links, files, notes and outcome. From it:
+
+- **Start**, **Done**, **Cancel**, **Reopen** at the top, and **Delete** (it goes with its steps; the tasks after it stop waiting on it). A task held by a running teammate or pipeline run can't be deleted until the run ends.
+- Edit the description; set **Priority** (high goes first among the tasks that can start) or **Later** (kept but not started until the rest is done).
+- **This task starts only once these are done**: type an id or title and pick a task, or remove one.
+- Add steps under it.
+- **Gates**: add one, with what a gate can wait on offered as you type; **Resolve** opens a gate now, **Remove** takes it off.
+- **Use pipeline**: the task is done by a pipeline (see [A task done by a pipeline](/features/pipelines#a-task-done-by-a-pipeline)).
+
+On the canvas, drag from one task to another to make the second wait on the first. Select an edge and press Delete to drop that dependency, or the gate it comes from.
+
+Every change on this conversation's board is told to the model: with the next tool results while it is working, or at the start of its next turn.
+
+### A board as a pipeline
+
+**Save as a pipeline** turns this conversation's board into a pipeline: each task becomes an agent step. An acceptance item that is just a command (`` `npm test` passes ``) becomes a check after the task, and a `human:` gate becomes an approval before it. You read the pipeline and approve it before it can run.
+
+## Pipelines
+
+The **Pipelines** list shows the workspace's pipelines (`.cerebriline/pipelines/`), each marked approved or waiting for approval. A pipeline has three views:
+
+- **Workflow**: the steps as cards, wired by what each runs after. A branching step has one output per outcome (`true`/`false`, each `switch` case, `approve`/`reject`, `error`).
+- **Definition**: the pipeline as JSON, editable.
+- **Runs**: its runs, newest first.
+
+### Create one
+
+**+ New** beside Pipelines offers **Empty** or **A copy of …** for each saved pipeline. Give it a name. An empty one is saved as a one-step pipeline that is yours (approved); a copy keeps its source's approval (a copy of an approved pipeline is approved, a copy of one waiting for approval waits too).
+
+### Edit it
+
+- **Add a step** from the palette above the canvas: click a type, or drag it onto the canvas.
+- **Wire** steps by dragging from one card's handle to another. A branching step has a handle per outcome.
+- **Delete** a step or a wire with the Delete key.
+- **Pick a step** to edit it in the inspector. Each step type has its own form: labelled fields with help on hover. Tool, agent, pipeline and gate fields offer what exists as you type (the conversation's tools, the configured agents, the workspace's pipelines, what a gate can wait on). **After** offers the other steps and the outputs of branching ones (`check.true`). Inside `{{ … }}`, a field completes `$vars.<input>`, `$node.<step>.stdout` and the rest, and the functions, each with what it means. **Edit as JSON** shows the step as JSON instead. **Apply** says what is missing or not JSON rather than applying it.
+- **Definition** edits the whole pipeline as JSON.
+
+Edits stay a draft, checked as you go, with the problems listed above the canvas. **Save** writes the file and approves it as your version; **Discard** drops the draft. If the file changed while you were editing (the model saved a new version), the save is refused rather than overwriting it.
+
+### Approve what the model proposed
+
+When the model has saved a pipeline, or changed one, the bar above the canvas says it waits for approval.
+
+- **Changes** shows the change line by line against the approved version, and lists the versions kept.
+- **Approve** approves the version on screen. Only an approved version runs.
+- **Reject** puts the approved version back in the file. The model is told if it sends the rejected version again.
+
+Versions are kept under `.cerebriline/pipelines/versions/` (the last 20 per pipeline, and the approved one beyond that). You can also approve from the command palette: **Cerebriline: Approve Pipeline**.
+
+### A pipeline as a plan
+
+**Make a task plan…** on a pipeline turns its steps into a saved plan (a task template) that the model works through itself with `task_plan {"template": …}`: checks become acceptance items, approvals become `human:` gates, and the pipeline's inputs become the plan's variables. A pipeline whose steps would make no task (for instance only a check) is refused, with the reason.
+
+## Runs
+
+The **Runs** list shows the workspace's newest 40 runs, newest first, with their status. A run has five views:
+
+| View | What it shows |
+| --- | --- |
+| **Workflow** | The pipeline's cards, each showing how its step did; the edges show which branch was taken. |
+| **Run monitor** | A timeline per step: when it started, how long it took, its attempts. |
+| **Activity** | The run's journal, event by event. |
+| **Report** | The run as Markdown, to copy or save. |
+| **Definition** | The version of the pipeline the run used. |
+
+Pick a step of a run for its fields, output and journal.
+
+### Act on a run
+
+From a step of a run, in the inspector:
+
+- **Retry** a step that failed: the run resumes and the step runs again.
+- **Skip** a step that failed: it counts as done, what it was given goes on to the next steps, and the run resumes. A step that picks a branch (`if`, `switch`, `approval`) can't be skipped.
+- **Re-run from here** on any step of a finished run: a new run starts that reuses what came before that step, and the tab moves to it.
+- **Stop run** on a run that is going.
+
+Each asks you first and acts through the conversation that started the run: open that conversation if it isn't the current one. The model is told what you did.
+
+An approval step waiting for you is a gate on its task: **Resolve** approves, removing the gate rejects.

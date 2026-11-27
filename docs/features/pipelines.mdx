@@ -1,0 +1,378 @@
+---
+title: "Pipelines"
+sidebarTitle: "Pipelines"
+description: "Reusable workflows the model writes and runs in the background: commands, tool calls, checks, branches, loops, waits, approvals, agents and swarms, kept as JSON in your workspace. How to turn them on, the format, running and managing runs, and how to ask the model for them."
+---
+
+A **pipeline** is a reusable workflow kept as a JSON file in your workspace: steps that run commands, call tools, set values, branch, merge, loop over a list, wait, ask you to approve, run a check, hand a task to an agent or a swarm, call a web endpoint, or run another pipeline. Cerebriline runs it itself, in the background, while you and the model keep working. Steps run in parallel where they don't depend on each other.
+
+Use one when the same sequence comes back: verify a change (lint, tests, a build), cut a release, review every changed file, triage issues, run a check until it passes. The model writes it once; after you approve it, it runs the same way every time, and a run is journalled so you can see what each step did.
+
+There is no server and no container: pipelines are part of Cerebriline.
+
+<Note>
+Pipelines suit cloud models or a 27B-class local model. A small model writes them poorly; for it, a [saved plan](/features/task-board#saved-plans-task-templates) is the better tool.
+</Note>
+
+## Turning it on
+
+Open **Settings > Features** and switch on **Pipelines** (off by default). From the next task, the model has one more tool, `pipeline`.
+
+Each provider's **Tools** section has a `pipeline` switch, on by default, to leave the tool out for a model that can't handle it. While the feature is off, that switch shows as off with the reason.
+
+In the CLI: `--pipelines` or `CLINE_PIPELINES=1`.
+
+## How it fits together
+
+1. **The model writes a pipeline** and saves it with `pipeline save`. The file goes to `.cerebriline/pipelines/<name>.pipeline.json`, versioned with your repository.
+2. **A saved pipeline is a proposal.** Nothing runs until you approve it. Approve it in the [Board tab](/features/board-tab#approve-what-the-model-proposed), or with **Cerebriline: Approve Pipeline** from the command palette. The model can't approve its own pipeline, and any later change to the file needs approving again. `pipeline test` runs any version, without side effects (see [Testing](#testing)).
+3. **A run happens in the background.** The model starts it with `pipeline run` and carries on; it is told when the run ends, or waits for it with `pipeline wait`.
+4. **Every command and tool inside a run is still asked for** under your auto-approve settings, as if the model had called it directly. A web request (`http` step) asks you every time unless the `pipeline_http` policy approves it.
+5. **A run lives on the task board.** A run for a task acts on that task: its approvals and waits ask there, and the task moves on when the run ends. A run with no task puts a task on the board only while it waits for your approval or answer.
+6. **A run is journalled** under `.cerebriline/pipeline-runs/`. A run cut off by a reload is picked up when its conversation is opened again. A stopped or failed run can be resumed, or run again from one step.
+
+### Where things live
+
+| Path | What |
+| --- | --- |
+| `.cerebriline/pipelines/<name>.pipeline.json` | The pipeline. |
+| `.cerebriline/pipelines/approved.json` | Which version of each pipeline you approved. |
+| `.cerebriline/pipelines/versions/<name>/` | Every version saved or approved (the last 20, and the approved one beyond that). |
+| `.cerebriline/pipeline-runs/` | One journal per run. |
+
+## A first pipeline
+
+Ask:
+
+> *Write a pipeline called `verify` that runs `npm run lint` and `npm test` side by side, and fails if either fails. Test it, then I'll approve it.*
+
+The model reads the catalog (`pipeline catalog`), writes the file, and tests it. You get:
+
+```json .cerebriline/pipelines/verify.pipeline.json
+{
+  "name": "verify",
+  "description": "Lint and test side by side, then fail if either failed.",
+  "nodes": [
+    { "id": "lint", "type": "command", "command": "npm run lint", "allowFailure": true },
+    { "id": "test", "type": "command", "command": "npm test", "allowFailure": true, "timeout": 900 },
+    { "id": "both", "type": "merge", "mode": "all", "after": ["lint", "test"] },
+    { "id": "green", "type": "check", "after": ["both"],
+      "when": "{{ $node.lint.items[0].exit == 0 && $node.test.items[0].exit == 0 }}",
+      "message": "lint exit {{ $node.lint.items[0].exit }}, tests exit {{ $node.test.items[0].exit }}" }
+  ]
+}
+```
+
+Open the Board tab, pick **verify** under Pipelines, read it, and press **Approve**. From then on: *"Run verify."* `lint` and `test` start together; `both` waits for both; `green` fails the run if either exited non-zero. (`items[0].exit` rather than `.exit` lets the check also work in a [test](#testing), where the commands are pinned.)
+
+## The format
+
+### Top level
+
+| Field | Required | What |
+| --- | --- | --- |
+| `name` | yes | The pipeline's name, used to run it. |
+| `description` | | What it does. |
+| `inputs` | | The values a run is given: `{ "<name>": { "type", "description", "default", "required" } }`. `type` is `string`, `number`, `boolean`, `object` or `array`. |
+| `maxParallel` | | At most this many steps run at once (4 when absent). |
+| `onFailure` | | Another pipeline started when a run of this one fails, with the inputs `run`, `pipeline`, `node` and `error`. |
+| `nodes` | yes | The steps. |
+
+### Every step
+
+| Field | What |
+| --- | --- |
+| `id` | Unique name of the step. Other steps refer to it. |
+| `type` | One of the [step types](#step-types). |
+| `after` | What it runs after: `["build"]` (that step's output) or `["ok.true"]` (a branching step's named output). No `after`: it starts at once. |
+| `name`, `description` | A label and a note for the Board tab. |
+| `timeout` | Seconds before the step is stopped and fails. |
+| `retry` | `{ "max": 2, "wait": 5, "backoff": 2 }`: up to `max` more attempts after a failure, `wait` seconds before the first (1 when absent), each wait multiplied by `backoff` (2 when absent). |
+| `onError` | After the last attempt failed: `stop` the run (the default), `continue` with `[{error}]` as the step's items, or `route` them to the step's `error` output, for the steps after `"<id>.error"`. |
+| `idempotent` | Safe to run twice. A step in flight when a run was interrupted (a reload) is run again only when this is set; otherwise it fails as interrupted. |
+| `pin` | Test data: the items a test returns for this step without running it. |
+
+### Order, branches and skipping
+
+A step runs when everything in its `after` has settled. A branching step fires one named output: `if` fires `true` or `false`, `switch` one of its cases or `default`, `approval` fires `approve` or `reject`, and a step with `onError: "route"` fires `error` when it fails. A step whose `after` names an output that didn't fire is **skipped**, and so is everything after it. That is how branches end: only the taken side runs.
+
+Steps with nothing between them run at the same time, up to `maxParallel`.
+
+### Step types
+
+| Type | Fields | Its items (what it passes on) |
+| --- | --- | --- |
+| `command` | `command`, `cwd`, `allowFailure` (a non-zero exit fails the step otherwise) | `[{exit, stdout, stderr}]` |
+| `tool` | `tool` (any tool of the session, with its approvals), `input` | the tool's result |
+| `set` | `fields` `{name: value}` (one item per input item; `keepInput` starts from the input item), or `items` (an expression giving a list) | the items it made |
+| `if` | `when` (an expression) | its input; fires `true` or `false` |
+| `switch` | `on` (an expression), `cases` (output names; the value is compared with each as text) | its input; fires the matching case or `default` |
+| `merge` | `mode`: `all` (every input ran), `append` (whatever ran), `first` (the first to finish), `by-key` (joins items on `key`) | the merged items |
+| `loop` | `over` (an expression giving a list), `parallel`, `body` (one `tool`, `command`, `set`, `check`, `http`, `agent` or `pipeline` step, without `id` or `after`; `$item` and `$index` in it) | every body's items, in order |
+| `wait` | `gate`: `timer:+10m` or an ISO time, `commit:<sha>@<branch>`, `gh-pr:owner/repo#n`, `gh-run:owner/repo/<id>`, `human:<what you decide>`, `run:<agent>` | its input |
+| `approval` | `message` | fires `approve` or `reject`; you answer on the task board |
+| `check` | `command` (passes on exit 0) or `when` (passes when true), `message` | fails the run when it doesn't hold |
+| `agent` | `task`, `agent` (a configured agent's name; an open sub-agent otherwise), `instructions` (the open sub-agent's role), `json` (read the answer as JSON) | `[{text}]`, or the JSON answer (a list as is, anything else as one item) |
+| `swarm` | `instructions` (every worker's role), `tasks` (one per worker, or an expression giving the list), or `task` with `count` | one item per worker |
+| `http` | `url`, `method` (GET), `headers`, `body` (sent as JSON unless it is text), `allowFailure` (a status outside 2xx fails it otherwise) | the JSON list, or `[{status, headers, body}]` |
+| `pipeline` | `pipeline` (another pipeline's name), `inputs` | what its last steps gave. Runs that pipeline's approved version to the end; never itself, at most 5 deep. |
+
+## Data between steps
+
+Each step passes on **items**, a list. What it gives depends on its type (the table above). Later steps read it through expressions.
+
+### Expressions
+
+`{{ … }}` in any text of a pipeline is an expression. A string that is one expression and nothing else gives its value as is (a list stays a list); text with expressions in it gives text, each value written in (objects as JSON).
+
+It is a small language, not JavaScript: member access (`a.b`, `a[0]`, `a["key"]`), comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), `&&`, `||`, `!`, `??`, arithmetic, `? :`, string, number and list literals, and the functions below. There is no `eval`, no assignment and no way to run code: code runs only in a `command` step, under the shell's approval.
+
+| Name | What |
+| --- | --- |
+| `$vars.<name>` | The run's inputs. |
+| `$node.<id>` | A step's output: `.items`, `.exit`, `.stdout`, `.stderr`, `.text` (an agent's answer), `.port` (the output it fired), `.status` (http). |
+| `$input` | The items this step was given. |
+| `$item`, `$json` | The current item (inside a loop body, the one being worked on). |
+| `$index` | Its position in a loop. |
+| `$run` | `{id, pipeline}`. |
+| `$env` | What the host lets a pipeline read. |
+
+| Function | What |
+| --- | --- |
+| `len(x)` | Length of a text or list, or number of keys. |
+| `lines(text)` | The text's non-empty lines, as a list. |
+| `split(text, sep)` / `join(list, sep)` | Split text into a list / join a list into text (`,` by default). |
+| `parse(text)` / `json(value)` | JSON text to a value / a value to JSON text. |
+| `contains(x, y)` | A list contains a value, or a text contains a text. |
+| `default(x, fallback)` | `x`, or `fallback` when `x` is empty or missing. |
+| `lower`, `upper`, `trim` | Text case and whitespace. |
+| `keys(obj)` | An object's keys. |
+| `number(x)`, `string(x)` | Convert. |
+
+`when` (`if`, `check`), `on` (`switch`) and `over` (`loop`) are expressions with or without the braces. Everywhere else, including `set`'s `items`, write the braces.
+
+## When something fails
+
+- **Retry**: `"retry": {"max": 3, "wait": 5}` tries again 3 times, after 5, 10 and 20 seconds.
+- **Carry on**: `"onError": "continue"` lets the run go on with `[{error}]` as the step's items.
+- **Handle it**: `"onError": "route"` sends the failure down the step's `error` output; the steps after `"<id>.error"` run instead of the ones after `"<id>"`.
+- **A failure pipeline**: `"onFailure": "notify-failure"` at the top starts that pipeline when a run fails, with `run`, `pipeline`, `node` and `error` as its inputs.
+- **Time limits**: `timeout` on a step.
+- **Recover a run**: `pipeline resume` continues a stopped or failed run from where it was; `pipeline rerun` starts a new run from one step, reusing what the steps before it produced. In the Board tab: **Retry**, **Skip**, **Re-run from here** and **Stop run**.
+
+## Testing
+
+`pipeline test` runs a pipeline (saved or not, approved or not) without side effects:
+
+- Every `command`, `tool`, `http`, `agent`, `swarm` and `pipeline` step (also as a loop body) must have a `pin`, the items it returns in a test; a test that would run one for real is refused, unless it is sent with `allowSideEffects: true`.
+- Waits open at once.
+- `until` stops the test after a chosen step.
+
+```json
+{ "id": "staging", "type": "command", "after": ["where.staging"], "command": "./deploy.sh staging",
+  "pin": [{ "exit": 0, "stdout": "deployed", "stderr": "" }] }
+```
+
+A pinned step gives its pin as its **items** and nothing else: `$node.staging.items[0].stdout` reads the pin above, while `$node.staging.stdout` and `.exit` are empty in a test. Keep that in mind for a `check` or `if` that reads `.exit` or `.stdout`.
+
+Ask: *"Test deploy-env with env set to production, the deploy commands pinned, and stop after `where`: which branch does it take?"*
+
+## The `pipeline` tool
+
+| Action | What it does |
+| --- | --- |
+| `list` | The workspace's pipelines and whether each is approved. |
+| `catalog` | The step types and their fields. The model reads it before writing one. |
+| `show` | One pipeline, with its version (`name`). |
+| `save` | Writes a pipeline (`pipeline`: the JSON). To replace a file it sends `base`, the version `show` gave; the save is refused if the file changed since. |
+| `validate` | Checks a pipeline without saving it. |
+| `run` | Starts a run of the approved version (`name`, `inputs`; `task`: a task that waits on the run). |
+| `test` | Runs without side effects (`name` or `pipeline`, `inputs`, `until`, `allowSideEffects`). |
+| `status` | A run's state, step by step (`run`). |
+| `wait` | Returns when the run ends, or after `timeout` seconds (600 by default, at most 1800). |
+| `stop` | Stops a run. |
+| `resume` | Continues a stopped or failed run from where it was. |
+| `rerun` | Runs again from `node`, reusing what came before it. |
+| `runs` | The workspace's runs. |
+
+## A task done by a pipeline
+
+A task can say it is done by a pipeline. In the Board tab, pick the task and choose **Use pipeline**; the model does the same with the gate `use-pipeline:<name>`.
+
+The task isn't held back by it. When the task starts (the model starts it, or it starts after the task before it), the model is told to run that pipeline for it. Once the run starts, the task waits on it (`pipeline:<run>`), and comes back to the model when the run ends. A run started without naming a task goes to the one task that uses that pipeline, when there is exactly one.
+
+This is how you mix a plan with pipelines: *"Plan the release. The test task should use the verify pipeline."*
+
+## A board as a pipeline, and a pipeline as a plan
+
+- **Save as a pipeline** on the conversation's board (Board tab) turns each task into an `agent` step. An acceptance item that is just a command (`` `npm test` passes ``) becomes a `check` after the task, and a `human:` gate becomes an `approval` before it.
+- **Make a task plan…** on a pipeline turns its steps into a saved plan the model works through itself: checks become acceptance items, approvals become `human:` gates, and inputs become the plan's variables.
+
+## Examples
+
+Each of these validates as written. Change the commands to your project's.
+
+### Release with an approval and a failure handler
+
+Builds, tests (retrying a flaky suite twice), asks you before tagging, and gives CI ten minutes. If anything fails, `notify-failure` runs.
+
+```json .cerebriline/pipelines/release.pipeline.json
+{
+  "name": "release",
+  "description": "Build, test, ask before tagging, then tag and push.",
+  "inputs": { "version": { "type": "string", "required": true, "description": "The version to tag, e.g. 1.4.0" } },
+  "onFailure": "notify-failure",
+  "nodes": [
+    { "id": "build", "type": "command", "command": "npm run build" },
+    { "id": "test", "type": "command", "command": "npm test", "after": ["build"],
+      "retry": { "max": 2, "wait": 10 } },
+    { "id": "ok", "type": "approval", "after": ["test"],
+      "message": "Tests pass. Tag and push v{{ $vars.version }}?" },
+    { "id": "tag", "type": "command", "after": ["ok.approve"],
+      "command": "git tag v{{ $vars.version }} && git push origin v{{ $vars.version }}" },
+    { "id": "ci", "type": "wait", "after": ["tag"], "gate": "timer:+10m",
+      "description": "Give CI time to pick the tag up." },
+    { "id": "stopped", "type": "set", "after": ["ok.reject"],
+      "fields": { "result": "Not tagged: the person said no." } }
+  ]
+}
+```
+
+```json .cerebriline/pipelines/notify-failure.pipeline.json
+{
+  "name": "notify-failure",
+  "inputs": { "run": {}, "pipeline": {}, "node": {}, "error": {} },
+  "nodes": [
+    { "id": "log", "type": "command",
+      "command": "echo \"{{ $vars.pipeline }} failed at {{ $vars.node }}: {{ $vars.error }}\" >> pipeline-failures.log" }
+  ]
+}
+```
+
+Run it: *"Run the release pipeline for version 1.4.0."* The approval appears as a gate on the run's task; **Resolve** it in the task panel or the Board tab to approve, remove it to reject.
+
+### Review every changed file with an agent
+
+Lists the files changed since `main`, has the `reviewer` agent review them three at a time, and collects the findings as JSON.
+
+```json .cerebriline/pipelines/review-changed-files.pipeline.json
+{
+  "name": "review-changed-files",
+  "description": "Review every file changed since main, three at a time, and collect the findings.",
+  "nodes": [
+    { "id": "changed", "type": "command", "command": "git diff --name-only main...HEAD" },
+    { "id": "files", "type": "set", "after": ["changed"],
+      "items": "{{ lines($node.changed.stdout) }}" },
+    { "id": "review", "type": "loop", "after": ["files"],
+      "over": "{{ $node.files.items }}", "parallel": 3,
+      "body": { "type": "agent", "agent": "reviewer",
+                "task": "Review {{ $item }} for bugs. Answer as JSON: {\"file\": \"{{ $item }}\", \"findings\": [\"...\"]}",
+                "json": true } },
+    { "id": "report", "type": "set", "after": ["review"],
+      "fields": { "files": "{{ len($node.review.items) }}", "findings": "{{ $node.review.items }}" } }
+  ]
+}
+```
+
+`reviewer` is a [configured agent](/features/agents). Without `agent`, the step spawns an open sub-agent, with `instructions` as its role.
+
+### Fix until green
+
+Runs the tests; on failure, the output goes to an agent to fix, then the tests run again. On success the other branch records it.
+
+```json .cerebriline/pipelines/fix-until-green.pipeline.json
+{
+  "name": "fix-until-green",
+  "description": "Run the tests; on failure hand the output to an agent, then test again.",
+  "nodes": [
+    { "id": "test", "type": "command", "command": "npm test", "onError": "route" },
+    { "id": "fix", "type": "agent", "after": ["test.error"],
+      "instructions": "You fix failing tests without changing what they assert.",
+      "task": "The tests failed:\n{{ $node.test.stderr }}\n{{ $node.test.stdout }}\nFind the cause and fix the code." },
+    { "id": "retest", "type": "command", "after": ["fix"], "command": "npm test" },
+    { "id": "passed", "type": "set", "after": ["test"], "fields": { "result": "green on the first run" } }
+  ]
+}
+```
+
+### Triage issues with a loop and JSON answers
+
+Reads new GitHub issues with `gh`, has an agent pick an area for each, then labels them.
+
+```json .cerebriline/pipelines/triage.pipeline.json
+{
+  "name": "triage",
+  "description": "Label new GitHub issues by area.",
+  "inputs": { "repo": { "type": "string", "default": "owner/repo" } },
+  "nodes": [
+    { "id": "issues", "type": "command",
+      "command": "gh issue list -R {{ $vars.repo }} --label new --json number,title,body" },
+    { "id": "list", "type": "set", "after": ["issues"], "items": "{{ parse($node.issues.stdout) }}" },
+    { "id": "area", "type": "loop", "after": ["list"], "over": "{{ $node.list.items }}",
+      "body": { "type": "agent", "json": true,
+                "instructions": "You sort issues into one of: ui, core, docs.",
+                "task": "Issue #{{ $item.number }}: {{ $item.title }}\n{{ $item.body }}\nAnswer as JSON: {\"number\": {{ $item.number }}, \"area\": \"ui|core|docs\"}" } },
+    { "id": "label", "type": "loop", "after": ["area"], "over": "{{ $node.area.items }}",
+      "body": { "type": "command",
+                "command": "gh issue edit {{ $item.number }} -R {{ $vars.repo }} --add-label {{ $item.area }} --remove-label new" } }
+  ]
+}
+```
+
+### Branch on an input
+
+```json .cerebriline/pipelines/deploy-env.pipeline.json
+{
+  "name": "deploy-env",
+  "inputs": { "env": { "type": "string", "default": "staging" } },
+  "nodes": [
+    { "id": "where", "type": "switch", "on": "{{ $vars.env }}", "cases": ["staging", "production"] },
+    { "id": "staging", "type": "command", "after": ["where.staging"], "command": "./deploy.sh staging" },
+    { "id": "confirm", "type": "approval", "after": ["where.production"], "message": "Deploy to production?" },
+    { "id": "prod", "type": "command", "after": ["confirm.approve"], "command": "./deploy.sh production" },
+    { "id": "unknown", "type": "check", "after": ["where.default"], "when": "{{ false }}", "message": "Unknown env {{ $vars.env }}" }
+  ]
+}
+```
+
+## Asking the model
+
+You don't have to write JSON. Say what the workflow does, what it runs, and what should happen when something fails; the model reads the catalog and writes it. Ask it to test before you approve.
+
+### Create
+
+- *"Make a pipeline `verify` that runs lint, type-check and the unit tests in parallel and fails if any of them fails. Test it with the commands pinned, then tell me to approve it."*
+- *"Write a release pipeline with an input `version`: build, run the tests (retry twice, they're flaky), ask me before tagging, then tag and push. If it fails, log the error to pipeline-failures.log with a second pipeline."*
+- *"Create a pipeline that reviews every file changed since main with the reviewer agent, three at a time, and returns the findings as JSON."*
+- *"Turn what we just did (build, run `./run_game.exe manic_miner.html`, check the output has no errors) into a pipeline I can run again."*
+- *"Make a pipeline that waits until PR #42 is merged, then runs the deploy script."*
+
+### Change
+
+- *"Add a step to the verify pipeline that runs `npm run build` after the tests pass."*
+- *"In release, wait 15 minutes after the tag instead of 10."*
+- *"Make the test step of fix-until-green retry three times before it routes to the fix."*
+
+The model saves a new version; the Board tab shows it waiting for approval, with **Changes** against the version you approved.
+
+### Run and follow
+
+- *"Run verify."* / *"Run release for version 1.4.0."*
+- *"Run verify and wait for it, then tell me what failed."* (the model uses `pipeline wait`, not sleep)
+- *"Start triage on mann1x/cline in the background and keep working on the docs."*
+- *"What's the status of the last release run?"* / *"List the runs of verify."*
+
+### Recover
+
+- *"The release run failed at the tests; I fixed them. Resume it."* (`pipeline resume`)
+- *"Re-run release from the tag step."* (`pipeline rerun`, reusing the build and test results)
+- *"Stop the triage run."*
+
+### Combine with the board
+
+- *"Plan the feature. The last task, checking everything, should use the verify pipeline."* (`use-pipeline:verify`)
+- *"Run verify for task T4."* (`pipeline run` with `task`: T4 waits on the run)
+
+## CLI
+
+With `--pipelines` (or `CLINE_PIPELINES=1`): `/pipelines` lists the pipelines, `/pipelines approve <name>` approves one, and `/pipelines runs` lists the runs. Option+E opens it from the command palette.

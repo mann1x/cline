@@ -634,6 +634,18 @@ There can be any number of memories. For each workspace you tick the ones its ta
 
 It is off by default: **Settings > Memory**, or `--memory`. Guide: [`docs/features/memory.mdx`](docs/features/memory.mdx).
 
+## Task Board
+
+Every conversation has a task board: the model plans the request as tasks with `task_plan`, each saying what changes, why, and how it is checked, and works through them with `task_update`. A task waits for the tasks it depends on and, through gates, for something outside the board: your decision (`human:`), a time, a commit on a branch, a merged pull request or a passing GitHub run, an agent's run, a background command or a pipeline run. Tasks that don't need each other are ready side by side, and with agent teams on, teammates take them from the same board, each holding its own. Plans worth repeating are saved as templates with `{{variables}}`, in `.cerebriline/task-templates/` or your home folder. `/tasks` prints the board in the CLI. Guide: [`docs/features/task-board.mdx`](docs/features/task-board.mdx).
+
+## Board Tab
+
+**Cerebriline: Open Board** (or **Open board** in the chat's title bar) opens an editor tab that draws the board as cards, and lets you do to it everything the model can: start, finish, cancel and delete tasks, set priority, wire dependencies by dragging one card to another, add steps, add and resolve gates, and have a task done by a pipeline. The model is told about every change you make. The tab lists this conversation's board, three drafts you can build before a conversation and start one from, the boards of the workspace's ten newest conversations, and the boards saved in Memory: copy any of them to another (Add or Replace), save it in Memory, export it to a file and load it back. Guide: [`docs/features/board-tab.mdx`](docs/features/board-tab.mdx).
+
+## Pipelines
+
+Reusable workflows the model writes with the `pipeline` tool and Cerebriline runs in the background: commands, tool calls, values, `if` and `switch` branches, merges, loops over a list, waits, approvals, checks, sub-agents and configured agents (with JSON answers), swarms, web requests and other pipelines, with retries, error branches and a failure pipeline. They are JSON files in `.cerebriline/pipelines/`, versioned with your repository. A saved pipeline is a proposal: only a version you approve runs, and every command inside a run still goes through your auto-approve settings. `pipeline test` runs one with pinned results and no side effects. The Board tab edits them with a form per step (help on hover, completion for tools, agents, steps and expressions), shows the model's changes line by line against the version you approved, and follows each run step by step, with Retry, Skip, Re-run and Stop. A run cut off by a reload picks up when its conversation is reopened. No server, no container. Off by default: **Settings > Features > Pipelines**, or `--pipelines`. Guide, with examples of what to ask: [`docs/features/pipelines.mdx`](docs/features/pipelines.mdx).
+
 ## Built-in Skills
 
 Cerebriline ships with skills of its own, listed under **Built-in Skills** in the Skills tab with nothing to install, in the extension, the CLI and the SDK. All ship turned off except the three media skills.

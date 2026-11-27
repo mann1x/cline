@@ -123,6 +123,34 @@ memories chosen per workspace. `remember`, `recall` and `forget`, and the notes
 about each message you send are put beside it automatically. Off by default.
 [Guide](https://github.com/mann1x/cline/blob/main/docs/features/memory.mdx).
 
+**A task board for every conversation.** The model plans the request as
+tasks, each with what changes, why, and how it is checked, and works through
+them in order. A task waits for the tasks it depends on and, through gates, for
+your decision, a time, a commit, a merged pull request, an agent's run or a
+pipeline. Teammates take tasks from the same board. Plans worth repeating are
+saved as templates with variables, in the workspace or your home folder.
+[Guide](https://github.com/mann1x/cline/blob/main/docs/features/task-board.mdx).
+
+**The Board tab.** An editor tab that draws the board as cards and lets you
+do to it everything the model can: start, finish, cancel and delete tasks, set
+priority, wire dependencies by dragging, add steps and gates. Keep three draft
+boards and start a conversation from one; recover the board of any of the
+workspace's ten newest conversations; copy a board to another (Add or Replace),
+save it in Memory, export it to a file and load it back. The model is told
+about every change you make.
+[Guide](https://github.com/mann1x/cline/blob/main/docs/features/board-tab.mdx).
+
+**Pipelines.** Reusable workflows the model writes and Cerebriline runs in the
+background: commands, tool calls, checks, branches, loops over a list, waits,
+approvals, agents and swarms, web requests and other pipelines, kept as JSON in
+`.cerebriline/pipelines/` and versioned with your repository. Nothing runs
+until you approve it, and each command inside a run still goes through your
+auto-approve settings. Edit them in the Board tab with a form per step, review
+the model's changes line by line, follow runs step by step, and retry, skip,
+re-run or stop them. A task on the board can be done by a pipeline. No server,
+no container. Off by default (Settings > Features > Pipelines).
+[Guide](https://github.com/mann1x/cline/blob/main/docs/features/pipelines.mdx).
+
 **Built-in skills.** Twenty skills ship with the extension. Seventeen are
 turned off until you want them: QA and Docker deployment (by Chris), build and
 run, a test-driven set (`tdd-wizard` and three more), a spec-driven set after

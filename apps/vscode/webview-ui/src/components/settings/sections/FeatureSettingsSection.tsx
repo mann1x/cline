@@ -104,7 +104,7 @@ const agentFeatures: FeatureToggle[] = [
 		// surface only strong models (a cloud model, a 27B dense) use well.
 		// Each provider's Tools section can drop it again once this is on.
 		id: "pipelines",
-		label: "Pipelines (preview)",
+		label: "Pipelines",
 		description:
 			"Let the model write, test and run pipelines: reusable chains of commands, tool calls, checks, waits and approvals, kept as JSON in .cerebriline/pipelines/ and run in the background while you work. Only a version you approve runs. Adds one tool to every request. A provider's Tools section can switch it off for that connection.",
 		stateKey: "pipelinesEnabled",

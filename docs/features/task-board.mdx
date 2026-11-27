@@ -1,0 +1,144 @@
+---
+title: "Task board"
+sidebarTitle: "Task board"
+description: "The conversation's plan as tasks with dependencies, gates and acceptance: how the model plans and works through it, what you can do to it, saved plans, and how teammates share it."
+---
+
+Every conversation has a **task board**: the plan for the request, written by the model as tasks. Each task says what changes, why, and how it is checked. Tasks that need another one finished first wait for it, and a task can also wait for something outside the board: your decision, a time, a commit, a pull request, an agent's run or a pipeline.
+
+The board is **on by default** and costs nothing until the model plans. It is kept per conversation, beside the conversation's transcript, so a conversation you reopen shows its board again.
+
+You see the board in two places:
+
+- **The task panel** above the chat: the open tasks, what can start now, and the Graph tab.
+- **The Board tab**: an editor tab that draws the board as cards and lets you change it, copy it, save it and start from it. See [Board tab](/features/board-tab).
+
+## How the model uses it
+
+The model has three tools:
+
+| Tool | What it does |
+| --- | --- |
+| `task_plan` | Puts a plan on the board in one call: each task with a title, description, acceptance (what must be true for it to be done), the tasks it depends on, a parent (to make it a step of another task), priority, gates and links. The first ready task starts. |
+| `task_update` | Starts, finishes, cancels or reopens tasks; ticks acceptance items; adds or removes dependencies, gates and links; renames; sets priority or puts a task off for later. Several tasks in one call. Finishing a task needs a note saying what was done and how it was checked. |
+| `task_view` | Reads the board: what can start now (the default), one task in full, the open tasks in dependency layers, what each blocked task waits on, or the board as a Mermaid flowchart. |
+
+You rarely need to name these. Ask for the work and the model plans it:
+
+- *"Fix the login bug. Plan it first: one task per change, each with how you'll check it."*
+- *"Make a plan for moving the settings page to the new API, and wait for my OK before starting."* In **Plan mode**, the plan goes on the board and nothing starts until you switch to Act.
+- *"Add a task to update the changelog after the release task."*
+- *"What's left on the board?"* or *"Show me the board as a graph."*
+
+### Statuses
+
+| Status | Meaning |
+| --- | --- |
+| `pending` | Not started. It is **ready** when everything it depends on is done and its gates are open. |
+| `active` | Being worked on. One task is active at a time for the lead; teammates hold their own. |
+| `waiting` | Started, but now waiting on a gate (an active task given a gate waits, so the next task can start). |
+| `done` | Finished, with the outcome noted. |
+| `cancelled` | Dropped, with the reason. It stays on the board for the record. |
+
+Priority (`H`, `M`, `L`) orders the tasks that can start: high goes first. A task put off for **later** stays on the board but is not started until the rest is done.
+
+### Dependencies
+
+`depends` is for a task that needs another finished first. Tasks that don't need each other get none, so they show as ready side by side (and teammates can take them at the same time). Inside one `task_plan` call, `"#2"` means the second task of that call, so a whole plan with its order goes in at once; an existing task is named by its id, `T3`.
+
+A task with a `parent` is a step of that task: `T2.1`, `T2.2` under `T2`.
+
+## Gates
+
+A gate is what a task waits on besides other tasks. The task is blocked until each of its gates opens. The model adds them with `gate` in `task_plan` or `task_update`; you can add them from the Board tab.
+
+| Gate | Opens when |
+| --- | --- |
+| `human:<what you must decide>` | You answer a question that names the task or the gate, or it is the only gate waiting, or you press **Resolve**. |
+| `timer:+30m` or an ISO time | The time passes. |
+| `commit:<sha>@<branch>` | The branch contains the commit. |
+| `run:<agent or run id>` | That agent's run ends (a delegated agent's answer, or a background agent's report). |
+| `command:<id>` | A background command exits. |
+| `gh-pr:owner/repo#12` | The pull request is merged. Checked through `gh` when the board is looked at. |
+| `gh-run:owner/repo/<run id>` | The GitHub Actions run succeeds. Checked through `gh`. |
+| `use-pipeline:<name>` | Not a wait: it says the task is done by that pipeline. See [A task done by a pipeline](/features/pipelines#a-task-done-by-a-pipeline). |
+| `pipeline:<run>` | That pipeline run ends. Set by the run itself. |
+
+When a gate opens, the model is told, with what became ready. A gate that can no longer open (the run failed, the PR was closed) is reported once and stays until it is removed.
+
+Examples:
+
+- *"Before you deploy, add a gate so it waits for my approval."* → `human:approve the deploy`
+- *"Retry the flaky upload in 30 minutes."* → `timer:+30m`
+- *"Don't start the docs task until PR #42 is merged."* → `gh-pr:owner/repo#42`
+
+## Links
+
+`link` records how tasks relate: `discovered-from T3`, `related T4`, `caused-by T2`, `supersedes T3` (cancels T3 and moves what waited on it to the new task) and `duplicate-of T3` (cancels this task the same way). A link can also be a URL, a commit or a file path. Files open in the editor from the task panel.
+
+## What you can do
+
+From the task panel or the Board tab, on any task of the open conversation's board:
+
+- **Start**, **Done**, **Cancel** or **Reopen** it.
+- Edit its title and description, set its priority, or put it off for later.
+- Add or tick acceptance items, add a note.
+- Add the tasks it waits on, or remove one; on the Board tab's canvas, drag from one task to another to make the second wait on the first.
+- Add steps under it.
+- Add a gate, **Resolve** a gate (open it now) or **Remove** it.
+- **Delete** it. Only you can delete; the model cancels. A task goes with its steps, and the tasks after it stop waiting on it. A task held by a running teammate or pipeline run is refused until that run ends.
+- **Show where it was planned**, which scrolls the chat to the call that created it.
+
+The model is told about every change you make: with the next tool results while it is working, or at the start of its next turn.
+
+## Saved plans (task templates)
+
+A plan worth repeating is a JSON file of tasks:
+
+- in the workspace, `.cerebriline/task-templates/` (versioned with the repository), or
+- in your home folder, `~/.cerebriline/task-templates/`.
+
+The workspace's win when both have the same name. `{{name}}` anywhere in a template is a variable, filled when the template is used.
+
+```json .cerebriline/task-templates/release.json
+{
+  "name": "release",
+  "description": "Cut a release",
+  "tasks": [
+    { "title": "Update the changelog for {{version}}", "acceptance": ["CHANGELOG.md has a {{version}} section"] },
+    { "title": "Bump the version to {{version}}", "depends": ["#1"] },
+    { "title": "Run the full test suite", "depends": ["#2"], "acceptance": ["`npm test` passes"] },
+    { "title": "Tag v{{version}}", "depends": ["#3"], "gate": ["human:approve the tag"] }
+  ]
+}
+```
+
+Use one by asking: *"Use the release plan for version 2.3.0."* The model calls `task_plan {"template": "release", "vars": {"version": "2.3.0"}}`. The `template` field is offered to the model only when a template exists, so a workspace without any pays nothing for it.
+
+From the task panel you can start from a saved plan, or save the current board as one. Cancelled tasks, run ids, timers and commits are left out; `human:` and `use-pipeline:` gates are kept. In the Board tab, **Make a task plan…** turns a pipeline into a saved plan (see [Pipelines](/features/pipelines#a-pipeline-as-a-plan)).
+
+## Boards beyond the conversation
+
+- **Drafts.** With no conversation open, you can build a board yourself and start the next conversation from it. There are three draft slots.
+- **Recent conversations.** The boards of the workspace's ten newest conversations are listed in the Board tab, so a board made in an earlier conversation is never lost.
+- **Memory.** Any board can be saved into Memory and copied back later.
+- **Files.** A board can be exported to JSON and loaded onto another board.
+
+All of these are in the [Board tab](/features/board-tab).
+
+## Teammates
+
+With **Settings > Features > Teammates** on, teammates work the same board:
+
+- `team_task` reads and writes the conversation's board. A task a teammate creates or claims is a `T<n>` like any other.
+- A task in `task_plan` can name a teammate in `to`. As soon as what it depends on is done, the teammate starts it in the background with the task, its acceptance and what the tasks before it came to. The lead is told when it starts and when it closes.
+- A teammate that starts a task holds it. Another agent's change to it is refused while the holder's run is going, unless it sends `force: true` (noted on the task). Your changes from the panel are never refused.
+- A teammate is asked, before its run ends, to complete or block what it still holds; if it does neither, the task goes back on the board and the lead is told.
+
+## When a run looks stuck
+
+If the struggle detector sees the model going in circles, its message names the active task and asks for what failed to be noted on it, and for the task to be split or given a `human:` gate.
+
+## CLI
+
+`/tasks` prints the conversation's board (Option+J in the command palette).
