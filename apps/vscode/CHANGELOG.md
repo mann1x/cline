@@ -5,7 +5,7 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.310] — 2026-11-27
+## [4.100.311] — 2026-11-27
 
 ### Agents
 
@@ -51,6 +51,15 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   drew anything. The list now reads only the conversations' records and
   board logs, and the tab draws first and adds Recent conversations when
   they have been read.
+- **Copying or loading a board keeps every dependency.** A task listed
+  before the tasks it waits on lost those waits on the copy: "Verify the game
+  passes the check" came out waiting on nothing, with a "dependency … ignored"
+  line for each fix it waited on. The copy now lists what a task waits on
+  first. A pipeline run's own task (`▶ manic_miner #1`) is no longer copied
+  as work to do, and the reply no longer ends with the model's "Plan mode:
+  nothing is started" reminder.
+- **The Board tab's reply closes with ×**, and a long one (a copy lists
+  every task) scrolls within a few lines instead of taking half the tab.
 - **A task can wait on more than other tasks.** `task_update` and
   `task_plan` take `gate`: what the task waits on besides its dependencies.
   `human:<what you must decide>` opens when you answer a question that names
