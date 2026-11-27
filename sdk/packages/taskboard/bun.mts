@@ -11,7 +11,9 @@ const sourcemap = Bun.env.CLINE_SOURCEMAPS === "1" ? "linked" : "none";
 const minify = Bun.env.CLINE_SOURCEMAPS !== "1";
 
 const result = await Bun.build({
-	entrypoints: ["./src/index.ts"],
+	// `protocol` is its own entry: the Board tab's messages, types and two
+	// constants, for a browser UI that must not load the Node half.
+	entrypoints: ["./src/index.ts", "./src/protocol.ts"],
 	outdir: "./dist",
 	target: "node",
 	format: "esm",

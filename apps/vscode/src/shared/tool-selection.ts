@@ -191,7 +191,7 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "pipeline",
 		label: "pipeline",
 		summary: "Writes, tests and runs pipelines in the background. Switch it off for a model that cannot handle them.",
-		tokens: 406,
+		tokens: 451,
 		group: "other",
 		requires: { feature: "pipelinesEnabled", label: "Features → Pipelines" },
 	},

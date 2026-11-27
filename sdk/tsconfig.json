@@ -32,6 +32,7 @@
 			"@cline/llms/browser": ["./packages/llms/src/index.browser.ts"],
 			"@cline/sdk": ["./packages/sdk/src/index.ts"],
 			"@cline/taskboard": ["./packages/taskboard/src/index.ts"],
+			"@cline/taskboard/*": ["./packages/taskboard/src/*"],
 			"@cline/shared": ["./packages/shared/src/index.ts"],
 			"@cline/shared/automation": ["./packages/shared/src/automation/index.ts"],
 			"@cline/shared/browser": ["./packages/shared/src/index.browser.ts"],

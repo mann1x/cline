@@ -20,6 +20,7 @@
 			],
 			"@cline/llms": ["../sdk/packages/llms/src/index.ts"],
 			"@cline/taskboard": ["../sdk/packages/taskboard/src/index.ts"],
+			"@cline/taskboard/*": ["../sdk/packages/taskboard/src/*"],
 			"@cline/shared": ["../sdk/packages/shared/src/index.ts"],
 			"@cline/shared/storage": ["../sdk/packages/shared/src/storage/index.ts"],
 			"@cline/shared/db": ["../sdk/packages/shared/src/db/index.ts"],

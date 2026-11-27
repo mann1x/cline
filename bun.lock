@@ -372,6 +372,7 @@
         "@cline/core": "workspace:*",
         "@cline/llms": "workspace:*",
         "@cline/shared": "workspace:*",
+        "@cline/taskboard": "workspace:*",
         "@google/genai": "^1.30.0",
         "@grpc/grpc-js": "^1.9.15",
         "@grpc/proto-loader": "^0.7.13",

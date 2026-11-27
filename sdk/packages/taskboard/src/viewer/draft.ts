@@ -1,4 +1,4 @@
-import { TaskGraphStore } from "@cline/core"
+import { TaskGraphStore } from "../task-graph";
 
 /**
  * The Board tab's draft board: tasks the person adds while no conversation
@@ -12,54 +12,57 @@ import { TaskGraphStore } from "@cline/core"
 export type BoardEditAction =
 	| { op: "update"; updates: unknown[] }
 	| { op: "plan"; tasks: unknown[] }
-	| { op: "remove"; ids: string[] }
+	| { op: "remove"; ids: string[] };
 
 export interface DraftStorage {
-	get(): unknown[] | undefined
-	set(events: unknown[] | undefined): void
+	get(): unknown[] | undefined;
+	set(events: unknown[] | undefined): void;
 }
 
 export class DraftBoard {
-	private store: TaskGraphStore
+	private store: TaskGraphStore;
 
 	constructor(private readonly storage: DraftStorage) {
-		this.store = DraftBoard.load(storage.get())
+		this.store = DraftBoard.load(storage.get());
 	}
 
 	private static load(events: unknown[] | undefined): TaskGraphStore {
-		const store = new TaskGraphStore({ planMode: true })
-		if (events && events.length > 0) store.reconcile(undefined, undefined, { events, by: "person" })
-		return store
+		const store = new TaskGraphStore({ planMode: true });
+		if (events && events.length > 0)
+			store.reconcile(undefined, undefined, { events, by: "person" });
+		return store;
 	}
 
 	isEmpty(): boolean {
-		return this.store.isEmpty()
+		return this.store.isEmpty();
 	}
 
 	/** The board as the task panel's `task_graph` row carries it; undefined while it has no tasks. */
 	text(): string | undefined {
-		return this.store.isEmpty() ? undefined : JSON.stringify(this.store.snapshot())
+		return this.store.isEmpty()
+			? undefined
+			: JSON.stringify(this.store.snapshot());
 	}
 
 	events(): unknown[] {
-		return [...this.store.getEvents()]
+		return [...this.store.getEvents()];
 	}
 
 	/** The person's change, as the task panel sends it to a conversation's board. */
 	edit(action: BoardEditAction): { ok: boolean; lines: string[] } {
-		const origin = { by: "person" }
+		const origin = { by: "person" };
 		const outcome =
 			action.op === "plan"
 				? this.store.plan({ tasks: action.tasks }, origin, { autoStart: false })
 				: action.op === "remove"
 					? this.store.remove(action.ids, origin)
-					: this.store.update({ updates: action.updates }, origin)
-		this.storage.set(this.events())
-		return { ok: outcome.changed, lines: outcome.lines }
+					: this.store.update({ updates: action.updates }, origin);
+		this.storage.set(this.events());
+		return { ok: outcome.changed, lines: outcome.lines };
 	}
 
 	clear(): void {
-		this.store = DraftBoard.load(undefined)
-		this.storage.set(undefined)
+		this.store = DraftBoard.load(undefined);
+		this.storage.set(undefined);
 	}
 }

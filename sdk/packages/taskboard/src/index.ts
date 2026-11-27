@@ -17,5 +17,50 @@ export {
 	type TaskBoardControl,
 } from "./attach";
 export * from "./pipelines";
+export * from "./protocol";
 export * from "./task-graph";
 export type { ToolOperationResult } from "./tool-result";
+export {
+	type BoardAnswer,
+	type BoardBackend,
+	type BoardBackendOptions,
+	type BoardHostUi,
+	createBoardBackend,
+} from "./viewer/backend";
+export {
+	type CollectInput,
+	collectViewerData,
+	focusForFile,
+	VIEWER_MAX_EVENTS,
+	VIEWER_MAX_RUNS,
+} from "./viewer/collect";
+export {
+	type BoardEditAction,
+	DraftBoard,
+	type DraftStorage,
+} from "./viewer/draft";
+export {
+	BOARD_FILE_FORMAT,
+	type BoardFile,
+	type BoardIoDeps,
+	type BoardIoUi,
+	type BoardPickItem,
+	exportBoard,
+	loadBoard,
+	type SavedBoardEntry,
+	tasksFromBoardFile,
+} from "./viewer/io";
+export {
+	type BoardRef,
+	BoardSlots,
+	type BoardSlotsDeps,
+	DRAFT_COUNT,
+	draftKey,
+	LIVE_BOARD,
+	parseBoardKey,
+	RECENT_BOARDS,
+	type RecentBoard,
+	recentKey,
+	SAVED_BOARDS,
+	savedKey,
+} from "./viewer/slots";

@@ -59,6 +59,9 @@
 			"@cline/taskboard": [
 				"../../sdk/packages/taskboard/src/index.ts"
 			],
+			"@cline/taskboard/*": [
+				"../../sdk/packages/taskboard/src/*"
+			],
 			"@cline/llms": [
 				"../../sdk/packages/llms/src/index.ts"
 			],

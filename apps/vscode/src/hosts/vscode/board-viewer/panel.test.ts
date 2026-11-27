@@ -2,10 +2,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { approvePipeline, findPipeline, savePipeline, TaskGraphStore } from "@cline/core"
+import { type BoardEditAction, BoardSlots, draftKey, type RecentBoard, type SavedBoardEntry } from "@cline/taskboard"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { SavedBoardEntry } from "./board-io"
-import { BoardSlots, draftKey, type RecentBoard } from "./board-slots"
-import type { BoardEditAction } from "./draft"
 
 /**
  * The board viewer's requests (pipelines phase 4), answered by the panel
