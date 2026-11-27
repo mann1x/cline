@@ -33,6 +33,18 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ### Task board
 
+- **The Board tab lists every board, and copies between them.** Its left
+  column now has Boards: this conversation's, three drafts, the board of each
+  of the workspace's ten newest conversations, and the boards saved in
+  Memory. Pick one to see it. This conversation's board and the drafts are
+  changed in place; the others are shown as they are, and can be copied.
+  "Copy to…" puts a board's tasks on this conversation or a draft, and asks
+  Add or Replace when that board has tasks; Replace on this conversation
+  waits until the model stops working, Add works any time, and the model is
+  told what changed either way. "Save to Memory" keeps any board for later,
+  and a board saved there can be deleted. Each draft can start the next new
+  conversation, and the draft you had becomes Draft 1. A board made in an
+  earlier conversation is never lost: it is under Recent conversations.
 - **A task can wait on more than other tasks.** `task_update` and
   `task_plan` take `gate`: what the task waits on besides its dependencies.
   `human:<what you must decide>` opens when you answer a question that names
