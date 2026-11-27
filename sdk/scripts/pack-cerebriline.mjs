@@ -224,11 +224,11 @@ uses it and re-exports it, so an application on the full SDK gets the same
 classes. The guides: [task board](${REPOSITORY}/blob/main/docs/features/task-board.mdx),
 [pipelines](${REPOSITORY}/blob/main/docs/features/pipelines.mdx).`
 				: upstream
-				? // Upstream's README leads with its own `# @cline/ui` title.
-					proseOf(upstream)
-						.replace(/^#[^\n]*\n+/, "")
-						.trimEnd()
-				: `${description ?? "Part of the Cerebriline SDK."}
+					? // Upstream's README leads with its own `# @cline/ui` title.
+						proseOf(upstream)
+							.replace(/^#[^\n]*\n+/, "")
+							.trimEnd()
+					: `${description ?? "Part of the Cerebriline SDK."}
 
 Installed as a dependency of [\`${TO_SCOPE}/sdk\`](https://www.npmjs.com/package/${TO_SCOPE}/sdk);
 start there unless you need this layer on its own.`;

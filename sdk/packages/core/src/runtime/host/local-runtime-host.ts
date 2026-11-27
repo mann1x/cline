@@ -22,16 +22,14 @@ import {
 } from "@cline/shared";
 import { setHomeDirIfUnset } from "@cline/shared/storage";
 import {
-	createGraphTeamBoard,
+	attachTaskBoard,
 	createPipelineTool,
 	PIPELINE_TOOL_NAME,
+	type PipelineRun,
 	PipelineSession,
-	renderBoardListing,
-	renderMermaid,
-	TaskGraphTracker,
+	type TaskGraphSnapshot,
 	taskTemplateDirs,
 	withPipelineRules,
-	withTaskBoardRules,
 	withTaskGraphCapture,
 } from "@cline/taskboard";
 import { isOAuthProvider } from "../../auth/provider-auth-registry";
@@ -1285,16 +1283,6 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// what was made after the cut, a fork replays the copied calls, and a
 		// conversation from before the graph imports its last checklist.
 		const taskGraphConfig = configWithProvider.taskGraph;
-		// The board's rules go in the system prompt, the one channel every
-		// model reads as instructions, whatever template built the rest.
-		if (taskGraphConfig?.enabled !== false) {
-			configWithProvider.systemPrompt =
-				withTaskBoardRules(
-					configWithProvider.systemPrompt,
-					configWithProvider.mode === "plan",
-					typeof runtime.teamRuntime?.useTaskBoard === "function",
-				) ?? configWithProvider.systemPrompt;
-		}
 		// Pipelines: off unless Features turns them on, and then off again for
 		// a provider whose tool selection drops `pipeline` (a small model).
 		// Not in plan mode: a pipeline writes files and runs commands.
@@ -1304,104 +1292,91 @@ export class LocalRuntimeHost implements RuntimeHost {
 			!(configWithProvider.providerConfig?.tools?.disabled ?? []).includes(
 				PIPELINE_TOOL_NAME,
 			);
-		if (pipelinesOn) {
-			configWithProvider.systemPrompt =
-				withPipelineRules(configWithProvider.systemPrompt) ??
-				configWithProvider.systemPrompt;
-		}
+		// The pipeline tool: its runs call this session's own tools (the final,
+		// wrapped list, read when a node runs) under this session's policies.
+		const pipelineWorkspace =
+			configWithProvider.workspaceRoot ?? configWithProvider.cwd;
+		const pipelineOptions = pipelinesOn
+			? {
+					tools: (): readonly AgentTool[] => tools as readonly AgentTool[],
+					...(bootstrap.toolPolicies
+						? { toolPolicies: bootstrap.toolPolicies }
+						: {}),
+					...(bootstrap.requestToolApproval
+						? { requestApproval: bootstrap.requestToolApproval }
+						: {}),
+					agentToolName: buildConfiguredAgentToolName,
+					...(configWithProvider.pipelines?.approveHow
+						? { approveHow: configWithProvider.pipelines.approveHow }
+						: {}),
+					onRunChange: (run: PipelineRun) =>
+						configWithProvider.pipelines?.onRunChange?.({
+							id: run.id,
+							view: () => run.view(),
+						}),
+				}
+			: undefined;
 		// On unless the host turns it off: the graph replaced the checklist
-		// (4.100.292), and an SDK session runs what the plugin runs.
+		// (4.100.292), and an SDK session runs what the plugin runs. Built by
+		// @cline/taskboard's attachTaskBoard, as any application embedding the
+		// board builds it: the tracker brought in line with this history, the
+		// team's tasks on the board, the pipeline runs, the panel's handles.
 		const taskGraphOn = taskGraphConfig?.enabled !== false;
-		const taskGraphTracker = taskGraphOn
-			? new TaskGraphTracker({
+		const legacy = taskGraphOn
+			? findLatestTaskProgress(
+					initialMessages as readonly { content?: unknown }[] | undefined,
+				)
+			: undefined;
+		const taskBoard = taskGraphOn
+			? attachTaskBoard({
+					sessionId,
 					logPath: join(sessionDir, `${sessionId}.tasks.jsonl`),
 					planMode: configWithProvider.mode === "plan",
 					...(configWithProvider.cwd ? { cwd: configWithProvider.cwd } : {}),
+					...(pipelineWorkspace ? { workspaceRoot: pipelineWorkspace } : {}),
 					templateDirs: taskTemplateDirs(
 						configWithProvider.workspaceRoot ?? configWithProvider.cwd,
 					),
 					// The loop detector's list: the board counts the same writes.
 					writeToolNames: WRITE_CLASS_TOOL_NAMES,
-					onForcedClaim: (id, from, to) =>
-						configWithProvider.logger?.log?.(
-							`[task-graph] ${to} took ${id} over from ${from} (forced)`,
-							{ sessionId },
-						),
-					onNudge: (id, key) =>
-						configWithProvider.logger?.log?.(
-							`[task-graph] nudge ${id} (${key})`,
-							{
-								sessionId,
-							},
-						),
 					...(taskGraphConfig?.writeInterval !== undefined
 						? { writeInterval: taskGraphConfig.writeInterval }
 						: {}),
 					...(taskGraphConfig?.onUpdate
 						? {
-								onChange: (store) =>
-									taskGraphConfig.onUpdate?.(store.snapshot()),
+								onChange: (snapshot: TaskGraphSnapshot) =>
+									taskGraphConfig.onUpdate?.(snapshot),
 							}
 						: {}),
+					log: (line) => configWithProvider.logger?.log?.(line, { sessionId }),
+					history: initialMessages,
+					...(legacy
+						? { legacyChecklist: buildTaskProgressState(legacy).items }
+						: {}),
+					...(taskGraphConfig?.seed ? { seed: taskGraphConfig.seed } : {}),
+					// Phase 4: the team's tasks are the board's, when the team
+					// runtime can take a board (a host may bring its own).
+					...(runtime.teamRuntime ? { team: runtime.teamRuntime } : {}),
+					...(pipelineOptions ? { pipelines: pipelineOptions } : {}),
 				})
 			: undefined;
-		if (taskGraphTracker) {
-			const legacy = findLatestTaskProgress(
-				initialMessages as readonly { content?: unknown }[] | undefined,
-			);
-			const outcome = taskGraphTracker.start(
-				initialMessages,
-				legacy ? buildTaskProgressState(legacy).items : undefined,
-				taskGraphConfig?.seed,
-			);
+		const taskGraphTracker = taskBoard?.tracker;
+		// The board's rules go in the system prompt, the one channel every
+		// model reads as instructions, whatever template built the rest; the
+		// pipelines' with them when there are pipelines.
+		if (taskBoard) {
+			configWithProvider.systemPrompt =
+				taskBoard.systemPrompt(configWithProvider.systemPrompt) ??
+				configWithProvider.systemPrompt;
 			configWithProvider.logger?.log?.(
-				`[task-graph] ${outcome}: ${taskGraphTracker.store.getState().order.length} tasks`,
+				`[task-graph] ${taskBoard.started}: ${taskBoard.store.getState().order.length} tasks`,
 				{ sessionId },
 			);
-			// Phase 4: the team's tasks are the board's. `team_task` keeps its
-			// actions; what it creates and claims is a `T<n>` here.
-			// Checked, not assumed: a host may bring a team runtime of its own.
-			if (typeof runtime.teamRuntime?.useTaskBoard === "function") {
-				const board = createGraphTeamBoard(taskGraphTracker.store, {
-					onNudge: (id, key) =>
-						configWithProvider.logger?.log?.(
-							`[task-graph] nudge ${id} (${key})`,
-							{ sessionId },
-						),
-					onReleased: (agentId, ids, reason) =>
-						taskGraphTracker.noteReleased(agentId, ids, reason),
-					onDispatched: (agentId, taskId, runId) =>
-						taskGraphTracker.noteDispatched(agentId, taskId, runId),
-					onDispatchClosed: (agentId, task) =>
-						taskGraphTracker.noteDispatchClosed(agentId, task),
-					onDispatchRefused: (agentId, taskId, reason) =>
-						taskGraphTracker.noteDispatchRefused(agentId, taskId, reason),
-				});
-				runtime.teamRuntime.useTaskBoard(board);
-				taskGraphTracker.attachTeam(board);
-			}
-			taskGraphConfig?.onAttach?.({
-				sessionId,
-				edit: (action) => taskGraphTracker.edit(action),
-				snapshot: () => taskGraphTracker.store.snapshot(),
-				exportBoard: (header) =>
-					taskGraphTracker.exportBoard({ ...header, sessionId }),
-				templates: () =>
-					taskGraphTracker.templates().map((template) => ({
-						name: template.name,
-						...(template.description
-							? { description: template.description }
-							: {}),
-						vars: template.vars,
-						tasks: template.tasks.length,
-						source: template.source,
-					})),
-				useTemplate: (name, vars) => taskGraphTracker.useTemplate(name, vars),
-				saveTemplate: (name, description, where) =>
-					taskGraphTracker.saveTemplate(name, description, where),
-				mermaid: () => renderMermaid(taskGraphTracker.store.getState()),
-				render: () => renderBoardListing(taskGraphTracker.store.getState()),
-			});
+			taskGraphConfig?.onAttach?.(taskBoard.control);
+		} else if (pipelinesOn) {
+			configWithProvider.systemPrompt =
+				withPipelineRules(configWithProvider.systemPrompt) ??
+				configWithProvider.systemPrompt;
 		}
 		// The checklist is gone (4.100.292); a host's toolset that still names a
 		// `task_progress` tool has it taken out, since the graph is the plan.
@@ -1429,52 +1404,33 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// cannot, and on the CLI the measured result of the latter was ten edits,
 		// no checks, and "the implementation is complete" on a file that does not
 		// parse.
-		// The pipeline tool: its runs call this session's own tools (the final,
-		// wrapped list, read when a node runs) under this session's policies.
-		const pipelineWorkspace =
-			configWithProvider.workspaceRoot ?? configWithProvider.cwd;
-		const pipelineSession: PipelineSession | undefined =
-			pipelinesOn && pipelineWorkspace
+		// The board's pipeline runs; without a board (the host turned it off),
+		// the same runs with nowhere to put their tasks.
+		const pipelineSession: PipelineSession | undefined = taskBoard
+			? taskBoard.pipelines
+			: pipelineOptions && pipelineWorkspace
 				? new PipelineSession({
 						workspaceRoot: pipelineWorkspace,
 						sessionId,
-						...(taskGraphTracker ? { board: taskGraphTracker.store } : {}),
-						tools: (): readonly AgentTool[] => tools as readonly AgentTool[],
-						...(bootstrap.toolPolicies
-							? { toolPolicies: bootstrap.toolPolicies }
-							: {}),
-						...(bootstrap.requestToolApproval
-							? { requestApproval: bootstrap.requestToolApproval }
-							: {}),
+						...pipelineOptions,
 						log: (line) =>
 							configWithProvider.logger?.log?.(line, { sessionId }),
-						agentToolName: buildConfiguredAgentToolName,
-						...(configWithProvider.pipelines?.approveHow
-							? { approveHow: configWithProvider.pipelines.approveHow }
-							: {}),
-						onRunChange: (run) =>
-							configWithProvider.pipelines?.onRunChange?.({
-								id: run.id,
-								view: () => run.view(),
-							}),
-						onRunEnded: (_run, lines) => {
-							if (lines.length > 0) taskGraphTracker?.notePipelineEnded(lines);
-						},
 					})
 				: undefined;
 		if (pipelineSession) {
-			configWithProvider.pipelines?.onAttach?.({
-				sessionId,
-				act: (action) => {
-					const outcome = pipelineSession.act(action);
-					if (outcome.tell) taskGraphTracker?.notePipelineNews([outcome.tell]);
-					return {
-						ok: outcome.ok,
-						lines: outcome.lines,
-						...(outcome.run ? { run: outcome.run } : {}),
-					};
+			configWithProvider.pipelines?.onAttach?.(
+				taskBoard?.pipelineControl ?? {
+					sessionId,
+					act: (action) => {
+						const outcome = pipelineSession.act(action);
+						return {
+							ok: outcome.ok,
+							lines: outcome.lines,
+							...(outcome.run ? { run: outcome.run } : {}),
+						};
+					},
 				},
-			});
+			);
 		}
 		const checklessTools = pipelineSession
 			? [
@@ -1575,8 +1531,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// exist. Later, not now: a run starts its nodes as it is picked up.
 		if (pipelineSession) {
 			setTimeout(() => {
-				const lines = pipelineSession.recoverInterrupted();
-				if (lines.length > 0) taskGraphTracker?.notePipelineNews(lines);
+				if (taskBoard) taskBoard.recoverInterruptedRuns();
+				else pipelineSession.recoverInterrupted();
 			}, 0);
 		}
 		// Don't let the run end quietly on a checklist with open boxes. Composed
