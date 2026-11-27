@@ -16,6 +16,9 @@ const ui = vi.hoisted(() => ({
 	posted: [] as unknown[],
 	warning: undefined as string | undefined,
 	input: undefined as string | undefined,
+	/** The label the person picks in a quick pick; none: cancelled. */
+	pick: undefined as string | undefined,
+	picks: [] as string[][],
 	info: [] as string[],
 }))
 
@@ -52,6 +55,10 @@ vi.mock("vscode", () => {
 			}),
 			showWarningMessage: async () => ui.warning,
 			showInputBox: async () => ui.input,
+			showQuickPick: async (items: { label: string }[]) => {
+				ui.picks.push(items.map((item) => item.label))
+				return items.find((item) => item.label === ui.pick)
+			},
 			showInformationMessage: async (text: string) => {
 				ui.info.push(text)
 				return undefined
@@ -82,6 +89,8 @@ beforeEach(() => {
 	ui.info.length = 0
 	ui.warning = undefined
 	ui.input = undefined
+	ui.pick = undefined
+	ui.picks.length = 0
 	boardTextValue = undefined
 	boardEdit.mockClear()
 	runAction.mockClear()
@@ -289,5 +298,41 @@ describe("the board viewer's requests", () => {
 		expect(findPipeline(root, "deploy")).toMatchObject({ valid: true, isApproved: true, author: "person" })
 		ui.input = undefined
 		expect(await request({ type: "boardViewer/newPipeline" })).toMatchObject({ ok: false })
+	})
+
+	it("starts a new pipeline from a copy of a saved one, which keeps its source's approval", async () => {
+		const steps = [{ id: "check", type: "check", command: "node -e 0" }]
+		savePipeline(root, { name: "manic_miner", description: "Checks the game", nodes: steps }, undefined, { by: "person" })
+		savePipeline(root, { name: "Draft", nodes: steps }, undefined, { by: "model" })
+
+		ui.pick = "A copy of manic_miner"
+		ui.input = "jet_set"
+		const made = await request({ type: "boardViewer/newPipeline" })
+		expect(ui.picks[0]).toEqual(["Empty", "A copy of Draft", "A copy of manic_miner"])
+		expect(made).toMatchObject({ ok: true, pipeline: "jet-set" })
+		const copy = findPipeline(root, "jet_set")
+		expect(copy?.definition).toMatchObject({ name: "jet_set", description: "Checks the game", nodes: steps })
+		expect(copy?.isApproved).toBe(true)
+		expect(findPipeline(root, "manic_miner")?.definition?.name).toBe("manic_miner")
+
+		// Copying one nobody approved does not approve it.
+		ui.pick = "A copy of Draft"
+		ui.input = "Draft two"
+		expect(await request({ type: "boardViewer/newPipeline" })).toMatchObject({ ok: true })
+		expect(findPipeline(root, "Draft two")).toMatchObject({ valid: true, isApproved: false })
+
+		ui.pick = undefined
+		expect(await request({ type: "boardViewer/newPipeline" })).toMatchObject({ ok: false })
+	})
+
+	it("refuses a task plan with no tasks and says why, instead of saving it empty", async () => {
+		savePipeline(root, { name: "manic_miner", nodes: [{ id: "check", type: "check", command: "node -e 0" }] }, undefined, {
+			by: "person",
+		})
+		ui.input = "manic_miner"
+		const reply = await request({ type: "boardViewer/toTemplate", slug: "manic-miner" })
+		expect(reply.ok).toBe(false)
+		expect(reply.errors?.[0]).toContain("manic_miner has only check steps, and none of them becomes a task")
+		expect(existsSync(join(root, ".cerebriline", "task-templates"))).toBe(false)
 	})
 })

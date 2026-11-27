@@ -889,7 +889,7 @@ function ActionBar({
 					)}
 					{pipeline.valid && (
 						<button className="bv-button" disabled={busy} onClick={onToTemplate} type="button">
-							Save as task template
+							Make a task plan…
 						</button>
 					)}
 				</>

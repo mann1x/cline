@@ -421,11 +421,15 @@ pandorum as a local vsix, and keeps the feature off by default.
      it; other gates and cancelled tasks are left out and listed. A task
      with subtasks is their container: its subtasks take its dependencies.
      Saved as the person's but not approved, for them to read first.
-   - **Pipeline → template** ("Save as task template"): nodes that do work
+   - **Pipeline → template** ("Make a task plan…", renamed from "Save as task template" on 2026-11-27): nodes that do work
      become tasks in order; `if`, `switch`, `merge` and `set` pass their
      dependencies through; a `check` becomes an acceptance item of the
      tasks before it; an `approval` or `human:` wait becomes a gate on the
      tasks after it; `{{ $vars.x }}` becomes the template's `{{x}}`.
+     A pipeline with no step that becomes a task (one check, say) is
+     refused with the reason instead of saved as an empty plan. Starting a
+     pipeline from another is "+ New" → "A copy of …", which keeps the
+     source's approval.
    - Retry, Skip and Re-run from a node in the inspector were left out of
      phase 4 and built after phase 5 (ol-177): they act on a run, which is
      the session's. The viewer asks the extension (`boardViewer/runAction`,

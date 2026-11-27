@@ -4,6 +4,7 @@ import {
 	approvePipeline,
 	boardToPipeline,
 	findPipeline,
+	listPipelines,
 	type PipelineDefinition,
 	pipelineSlug,
 	pipelineToTemplate,
@@ -349,10 +350,42 @@ class BoardViewer {
 	 * A new pipeline the person names: one harmless `set` node to start from,
 	 * saved as theirs and so approved. The viewer opens it to edit.
 	 */
+	/**
+	 * A new pipeline: empty, or a copy of a saved one to start from (owner,
+	 * 2026-11-27: "when I click new it just asks for a name, it doesn't propose
+	 * a template"). A copy keeps its source's approval: the same steps the
+	 * person approved are approved, and a copy of one nobody approved waits for
+	 * approval as its source does, so copying never approves anything.
+	 */
 	private async newPipeline(root: string): Promise<{ ok: boolean; errors?: string[]; lines?: string[]; pipeline?: string }> {
+		const sources = listPipelines(root).filter((file) => file.definition)
+		type Start = vscode.QuickPickItem & { source?: (typeof sources)[number] }
+		const picked: Start | undefined =
+			sources.length === 0
+				? { label: "Empty" }
+				: await vscode.window.showQuickPick<Start>(
+						[
+							{ label: "Empty", description: "add its steps in the Board tab" },
+							...sources.map((file) => {
+								const steps = file.definition?.nodes.length ?? 0
+								return {
+									label: `A copy of ${file.name}`,
+									description: `${steps} step${steps === 1 ? "" : "s"}, ${file.isApproved ? "approved" : "not approved"}`,
+									...(file.definition?.description ? { detail: file.definition.description } : {}),
+									source: file,
+								}
+							}),
+						],
+						{ title: "New pipeline", placeHolder: "Start from…", matchOnDescription: true },
+					)
+		if (!picked) return { ok: false }
+		const source = picked.source
 		const name = await vscode.window.showInputBox({
-			title: "New pipeline",
-			prompt: "Its name. It is saved to .cerebriline/pipelines; add its steps in the Board tab.",
+			title: source ? `New pipeline from ${source.name}` : "New pipeline",
+			prompt: source
+				? `Its name. ${source.name}'s steps are copied to it in .cerebriline/pipelines; ${source.name} is not changed.`
+				: "Its name. It is saved to .cerebriline/pipelines; add its steps in the Board tab.",
+			...(source ? { value: `${source.name} copy` } : {}),
 			validateInput: (value) =>
 				!value.trim()
 					? "Give it a name."
@@ -361,17 +394,22 @@ class BoardViewer {
 						: undefined,
 		})
 		if (!name?.trim()) return { ok: false }
-		const saved = savePipeline(
-			root,
-			{ name: name.trim(), nodes: [{ id: "start", type: "set", fields: {} }] } as PipelineDefinition,
-			undefined,
-			{ by: "person" },
-		)
+		const definition = source?.definition
+			? ({ ...source.definition, name: name.trim() } as PipelineDefinition)
+			: ({ name: name.trim(), nodes: [{ id: "start", type: "set", fields: {} }] } as PipelineDefinition)
+		const saved = savePipeline(root, definition, undefined, {
+			by: "person",
+			...(source && !source.isApproved ? { approve: false } : {}),
+		})
 		if (!saved.ok) return { ok: false, errors: saved.errors }
 		const slug = pipelineSlug(name.trim())
 		return {
 			ok: true,
-			lines: [`Saved ${name.trim()}. Add its steps from the palette, then Save.`],
+			lines: [
+				source
+					? `Saved ${name.trim()}, a copy of ${source.name}${source.isApproved ? "" : ", for you to approve"}.`
+					: `Saved ${name.trim()}. Add its steps from the palette, then Save.`,
+			],
 			pipeline: slug,
 		}
 	}
@@ -456,9 +494,20 @@ class BoardViewer {
 	private async toTemplate(root: string, slug: string): Promise<{ ok: boolean; errors?: string[] }> {
 		const file = findPipeline(root, slug)
 		if (!file?.definition) return { ok: false, errors: [file ? "It does not validate." : `No pipeline ${slug} any more.`] }
+		// A plan with no tasks is refused, not saved empty (owner, 2026-11-27: a
+		// pipeline of one check saved as a template with no tasks).
+		if (pipelineToTemplate(file.definition as PipelineDefinition).tasks.length === 0) {
+			const kinds = [...new Set((file.definition as PipelineDefinition).nodes.map((node) => node.type))]
+			return {
+				ok: false,
+				errors: [
+					`${file.name} has only ${kinds.join(" and ")} steps, and none of them becomes a task: a task plan takes the steps that do work (agent, command, tool, http, loop, swarm, pipeline), and a check becomes acceptance on the task before it. Run ${file.name} instead, or start a new pipeline from it with + New.`,
+				],
+			}
+		}
 		const name = await vscode.window.showInputBox({
-			title: "Save the pipeline as a task template",
-			prompt: 'The template\'s name. The model starts from it with task_plan {"template": name}.',
+			title: "Make a task plan from the pipeline",
+			prompt: 'The plan\'s name. Its steps become tasks: load it onto a board with Load… → A saved plan, or the model starts from it with task_plan {"template": name}.',
 			value: file.name,
 			validateInput: (value) => (value.trim() ? undefined : "Give it a name."),
 		})
@@ -466,7 +515,7 @@ class BoardViewer {
 		const dir = join(root, TASK_TEMPLATE_DIR)
 		if (existsSync(join(dir, `${templateSlug(name.trim())}.json`))) {
 			const answer = await vscode.window.showWarningMessage(
-				`A template named ${name.trim()} exists. Replace it?`,
+				`A task plan named ${name.trim()} exists. Replace it?`,
 				{ modal: true },
 				"Replace",
 			)
@@ -475,7 +524,7 @@ class BoardViewer {
 		const template = pipelineToTemplate(file.definition as PipelineDefinition, name.trim())
 		const path = saveTaskTemplate(dir, template)
 		void vscode.window.showInformationMessage(
-			`Saved ${template.tasks.length} tasks as the template ${name.trim()} in ${vscode.workspace.asRelativePath(path)}.`,
+			`Saved ${template.tasks.length} task${template.tasks.length === 1 ? "" : "s"} as the plan ${name.trim()} in ${vscode.workspace.asRelativePath(path)}. Load it onto a board with Load… → A saved plan.`,
 		)
 		return { ok: true }
 	}
