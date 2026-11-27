@@ -5,7 +5,7 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.307] — 2026-11-26
+## [4.100.308] — 2026-11-27
 
 ### Agents
 
@@ -108,6 +108,25 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   mode.
 - **`/tasks` and `/pipelines` in the CLI's command palette** (Option+J and
   Option+E).
+
+- **The Board tab does what the model can do to a task.** Pick a task:
+  Start, Done, Cancel or Reopen it and Delete it from the top of the
+  inspector; edit its description; set its priority or put it off for
+  later; add the tasks it waits for (type an id or title and pick it) or
+  remove one; add steps under it; add a gate, with what a gate can wait on
+  offered as you type, and Resolve or Remove a gate. On the canvas, drag
+  from one task to another to make the second wait on the first, and
+  delete an edge to drop that dependency (or the gate it comes from).
+- **Load and Export a board.** Load… adds tasks to the board shown (the
+  open conversation's, or the draft) from a board saved in Memory, a saved
+  plan, or a file; the draft asks whether to add them or replace its tasks.
+  They come in as a fresh plan: order, steps, priority, acceptance, and
+  the `human:` and use-pipeline gates. Export… writes the board to a JSON
+  file that Load reads back.
+- **You can delete a task.** Only you can; the model still cancels. A task
+  goes with its steps, the tasks after it stop waiting on it, and the model
+  is told. A task a running teammate or pipeline run holds is refused until
+  that run ends.
 
 ### Pipelines (preview)
 
@@ -223,6 +242,23 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   one task that uses that pipeline, when there is exactly one.
 - Pipelines suit cloud models or a 27B-class local model; a small model
   writes them poorly.
+- **A form for each pipeline step, with help on hover and completion.** Pick
+  a step on an editable pipeline: the inspector shows its type's settings
+  as labelled fields (the JSON stays one tab away). Hover a label for what
+  it does. Tool, agent, pipeline and gate fields offer what exists as you
+  type (the conversation's tools by name, the configured agents, the
+  workspace's pipelines, what a gate can wait on); "After" offers the other
+  steps and the outputs of branching ones (`check.true`); and inside
+  `{{ … }}` the field completes `$vars.<input>`, `$node.<step>.stdout` and
+  the rest, and the functions, each with what it means. Apply says what is
+  missing or not JSON instead of applying.
+- **A run no longer adds a task of its own to the board.** A run for a task
+  (one that uses the pipeline, or named with `task`) acts on that task: its
+  approvals and waits ask there, and the task moves on when the run ends. A
+  run with no task puts a task on the board only while it waits for your
+  approval or answer, and takes it off when it ends. Every run is still
+  listed under Runs in the Board tab. Before, every run added a `▶ Name #N`
+  task that stayed, and a run for a task made two.
 
 ### Settings
 
@@ -240,6 +276,13 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ### Fixes
 
+- **`/delegate` and `/agent` say when no agent is set up.** With no agent
+  file in the workspace's `.cline/agents` or your `~/.cerebriline/agents`,
+  their menus showed nothing at all, which looked like completion was
+  broken. They now say no agent is set up and that you can create one under
+  Customize → Agents (or ask the model to). `/agent` still lists the skills
+  under that line, and an `/agent` name that is not an agent says so too.
+  Escape closes the message.
 - **A running agent's transcript is saved as it works (#118).** An agent's
   transcript was written only when it ended, so a report taken while it
   worked showed it running with no messages (Chris's `docker-deploy`, at its
