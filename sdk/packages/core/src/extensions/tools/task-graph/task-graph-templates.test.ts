@@ -8,7 +8,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { TaskGraphStore } from "./store";
 import {
+	boardPlanFromEvents,
 	boardToTemplate,
 	expandTaskTemplate,
 	loadTaskTemplates,
@@ -145,6 +147,56 @@ describe("task templates", () => {
 		expect(fresh.takePendingReminder() ?? "").toContain(
 			"The person changed the task board",
 		);
+	});
+
+	it("copies a board with every wait: what a task waits on comes first, and pipeline runs stay behind", () => {
+		// pandorum, 2026-11-27: T9 "Verify" waited on fixes T10-T15; the copy
+		// listed it first, and its six dependencies were ignored.
+		const store = new TaskGraphStore();
+		store.plan(
+			{ tasks: [{ title: "Verify" }, { title: "Fix A" }, { title: "Fix B" }] },
+			{},
+			{ autoStart: false },
+		);
+		store.update({ updates: [{ id: "T1", depends_add: ["T2", "T3"] }] });
+		const holder = "pipeline:check-3";
+		store.plan(
+			{
+				tasks: [
+					{
+						title: "▶ check #3",
+						description: "Pipeline run check-3. It is waiting for the person.",
+					},
+				],
+			},
+			{ by: holder },
+			{ autoStart: false },
+		);
+		store.update({ updates: [{ id: "T4", status: "active" }] }, { by: holder });
+
+		const tasks = boardPlanFromEvents(store.getEvents());
+		expect(tasks).toEqual([
+			{ title: "Fix A" },
+			{ title: "Fix B" },
+			{ title: "Verify", depends: ["#1", "#2"] },
+		]);
+		const copy = new TaskGraphStore({ planMode: true });
+		const outcome = copy.plan(
+			{ tasks },
+			{ by: "person" },
+			{ autoStart: false },
+		);
+		expect(outcome.lines.join("\n")).not.toMatch(/ignored|Plan mode/);
+		const verify = [...copy.getState().tasks.values()].find(
+			(task) => task.title === "Verify",
+		);
+		expect(verify?.depends).toHaveLength(2);
+		// The model still hears about plan mode.
+		expect(
+			new TaskGraphStore({ planMode: true })
+				.plan({ tasks: [{ title: "x" }] })
+				.lines.join("\n"),
+		).toContain("Plan mode");
 	});
 
 	it("names files by slug", () => {

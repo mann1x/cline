@@ -188,6 +188,47 @@ export function expandTaskTemplate(
 }
 
 /**
+ * The task a pipeline run puts on the board while it waits for the person
+ * (`▶ <pipeline> #<n>`): claimed by the run, and taken off when it ends.
+ */
+function isPipelineRunTask(task: Task): boolean {
+	return (
+		(task.claimedBy ?? "").startsWith("pipeline:") ||
+		(task.title.startsWith("▶ ") &&
+			(task.description ?? "").startsWith("Pipeline run "))
+	);
+}
+
+/**
+ * The tasks in board order, moved only as far as needed for every task to
+ * come after the ones it depends on and its parent: a plan's `#n` names an
+ * earlier item, so a task listed before what it waits on lost that wait
+ * (owner, 2026-11-27: "Verify the game passes the check" before its fixes
+ * lost six dependencies on a copy). In a cycle the first task left goes
+ * next, and its later references drop as before.
+ */
+function dependenciesFirst(tasks: Task[]): Task[] {
+	const ids = new Set(tasks.map((task) => task.id));
+	const placed = new Set<string>();
+	const out: Task[] = [];
+	const waitsOn = (task: Task) =>
+		[...task.depends, ...(task.parent ? [task.parent] : [])].filter(
+			(id) => ids.has(id) && id !== task.id,
+		);
+	while (out.length < tasks.length) {
+		const next =
+			tasks.find(
+				(task) =>
+					!placed.has(task.id) && waitsOn(task).every((id) => placed.has(id)),
+			) ?? tasks.find((task) => !placed.has(task.id));
+		if (!next) break;
+		placed.add(next.id);
+		out.push(next);
+	}
+	return out;
+}
+
+/**
  * A board as a template: every task in order, with its description,
  * acceptance, dependencies and parent as `#n`, its `human:` gates and the
  * pipelines it is done by (the person's decisions and the recipe recur; the
@@ -199,10 +240,15 @@ export function boardToTemplate(
 	name: string,
 	description?: string,
 ): { name: string; description?: string; tasks: Record<string, unknown>[] } {
-	const tasks = state.order
-		.map((id) => state.tasks.get(id) as Task)
-		// A cancelled task was dropped from this plan; it is not part of the recipe.
-		.filter((task) => task.status !== "cancelled");
+	const tasks = dependenciesFirst(
+		state.order
+			.map((id) => state.tasks.get(id) as Task)
+			// A cancelled task was dropped from this plan; it is not part of the
+			// recipe. A pipeline run's task is that run's, not work to redo.
+			.filter(
+				(task) => task.status !== "cancelled" && !isPipelineRunTask(task),
+			),
+	);
 	const position = new Map(tasks.map((task, index) => [task.id, index + 1]));
 	const ref = (id: string) => {
 		const at = position.get(id);

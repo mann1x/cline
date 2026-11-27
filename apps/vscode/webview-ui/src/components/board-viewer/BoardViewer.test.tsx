@@ -472,6 +472,10 @@ describe("the board viewer", () => {
 		answer("boardViewer/copyBoard", { ok: true, lines: ["Copied 1 task."] })
 		// Copied: the board copied to is shown.
 		await waitFor(() => expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Conversation board"))
+		// The reply closes with its ×: it took half the tab on a long copy.
+		await waitFor(() => expect(screen.getByText("Copied 1 task.")).toBeTruthy())
+		fireEvent.click(screen.getByRole("button", { name: "Close" }))
+		expect(screen.queryByText("Copied 1 task.")).toBeNull()
 
 		// One saved in Memory: deleted, not saved again.
 		fireEvent.click(screen.getByRole("button", { name: /Release/ }))

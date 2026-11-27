@@ -745,7 +745,9 @@ export class TaskGraphStore {
 			.map((task) => task.id)
 			.filter((taskId) => !readyBefore.has(taskId));
 		if (options.autoStart !== false) this.autoStart(origin, lines);
-		if (this.planMode) {
+		// For the model: the person's own changes (the Board tab) show the
+		// lines to the person, who needs no reminder of the mode.
+		if (this.planMode && origin.by !== "user" && origin.by !== "person") {
 			lines.push(
 				"Plan mode: nothing is started. The work starts in act mode, once the user agrees. When the plan is complete, present it and ask the user how to proceed.",
 			);

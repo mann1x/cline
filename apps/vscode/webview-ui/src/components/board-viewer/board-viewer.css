@@ -725,6 +725,41 @@
 .bv-section .bv-reply {
 	margin-top: 8px;
 }
+/* A reply can run to many lines (a copy lists every task): it scrolls inside
+   a few lines' height and closes with its ×, so the canvas keeps the room. */
+.bv-reply-box {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+}
+.bv-reply-box .bv-reply {
+	flex: 1;
+	min-width: 0;
+	max-height: 9.5em;
+	overflow-y: auto;
+}
+.bv-reply-close {
+	flex: none;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: none;
+	border-radius: 3px;
+	background: transparent;
+	color: var(--vscode-foreground);
+	font-size: 16px;
+	line-height: 22px;
+	cursor: pointer;
+	opacity: 0.75;
+}
+.bv-reply-close:hover {
+	opacity: 1;
+	background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+.bv-reply-close:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	opacity: 1;
+}
 .bv-reply[data-ok="false"] {
 	color: var(--bv-failed);
 }

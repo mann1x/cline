@@ -562,6 +562,7 @@ export function BoardViewer() {
 					setNotice(undefined)
 				}}
 				onDiscardBoardDraft={() => void request(() => ask(post, onBoard({ type: "boardViewer/discardDraft" as const })))}
+				onDismissNotice={() => setNotice(undefined)}
 				onExportBoard={() => void request(() => ask(post, onBoard({ type: "boardViewer/exportBoard" as const })))}
 				onLoadBoard={() => void request(() => ask(post, onBoard({ type: "boardViewer/loadBoard" as const })))}
 				onReject={() =>
@@ -905,6 +906,7 @@ function ActionBar({
 	draftErrors,
 	busy,
 	notice,
+	onDismissNotice,
 	onSave,
 	onDiscard,
 	onShowDraft,
@@ -944,6 +946,8 @@ function ActionBar({
 	draftErrors: string[] | undefined
 	busy: boolean
 	notice: { ok: boolean; lines: string[] } | undefined
+	/** Close the reply: it stays until the next one otherwise. */
+	onDismissNotice: () => void
 	onSave: () => void
 	onDiscard: () => void
 	onShowDraft: () => void
@@ -1167,11 +1171,16 @@ function ActionBar({
 				</ul>
 			)}
 			{notice && (
-				<ul className="bv-list bv-reply" data-ok={notice.ok}>
-					{notice.lines.map((line, index) => (
-						<li key={index}>{line}</li>
-					))}
-				</ul>
+				<div className="bv-reply-box" data-ok={notice.ok}>
+					<ul className="bv-list bv-reply" data-ok={notice.ok}>
+						{notice.lines.map((line, index) => (
+							<li key={index}>{line}</li>
+						))}
+					</ul>
+					<button aria-label="Close" className="bv-reply-close" onClick={onDismissNotice} title="Close" type="button">
+						×
+					</button>
+				</div>
 			)}
 		</div>
 	)
