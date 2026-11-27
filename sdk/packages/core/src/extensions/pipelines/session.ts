@@ -92,6 +92,8 @@ export interface PipelineSessionOptions {
 	/** How often a board gate, a commit or GitHub is looked at (ms). */
 	pollMs?: number;
 	log?: (line: string) => void;
+	/** How the person approves `slug` in this host (CorePipelinesConfig.approveHow). */
+	approveHow?: (slug: string) => string;
 	/** Each run's journal events, for the host (the panel, the viewer). */
 	onRunChange?: (run: PipelineRun) => void;
 	/** A run ended: what the conversation's board said (gates opened, "Ready now"). */
@@ -687,10 +689,14 @@ export class PipelineSession {
 				`"${file.name}" does not validate: ${file.errors.join("; ")}`,
 			);
 		if (!file.isApproved) {
+			// Only this host's way: a CLI command named to a VS Code user is one
+			// the model then tells them to type (and the reverse).
+			const how = this.options.approveHow?.(file.slug);
+			const ask = `ask the person to approve ${file.approved ? "this one" : "it"}${how ? ` (${how})` : ""}`;
 			throw new Error(
 				file.approved
-					? `"${file.name}" changed since the version the person approved (${file.approved.hash}; the file is ${file.hash}). Only an approved version runs: ask the person to approve this one, or run \`pipeline test\`.`
-					: `"${file.name}" has not been approved. Only an approved version runs: ask the person to approve it (the /pipelines command, or Approve in VS Code's board viewer), or run \`pipeline test\`.`,
+					? `"${file.name}" changed since the version the person approved (${file.approved.hash}; the file is ${file.hash}). Only an approved version runs: ${ask}, or run \`pipeline test\`.`
+					: `"${file.name}" has not been approved. Only an approved version runs: ${ask}, or run \`pipeline test\`.`,
 			);
 		}
 		return file.definition;

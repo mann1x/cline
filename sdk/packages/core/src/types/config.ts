@@ -457,6 +457,13 @@ export interface CoreCompactionSummarizerConfig {
  */
 export interface CorePipelinesConfig {
 	enabled: boolean;
+	/**
+	 * How the person approves a pipeline in this host, for the model to pass
+	 * on when it runs a version nobody approved: the CLI's `/pipelines approve
+	 * <slug>`, VS Code's Approve on the Board tab. Without it the model is told
+	 * only to ask the person, never another host's command.
+	 */
+	approveHow?: (slug: string) => string;
 	/** A run started, changed or ended, for the host's panel. */
 	onRunChange?: (run: { id: string; view: () => unknown }) => void;
 	/**

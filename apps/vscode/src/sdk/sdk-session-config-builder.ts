@@ -114,6 +114,7 @@ export class SdkSessionConfigBuilder {
 		if (config.pipelines?.enabled) {
 			config.pipelines = {
 				...config.pipelines,
+				approveHow: () => "Approve on the Board tab, or the command palette's Cerebriline: Approve Pipeline",
 				onAttach: (control) => this.options.onPipelineAttach?.(control),
 			}
 		}

@@ -96,6 +96,36 @@ describe("pipelines in the workspace", () => {
 		).toEqual([["say-hello", false]]);
 	});
 
+	it("the refusal names only the host's own way to approve", () => {
+		savePipeline(root, simple);
+		const refusal = (s: PipelineSession) => {
+			try {
+				s.run("say hello");
+			} catch (error) {
+				return (error as Error).message;
+			}
+			throw new Error("ran unapproved");
+		};
+		const plain = refusal(session());
+		expect(plain).toContain(
+			"ask the person to approve it, or run `pipeline test`",
+		);
+		expect(plain).not.toMatch(/\/pipelines|board viewer|VS Code/);
+		const cli = refusal(
+			session({ approveHow: (slug) => `/pipelines approve ${slug}` }),
+		);
+		expect(cli).toContain(
+			"ask the person to approve it (/pipelines approve say-hello)",
+		);
+		const approved = approvePipeline(root, "Say hello", "manni");
+		savePipeline(root, { ...simple, description: "changed" }, approved.hash);
+		expect(
+			refusal(session({ approveHow: () => "Approve on the Board tab" })),
+		).toContain(
+			"ask the person to approve this one (Approve on the Board tab)",
+		);
+	});
+
 	it("a file that does not validate is listed with its problems and cannot be approved", () => {
 		savePipeline(root, simple);
 		writeFileSync(

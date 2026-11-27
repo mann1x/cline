@@ -1446,6 +1446,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 							: {}),
 						log: (line) =>
 							configWithProvider.logger?.log?.(line, { sessionId }),
+						...(configWithProvider.pipelines?.approveHow
+							? { approveHow: configWithProvider.pipelines.approveHow }
+							: {}),
 						onRunChange: (run) =>
 							configWithProvider.pipelines?.onRunChange?.({
 								id: run.id,

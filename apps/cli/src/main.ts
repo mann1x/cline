@@ -1395,9 +1395,16 @@ export async function runCli(): Promise<void> {
 			...(documentsRequested(args)
 				? { documentReader: await cliDocumentReader(args, loggerAdapter.core) }
 				: {}),
-			// Pipelines (preview), off unless asked for: `--pipelines` or
-			// CLINE_PIPELINES=1, mirroring the extension's Features → Pipelines.
-			...(pipelinesRequested(args) ? { pipelines: { enabled: true } } : {}),
+			// Pipelines, off unless asked for: `--pipelines` or CLINE_PIPELINES=1,
+			// mirroring the extension's Features → Pipelines.
+			...(pipelinesRequested(args)
+				? {
+						pipelines: {
+							enabled: true,
+							approveHow: (slug: string) => `/pipelines approve ${slug}`,
+						},
+					}
+				: {}),
 			// Let a delegated agent run commands in the overlay sandbox, off by
 			// default (as in the desktop app) and opted into with
 			// CLINE_SUBAGENT_COMMANDS=1. The binaries dir is always resolved: the
