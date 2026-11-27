@@ -136,8 +136,35 @@ export interface ViewerCatalog {
 	functions: string[]
 }
 
+/**
+ * A board the Board tab lists (owner, 2026-11-27): this conversation's, the
+ * person's three drafts, the recent conversations of this workspace, and
+ * the boards saved in Memory. Any of them can be copied to this conversation
+ * or a draft; only this conversation and the drafts are changed in place.
+ */
+export interface ViewerBoardEntry {
+	/** `live`, `draft:1` to `draft:3`, `recent:<conversation>`, or `saved:<memory>/<id>`. */
+	key: string
+	kind: "conversation" | "draft" | "recent" | "saved"
+	label: string
+	/** Where it is from, or when it was saved. */
+	detail?: string
+	/** The board, as the task panel's row carries it; absent while it has no tasks. */
+	text?: string
+	tasks: number
+	open: number
+	/** Changed in place here: this conversation while its session is live, and the drafts. */
+	editable: boolean
+	/** Why it cannot be changed here, when it cannot. */
+	readOnly?: string
+}
+
 export interface ViewerData {
 	workspace: string
+	/** Every board the tab lists, this conversation's (when one is open) first. */
+	boards?: ViewerBoardEntry[]
+	/** The open conversation's model is working now: Replace waits until it stops. */
+	turnRunning?: boolean
 	/**
 	 * The conversation's latest `task_graph` row, as core wrote it. The
 	 * webview reads it with the task panel's own parser.
@@ -208,18 +235,23 @@ export type ViewerRequest =
 	| { type: "boardViewer/boardToPipeline"; id: number; tasks: ViewerBoardTask[] }
 	/** Save a pipeline as a task template. */
 	| { type: "boardViewer/toTemplate"; id: number; slug: string }
-	/** A change to the conversation's board, as the task panel sends it (`task_update`'s fields). */
-	| { type: "boardViewer/editTask"; id: number; updates: Record<string, unknown>[] }
+	/** A change to a board, as the task panel sends it (`task_update`'s fields); `board` is its key, default the one shown first. */
+	| { type: "boardViewer/editTask"; id: number; updates: Record<string, unknown>[]; board?: string }
 	/** A new task on the board: the conversation's, or the draft when none is open. */
-	| { type: "boardViewer/addTask"; id: number; title: string; parent?: string }
+	| { type: "boardViewer/addTask"; id: number; title: string; parent?: string; board?: string }
 	/** The person deletes a task, with its steps; the extension asks first. */
-	| { type: "boardViewer/deleteTask"; id: number; task: string }
+	| { type: "boardViewer/deleteTask"; id: number; task: string; board?: string }
 	/** Add tasks from a saved board, a saved plan or a file; write the board to a file. */
-	| { type: "boardViewer/loadBoard"; id: number }
-	| { type: "boardViewer/exportBoard"; id: number }
+	| { type: "boardViewer/loadBoard"; id: number; board?: string }
+	| { type: "boardViewer/exportBoard"; id: number; board?: string }
 	/** The draft board goes to the next new conversation. */
-	| { type: "boardViewer/startFromDraft"; id: number }
-	| { type: "boardViewer/discardDraft"; id: number }
+	| { type: "boardViewer/startFromDraft"; id: number; board?: string }
+	| { type: "boardViewer/discardDraft"; id: number; board?: string }
+	/** Copy a board's tasks to this conversation or a draft; the extension asks Add or Replace. */
+	| { type: "boardViewer/copyBoard"; id: number; from: string; to: string }
+	/** Save a board into Memory, or delete one saved there (the extension asks first). */
+	| { type: "boardViewer/saveBoardToMemory"; id: number; board: string }
+	| { type: "boardViewer/deleteSavedBoard"; id: number; board: string }
 	/** A new pipeline, named by the person and saved as theirs (approved). */
 	| { type: "boardViewer/newPipeline"; id: number }
 	/** The person's Retry, Skip, Re-run from a node, or Stop, on a pipeline run. */

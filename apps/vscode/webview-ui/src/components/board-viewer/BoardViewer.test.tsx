@@ -371,6 +371,117 @@ describe("the board viewer", () => {
 		expect(await screen.findByText(/the new conversation starts from this board/)).toBeTruthy()
 	})
 
+	// The owner, 2026-11-27: a selection of the active board, the drafts, the
+	// earlier conversations' and the ones in Memory; copy between them.
+	it("lists the boards, shows the one picked, and edits, copies, saves or deletes the one shown", async () => {
+		const row = (title: string) =>
+			JSON.stringify({
+				layers: [["T1"]],
+				tasks: [
+					{
+						id: "T1",
+						title,
+						status: "pending",
+						priority: "M",
+						depends: [],
+						openDepends: [],
+						acceptance: [],
+						later: false,
+						files: [],
+						notes: [],
+						ready: true,
+						blocked: false,
+					},
+				],
+			})
+		render(<BoardViewer />)
+		send({
+			...data,
+			boards: [
+				{
+					key: "live",
+					kind: "conversation",
+					label: "This conversation",
+					text: data.boardText,
+					tasks: 1,
+					open: 1,
+					editable: true,
+				},
+				{ key: "draft:1", kind: "draft", label: "Draft 1", tasks: 0, open: 0, editable: true },
+				{ key: "draft:2", kind: "draft", label: "Draft 2", text: row("Draft work"), tasks: 1, open: 1, editable: true },
+				{ key: "draft:3", kind: "draft", label: "Draft 3", tasks: 0, open: 0, editable: true },
+				{
+					key: "recent:s-old",
+					kind: "recent",
+					label: "Fix the game",
+					text: row("Earlier work"),
+					tasks: 1,
+					open: 0,
+					editable: false,
+					readOnly: "An earlier conversation's board: copy it here or to a draft to change it.",
+				},
+				{
+					key: "saved:main/m1",
+					kind: "saved",
+					label: "Release",
+					detail: 'm1 in "main", saved 2026-11-20',
+					text: row("Saved work"),
+					tasks: 1,
+					open: 1,
+					editable: false,
+					readOnly: "Saved in Memory: copy it here or to a draft to change it.",
+				},
+			],
+		})
+		const rail = screen.getByRole("navigation", { name: "Boards, pipelines and runs" })
+		for (const group of ["Conversation", "Drafts", "Recent conversations", "Saved in Memory"]) {
+			expect(rail.textContent).toContain(group)
+		}
+		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Conversation board")
+
+		// A draft: its board, and edits go to it.
+		fireEvent.click(screen.getByRole("button", { name: /Draft 2/ }))
+		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Draft 2")
+		fireEvent.change(screen.getByRole("textbox", { name: "New task" }), { target: { value: "More" } })
+		fireEvent.click(screen.getByRole("button", { name: "Add task" }))
+		expect(sentOf("boardViewer/addTask").at(-1)).toMatchObject({ title: "More", board: "draft:2" })
+		answer("boardViewer/addTask", { ok: true, lines: [] })
+		const save = () => screen.getByRole("button", { name: "Save to Memory" }) as HTMLButtonElement
+		await waitFor(() => expect(save().disabled).toBe(false))
+		fireEvent.click(save())
+		expect(sentOf("boardViewer/saveBoardToMemory").at(-1)).toMatchObject({ board: "draft:2" })
+		answer("boardViewer/saveBoardToMemory", { ok: true, lines: ["Saved the board as m2."] })
+		await waitFor(() => expect(save().disabled).toBe(false))
+
+		// An earlier conversation's: viewed, not changed; copied to this conversation.
+		fireEvent.click(screen.getByRole("button", { name: /Fix the game/ }))
+		expect(screen.queryByRole("textbox", { name: "New task" })).toBeNull()
+		expect(screen.queryByRole("button", { name: "Load…" })).toBeNull()
+		expect(screen.getByText(/copy it here or to a draft to change it/)).toBeTruthy()
+		const copy = screen.getByRole("combobox", { name: "Copy to" }) as HTMLSelectElement
+		await waitFor(() => expect(copy.disabled).toBe(false))
+		expect([...copy.options].map((option) => option.textContent)).toEqual([
+			"Copy to…",
+			"This conversation",
+			"Draft 1",
+			"Draft 2",
+			"Draft 3",
+		])
+		fireEvent.change(copy, { target: { value: "live" } })
+		expect(sentOf("boardViewer/copyBoard").at(-1)).toMatchObject({ from: "recent:s-old", to: "live" })
+		answer("boardViewer/copyBoard", { ok: true, lines: ["Copied 1 task."] })
+		// Copied: the board copied to is shown.
+		await waitFor(() => expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Conversation board"))
+
+		// One saved in Memory: deleted, not saved again.
+		fireEvent.click(screen.getByRole("button", { name: /Release/ }))
+		expect(screen.queryByRole("button", { name: "Save to Memory" })).toBeNull()
+		const remove = screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement
+		await waitFor(() => expect(remove.disabled).toBe(false))
+		fireEvent.click(remove)
+		expect(sentOf("boardViewer/deleteSavedBoard").at(-1)).toMatchObject({ board: "saved:main/m1" })
+	})
+
 	// The owner, 2026-11-27: "the model can do things that I can't on the board".
 	it("does on a task what the model can: status, priority, order, steps, gates, delete; and loads and exports the board", async () => {
 		const base = JSON.parse(data.boardText) as { tasks: Record<string, unknown>[] }

@@ -28,9 +28,9 @@ import {
 	type ViewerRequest,
 	type ViewerRunOp,
 } from "@/shared/board-viewer"
-import { type BoardIoDeps, exportBoard, loadBoard } from "./board-io"
+import { exportBoard, loadBoard } from "./board-io"
+import type { BoardSlots } from "./board-slots"
 import { collectViewerData } from "./collect"
-import type { BoardEditAction } from "./draft"
 
 /**
  * The board viewer (pipelines plan phase 3): an editor-area panel beside the
@@ -56,22 +56,13 @@ export interface BoardViewerDeps {
 	extensionUri: vscode.Uri
 	/** The workspace whose `.cerebriline/` is read. */
 	workspaceRoot: () => string | undefined
-	/** The conversation's latest `task_graph` row text, when there is a conversation. */
-	boardText: () => string | undefined
 	/**
-	 * A change to the board as the person's, as the task panel sends it: the
-	 * open conversation's board, or the draft when no conversation is open.
+	 * Every board the tab lists and changes: this conversation's, the drafts,
+	 * the recent conversations', the ones saved in Memory (board-slots.ts).
 	 */
-	boardEdit?: (action: BoardEditAction) => { ok: boolean; lines: string[] }
-	/** Whether the board shown is the draft for the next new conversation. */
-	boardIsDraft?: () => boolean
-	/** The draft goes to the next new conversation, or is thrown away. */
-	draftStart?: () => { ok: boolean; lines: string[] }
-	draftDiscard?: () => { ok: boolean; lines: string[] }
+	boards?: BoardSlots
 	/** What the step form completes from. */
 	catalog?: () => ViewerCatalog
-	/** Load onto and export the board shown. */
-	boardIo?: BoardIoDeps
 	/** The person's action on a run, through the conversation that started it. */
 	runAction?: (action: { op: ViewerRunOp; run: string; node?: string }) => { ok: boolean; lines: string[]; run?: string }
 }
@@ -172,17 +163,26 @@ class BoardViewer {
 	}
 
 	private post(): void {
+		void this.postData()
+	}
+
+	private async postData(): Promise<void> {
 		const workspace = this.deps.workspaceRoot()
 		const focus = this.focus
 		// A focus is for the post that follows the open; later refreshes keep
 		// whatever the person picked since.
 		this.focus = undefined
 		this.stale = false
+		const boards = this.deps.boards
+		const home = boards?.home()
+		const entries = boards ? await boards.list().catch(() => undefined) : undefined
 		const data = workspace
 			? collectViewerData({
 					workspace,
-					boardText: this.deps.boardText(),
-					...(this.deps.boardIsDraft?.() ? { boardDraft: true } : {}),
+					boardText: home ? boards?.text(home) : undefined,
+					...(home && home !== "live" ? { boardDraft: true } : {}),
+					...(entries ? { boards: entries } : {}),
+					...(boards?.turnRunning() ? { turnRunning: true } : {}),
 					...(this.deps.catalog ? { catalog: this.deps.catalog() } : {}),
 					...(focus ? { focus } : {}),
 				})
@@ -230,45 +230,83 @@ class BoardViewer {
 				const checked = validatePipeline(request.definition)
 				return { ok: checked.ok, errors: checked.errors }
 			}
-			case "boardViewer/editTask": {
-				if (!this.deps.boardEdit) return { ok: false, errors: ["This editor cannot change the board."] }
-				if (!Array.isArray(request.updates)) return { ok: false, errors: ["Not a board change."] }
-				const outcome = this.deps.boardEdit({ op: "update", updates: request.updates })
-				return { ok: outcome.ok, lines: outcome.lines }
-			}
 			case "boardViewer/runAction":
 				return this.runAction(request.op, request.run, request.node)
+		}
+		const boards = this.deps.boards
+		switch (request.type) {
+			case "boardViewer/editTask": {
+				if (!boards) return { ok: false, errors: ["This editor cannot change the board."] }
+				if (!Array.isArray(request.updates)) return { ok: false, errors: ["Not a board change."] }
+				const outcome = boards.edit(boards.resolve(request.board), { op: "update", updates: request.updates })
+				return outcome.ok
+					? { ok: true, lines: outcome.lines }
+					: { ok: false, lines: outcome.lines, errors: outcome.lines }
+			}
 			case "boardViewer/addTask": {
-				if (!this.deps.boardEdit) return { ok: false, errors: ["This editor cannot change the board."] }
+				if (!boards) return { ok: false, errors: ["This editor cannot change the board."] }
 				const title = typeof request.title === "string" ? request.title.trim() : ""
 				if (!title) return { ok: false, errors: ["Give the task a title."] }
 				const parent = typeof request.parent === "string" && request.parent ? request.parent : undefined
-				const outcome = this.deps.boardEdit({ op: "plan", tasks: [{ title, ...(parent ? { parent } : {}) }] })
+				const outcome = boards.edit(boards.resolve(request.board), {
+					op: "plan",
+					tasks: [{ title, ...(parent ? { parent } : {}) }],
+				})
 				return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
 			}
 			case "boardViewer/deleteTask":
-				return this.deleteTask(request.task)
-			case "boardViewer/loadBoard":
-				if (!this.deps.boardIo) return { ok: false, errors: ["This editor cannot load a board."] }
-				return loadBoard(this.deps.boardIo)
+				return this.deleteTask(request.task, request.board)
+			case "boardViewer/loadBoard": {
+				if (!boards) return { ok: false, errors: ["This editor cannot load a board."] }
+				const key = boards.resolve(request.board)
+				const refused = boards.readOnly(key)
+				if (refused) return { ok: false, errors: [refused] }
+				return loadBoard(boards.io(key, { workspaceRoot: this.deps.workspaceRoot }))
+			}
 			case "boardViewer/exportBoard":
-				if (!this.deps.boardIo) return { ok: false, errors: ["This editor cannot export the board."] }
-				return exportBoard(this.deps.boardIo)
+				if (!boards) return { ok: false, errors: ["This editor cannot export the board."] }
+				return exportBoard(boards.io(boards.resolve(request.board), { workspaceRoot: this.deps.workspaceRoot }))
 			case "boardViewer/startFromDraft": {
-				if (!this.deps.draftStart) return { ok: false, errors: ["This editor has no draft board."] }
-				const outcome = this.deps.draftStart()
+				if (!boards) return { ok: false, errors: ["This editor has no draft board."] }
+				const outcome = boards.start(boards.resolve(request.board))
 				return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
 			}
 			case "boardViewer/discardDraft": {
-				if (!this.deps.draftDiscard) return { ok: false, errors: ["This editor has no draft board."] }
+				if (!boards) return { ok: false, errors: ["This editor has no draft board."] }
+				const key = boards.resolve(request.board)
 				const answer = await vscode.window.showWarningMessage(
-					"Discard the draft board? Its tasks are gone for good.",
+					"Discard this draft? Its tasks are gone for good.",
 					{ modal: true },
 					"Discard",
 				)
 				if (answer !== "Discard") return { ok: false }
-				const outcome = this.deps.draftDiscard()
-				return { ok: outcome.ok, lines: outcome.lines }
+				const outcome = boards.clear(key)
+				return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
+			}
+			case "boardViewer/copyBoard": {
+				if (!boards) return { ok: false, errors: ["This editor cannot copy boards."] }
+				if (typeof request.from !== "string" || typeof request.to !== "string") {
+					return { ok: false, errors: ["Pick the boards to copy from and to."] }
+				}
+				return boards.copy(request.from, request.to, async (question, ...buttons) =>
+					vscode.window.showWarningMessage(question, { modal: true }, ...buttons),
+				)
+			}
+			case "boardViewer/saveBoardToMemory": {
+				if (!boards) return { ok: false, errors: ["This editor cannot save boards."] }
+				const outcome = await boards.save(boards.resolve(request.board))
+				return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
+			}
+			case "boardViewer/deleteSavedBoard": {
+				if (!boards) return { ok: false, errors: ["This editor cannot delete boards."] }
+				const answer = await vscode.window.showWarningMessage(
+					"Delete this board from Memory? It is gone for good; conversations that started from it keep their own boards.",
+					{ modal: true },
+					"Delete",
+				)
+				if (answer !== "Delete") return { ok: false }
+				const outcome = await boards.deleteSaved(boards.resolve(request.board))
+				return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
 			}
 		}
 		if (!root) return { ok: false, errors: ["Open a folder first: pipelines live in the workspace."] }
@@ -294,12 +332,16 @@ class BoardViewer {
 	 * Delete a task for good, with its steps, after asking: only the person
 	 * deletes (the model cancels), and the tasks after it stop waiting on it.
 	 */
-	private async deleteTask(task: unknown): Promise<{ ok: boolean; errors?: string[]; lines?: string[] }> {
-		if (!this.deps.boardEdit) return { ok: false, errors: ["This editor cannot change the board."] }
+	private async deleteTask(task: unknown, board: unknown): Promise<{ ok: boolean; errors?: string[]; lines?: string[] }> {
+		const boards = this.deps.boards
+		if (!boards) return { ok: false, errors: ["This editor cannot change the board."] }
 		if (typeof task !== "string" || !task) return { ok: false, errors: ["Pick a task first."] }
-		const board = this.boardTasks()
-		const found = board.find((entry) => entry.id === task)
-		const steps = board.filter((entry) => entry.id.startsWith(`${task}.`)).length
+		const key = boards.resolve(board)
+		const refused = boards.readOnly(key)
+		if (refused) return { ok: false, errors: [refused] }
+		const tasks = this.boardTasks(boards.text(key))
+		const found = tasks.find((entry) => entry.id === task)
+		const steps = tasks.filter((entry) => entry.id.startsWith(`${task}.`)).length
 		const name = found ? `${task} "${found.title}"` : task
 		const answer = await vscode.window.showWarningMessage(
 			`Delete ${name}${steps ? ` and its ${steps} step${steps === 1 ? "" : "s"}` : ""}? It is gone from the board for good, and the tasks after it stop waiting on it.`,
@@ -307,14 +349,13 @@ class BoardViewer {
 			"Delete",
 		)
 		if (answer !== "Delete") return { ok: false }
-		const outcome = this.deps.boardEdit({ op: "remove", ids: [task] })
+		const outcome = boards.edit(key, { op: "remove", ids: [task] })
 		return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
 	}
 
-	/** The board shown, as its tasks' ids and titles. */
-	private boardTasks(): { id: string; title: string }[] {
+	/** A board's tasks, as their ids and titles. */
+	private boardTasks(text: string | undefined): { id: string; title: string }[] {
 		try {
-			const text = this.deps.boardText()
 			const parsed = text ? (JSON.parse(text) as { tasks?: { id?: unknown; title?: unknown }[] }) : undefined
 			return (parsed?.tasks ?? [])
 				.filter((entry) => typeof entry.id === "string")

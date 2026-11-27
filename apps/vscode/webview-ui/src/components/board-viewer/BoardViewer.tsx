@@ -9,9 +9,11 @@ import {
 	ask,
 	initialSource,
 	readBoard,
+	readBoardText,
 	readViewerMessage,
 	runBelongsTo,
 	settleReply,
+	type ViewerBoardEntry,
 	type ViewerData,
 	type ViewerPipeline,
 	type ViewerPipelineDefinition,
@@ -114,6 +116,8 @@ export function BoardViewer() {
 	const [problems, setProblems] = useState<{ checked: ViewerPipelineDefinition; errors: string[] }>()
 	const [notice, setNotice] = useState<{ ok: boolean; lines: string[] }>()
 	const [busy, setBusy] = useState(false)
+	// The board picked in the rail; none: this conversation's, else Draft 1.
+	const [boardKey, setBoardKey] = useState<string>()
 
 	const show = useCallback((next: ViewerSource | undefined) => {
 		setSource(next)
@@ -137,7 +141,16 @@ export function BoardViewer() {
 		return () => window.removeEventListener("message", receive)
 	}, [show])
 
-	const board = useMemo(() => readBoard(data), [data])
+	const boardEntries = data?.boards ?? []
+	const boardEntry: ViewerBoardEntry | undefined =
+		boardEntries.find((entry) => entry.key === boardKey) ??
+		boardEntries.find((entry) => entry.kind === "conversation") ??
+		boardEntries.find((entry) => entry.key === "draft:1")
+	const activeBoard = boardEntry?.key
+	const boardEditable = boardEntry ? boardEntry.editable : true
+	const board = useMemo(() => (boardEntry ? readBoardText(boardEntry.text) : readBoard(data)), [boardEntry, data])
+	/** A request about the board shown, naming it. */
+	const onBoard = <T extends object>(request: T) => (activeBoard ? { ...request, board: activeBoard } : request)
 	const pipeline = source?.kind === "pipeline" ? data?.pipelines.find((candidate) => candidate.slug === source.slug) : undefined
 	const run = source?.kind === "run" ? data?.runs.find((candidate) => candidate.id === source.id) : undefined
 	const runPipeline = run ? data?.pipelines.find((candidate) => runBelongsTo(run, candidate)) : undefined
@@ -331,23 +344,27 @@ export function BoardViewer() {
 			: undefined
 
 	const taskEdit: TaskEdit | undefined =
-		source?.kind === "board" ? (fields) => ask(post, { type: "boardViewer/editTask", updates: [fields] }) : undefined
+		source?.kind === "board" && boardEditable
+			? (fields) => ask(post, onBoard({ type: "boardViewer/editTask" as const, updates: [fields] }))
+			: undefined
 	const deleteTask = (task: string) =>
-		void request(() => ask(post, { type: "boardViewer/deleteTask", task })).then((reply) => {
+		void request(() => ask(post, onBoard({ type: "boardViewer/deleteTask" as const, task }))).then((reply) => {
 			if (reply.ok) setSelected(undefined)
 		})
 	const addStep = async (parent: string, title: string) =>
-		(await request(() => ask(post, { type: "boardViewer/addTask", title, parent }))).ok
+		(await request(() => ask(post, onBoard({ type: "boardViewer/addTask" as const, title, parent })))).ok
 	// The board's own canvas edits: a drag from a task to another makes the
 	// second wait on the first; deleting an edge drops that dependency (or the
 	// gate it comes from), and deleting a card deletes the task, after asking.
 	const boardCanvasEdit: CanvasEdit | undefined =
-		source?.kind === "board" && board && board.tasks.length > 0
+		source?.kind === "board" && boardEditable && board && board.tasks.length > 0
 			? {
 					kind: "task",
 					onConnect: (from, _port, to) => {
 						if (from === to) return
-						void request(() => ask(post, { type: "boardViewer/editTask", updates: [{ id: to, depends: [from] }] }))
+						void request(() =>
+							ask(post, onBoard({ type: "boardViewer/editTask" as const, updates: [{ id: to, depends: [from] }] })),
+						)
 					},
 					onDeleteNode: (id) => deleteTask(id),
 					onDeleteEdge: (id) => {
@@ -356,14 +373,26 @@ export function BoardViewer() {
 							const spec = board.tasks.find((task) => task.id === gate[1])?.gates?.[Number(gate[2])]?.spec
 							if (spec)
 								void request(() =>
-									ask(post, { type: "boardViewer/editTask", updates: [{ id: gate[1], gate_remove: [spec] }] }),
+									ask(
+										post,
+										onBoard({
+											type: "boardViewer/editTask" as const,
+											updates: [{ id: gate[1], gate_remove: [spec] }],
+										}),
+									),
 								)
 							return
 						}
 						const [from, to] = id.split("->")
 						if (from && to)
 							void request(() =>
-								ask(post, { type: "boardViewer/editTask", updates: [{ id: to, depends_remove: [from] }] }),
+								ask(
+									post,
+									onBoard({
+										type: "boardViewer/editTask" as const,
+										updates: [{ id: to, depends_remove: [from] }],
+									}),
+								),
 							)
 					},
 				}
@@ -384,8 +413,22 @@ export function BoardViewer() {
 		void request(() => ask(post, { type: "boardViewer/newPipeline" })).then((reply) => {
 			if (reply.ok && reply.pipeline) setPending({ kind: "pipeline", slug: reply.pipeline })
 		})
-	const addTask = async (title: string) => (await request(() => ask(post, { type: "boardViewer/addTask", title }))).ok
-	const boardDraft = data?.boardDraft === true
+	const addTask = async (title: string) =>
+		(await request(() => ask(post, onBoard({ type: "boardViewer/addTask" as const, title })))).ok
+	const boardDraft = boardEntry ? boardEntry.kind === "draft" : data?.boardDraft === true
+	const showBoard = (key: string) => {
+		setBoardKey(key)
+		show({ kind: "board" })
+	}
+	// Where the board shown can be copied: the boards changed in place, but itself.
+	const copyTargets = boardEntries
+		.filter((entry) => entry.editable && entry.key !== activeBoard)
+		.map((entry) => ({ key: entry.key, label: entry.label }))
+	const copyTo = (to: string) =>
+		activeBoard &&
+		void request(() => ask(post, { type: "boardViewer/copyBoard", from: activeBoard, to })).then((reply) => {
+			if (reply.ok) setBoardKey(to)
+		})
 
 	const kind = source?.kind
 	const tabList = kind ? TABS[kind] : []
@@ -395,9 +438,11 @@ export function BoardViewer() {
 
 	const title =
 		kind === "board"
-			? boardDraft
-				? "Draft board"
-				: "Conversation board"
+			? boardEntry && boardEntry.kind !== "conversation"
+				? boardEntry.label
+				: boardDraft
+					? "Draft board"
+					: "Conversation board"
 			: kind === "pipeline"
 				? (pipeline?.name ?? "Pipeline")
 				: kind === "run"
@@ -413,7 +458,13 @@ export function BoardViewer() {
 					? `approved, version ${pipeline.hash}`
 					: `version ${pipeline.hash}`
 			: undefined,
-		kind === "board" && boardDraft ? "for your next conversation" : undefined,
+		kind === "board" && boardDraft
+			? boardEntry
+				? "a draft: start a conversation from it, or copy it"
+				: "for your next conversation"
+			: undefined,
+		kind === "board" && boardEntry?.kind === "recent" ? "an earlier conversation" : undefined,
+		kind === "board" && boardEntry?.kind === "saved" ? boardEntry.detail : undefined,
 		kind === "board" && board && !boardDraft
 			? `${board.tasks.filter((task) => task.status === "done").length} of ${board.tasks.length} done`
 			: undefined,
@@ -439,9 +490,21 @@ export function BoardViewer() {
 				<select
 					aria-label="Show"
 					className="bv-source-select"
-					onChange={(event) => show(parseKey(event.target.value))}
-					value={sourceKey(source)}>
-					<option value="board">{boardDraft ? "Draft board" : "Conversation board"}</option>
+					onChange={(event) => {
+						const value = event.target.value
+						if (value.startsWith("board:")) showBoard(value.slice(6))
+						else show(parseKey(value))
+					}}
+					value={kind === "board" && activeBoard ? `board:${activeBoard}` : sourceKey(source)}>
+					{boardEntries.length > 0 ? (
+						boardEntries.map((entry) => (
+							<option key={entry.key} value={`board:${entry.key}`}>
+								Board: {entry.label}
+							</option>
+						))
+					) : (
+						<option value="board">{boardDraft ? "Draft board" : "Conversation board"}</option>
+					)}
 					{data.pipelines.map((candidate) => (
 						<option key={candidate.slug} value={`pipeline:${candidate.slug}`}>
 							Pipeline {candidate.name}
@@ -470,7 +533,10 @@ export function BoardViewer() {
 			<ActionBar
 				board={board}
 				boardDraft={boardDraft}
+				boardEntry={boardEntry}
 				busy={busy}
+				conversationOpen={boardEntries.some((entry) => entry.kind === "conversation")}
+				copyTargets={copyTargets}
 				draft={draft}
 				draftErrors={draftErrors}
 				drafting={drafting}
@@ -484,20 +550,32 @@ export function BoardViewer() {
 					board && void request(() => ask(post, { type: "boardViewer/boardToPipeline", tasks: boardTasks(board) }))
 				}
 				onChanges={() => kind && setTabs((current) => ({ ...current, [kind]: "versions" }))}
+				onCopyTo={copyTo}
+				onDeleteSavedBoard={() =>
+					activeBoard &&
+					void request(() => ask(post, { type: "boardViewer/deleteSavedBoard", board: activeBoard })).then((reply) => {
+						if (reply.ok) setBoardKey(undefined)
+					})
+				}
 				onDiscard={() => {
 					setDraft(undefined)
 					setNotice(undefined)
 				}}
-				onDiscardBoardDraft={() => void request(() => ask(post, { type: "boardViewer/discardDraft" }))}
-				onExportBoard={() => void request(() => ask(post, { type: "boardViewer/exportBoard" }))}
-				onLoadBoard={() => void request(() => ask(post, { type: "boardViewer/loadBoard" }))}
+				onDiscardBoardDraft={() => void request(() => ask(post, onBoard({ type: "boardViewer/discardDraft" as const })))}
+				onExportBoard={() => void request(() => ask(post, onBoard({ type: "boardViewer/exportBoard" as const })))}
+				onLoadBoard={() => void request(() => ask(post, onBoard({ type: "boardViewer/loadBoard" as const })))}
 				onReject={() =>
 					pipeline &&
 					void request(() => ask(post, { type: "boardViewer/reject", slug: pipeline.slug, hash: pipeline.hash }))
 				}
 				onSave={() => void save()}
+				onSaveToMemory={() =>
+					activeBoard && void request(() => ask(post, { type: "boardViewer/saveBoardToMemory", board: activeBoard }))
+				}
 				onShowDraft={() => draft && show({ kind: "pipeline", slug: draft.slug })}
-				onStartFromBoardDraft={() => void request(() => ask(post, { type: "boardViewer/startFromDraft" }))}
+				onStartFromBoardDraft={() =>
+					void request(() => ask(post, onBoard({ type: "boardViewer/startFromDraft" as const })))
+				}
 				onToTemplate={() =>
 					pipeline && void request(() => ask(post, { type: "boardViewer/toTemplate", slug: pipeline.slug }))
 				}
@@ -506,21 +584,31 @@ export function BoardViewer() {
 			/>
 			<div className={`bv-body${withInspector ? " bv-with-inspector" : ""}`}>
 				<nav aria-label="Boards, pipelines and runs" className="bv-rail">
-					<div className="bv-rail-heading">{boardDraft ? "Next conversation" : "Conversation"}</div>
-					<button
-						aria-current={kind === "board"}
-						className="bv-source"
-						onClick={() => show({ kind: "board" })}
-						type="button">
-						<span className="bv-source-name">Board</span>
-						<span className="bv-source-meta">
-							{board
-								? `${board.tasks.length} task${board.tasks.length === 1 ? "" : "s"}${boardDraft ? " · draft" : ""}`
-								: boardDraft
-									? "Add tasks for your next conversation"
-									: "No board yet"}
-						</span>
-					</button>
+					{boardEntries.length > 0 ? (
+						<BoardList
+							active={kind === "board" ? activeBoard : undefined}
+							entries={boardEntries}
+							onShow={showBoard}
+						/>
+					) : (
+						<>
+							<div className="bv-rail-heading">{boardDraft ? "Next conversation" : "Conversation"}</div>
+							<button
+								aria-current={kind === "board"}
+								className="bv-source"
+								onClick={() => show({ kind: "board" })}
+								type="button">
+								<span className="bv-source-name">Board</span>
+								<span className="bv-source-meta">
+									{board
+										? `${board.tasks.length} task${board.tasks.length === 1 ? "" : "s"}${boardDraft ? " · draft" : ""}`
+										: boardDraft
+											? "Add tasks for your next conversation"
+											: "No board yet"}
+								</span>
+							</button>
+						</>
+					)}
 					<div className="bv-rail-heading">
 						Pipelines
 						<button className="bv-row-button bv-rail-action" disabled={busy} onClick={newPipeline} type="button">
@@ -616,6 +704,60 @@ export function BoardViewer() {
 				)}
 			</div>
 		</div>
+	)
+}
+
+/** What the rail says about a board: its tasks and how many are open, or that it is empty. */
+const boardMeta = (entry: ViewerBoardEntry) =>
+	entry.tasks === 0 ? "empty" : `${plural(entry.tasks, "task")}${entry.open > 0 ? ` · ${entry.open} open` : " · all closed"}`
+
+/**
+ * The rail's boards: this conversation's, the drafts, the recent
+ * conversations' and the ones saved in Memory, each group under its name.
+ */
+function BoardList({
+	entries,
+	active,
+	onShow,
+}: {
+	entries: ViewerBoardEntry[]
+	active: string | undefined
+	onShow: (key: string) => void
+}) {
+	const groups: { title: string; kind: ViewerBoardEntry["kind"] }[] = [
+		{ title: "Conversation", kind: "conversation" },
+		{ title: "Drafts", kind: "draft" },
+		{ title: "Recent conversations", kind: "recent" },
+		{ title: "Saved in Memory", kind: "saved" },
+	]
+	return (
+		<>
+			<div className="bv-rail-heading">Boards</div>
+			{groups.map((group) => {
+				const members = entries.filter((entry) => entry.kind === group.kind)
+				if (members.length === 0) return null
+				return (
+					<div className="bv-board-group" key={group.kind}>
+						<div className="bv-rail-sub">{group.title}</div>
+						{members.map((entry) => (
+							<button
+								aria-current={entry.key === active}
+								className="bv-source"
+								key={entry.key}
+								onClick={() => onShow(entry.key)}
+								title={entry.detail ?? entry.label}
+								type="button">
+								<span className="bv-source-name">{entry.label}</span>
+								<span className="bv-source-meta">
+									{boardMeta(entry)}
+									{entry.editable ? "" : " · view"}
+								</span>
+							</button>
+						))}
+					</div>
+				)
+			})}
+		</>
 	)
 }
 
@@ -774,6 +916,12 @@ function ActionBar({
 	onLoadBoard,
 	onExportBoard,
 	boardDraft,
+	boardEntry,
+	conversationOpen,
+	copyTargets,
+	onCopyTo,
+	onSaveToMemory,
+	onDeleteSavedBoard,
 	onAddTask,
 	onStartFromBoardDraft,
 	onDiscardBoardDraft,
@@ -782,6 +930,12 @@ function ActionBar({
 	pipeline: ViewerPipeline | undefined
 	board: ReturnType<typeof readBoard>
 	boardDraft: boolean
+	boardEntry: ViewerBoardEntry | undefined
+	conversationOpen: boolean
+	copyTargets: { key: string; label: string }[]
+	onCopyTo: (key: string) => void
+	onSaveToMemory: () => void
+	onDeleteSavedBoard: () => void
 	onAddTask: (title: string) => Promise<boolean>
 	onStartFromBoardDraft: () => void
 	onDiscardBoardDraft: () => void
@@ -897,17 +1051,24 @@ function ActionBar({
 		}
 	} else if (source?.kind === "board") {
 		const tasks = board?.tasks.length ?? 0
-		left = <AddTask busy={busy} onAdd={onAddTask} />
+		const editable = boardEntry ? boardEntry.editable : true
+		left = editable ? (
+			<AddTask busy={busy} onAdd={onAddTask} />
+		) : (
+			<span className="bv-board-readonly">{boardEntry?.readOnly}</span>
+		)
 		const io = (
 			<>
-				<button
-					className="bv-button"
-					disabled={busy}
-					onClick={onLoadBoard}
-					title="Add tasks from a board saved in Memory, a saved plan, or a file"
-					type="button">
-					Load…
-				</button>
+				{editable && (
+					<button
+						className="bv-button"
+						disabled={busy}
+						onClick={onLoadBoard}
+						title="Add tasks from a board saved in Memory, a saved plan, or a file"
+						type="button">
+						Load…
+					</button>
+				)}
 				<button
 					className="bv-button"
 					disabled={busy || tasks === 0}
@@ -918,12 +1079,53 @@ function ActionBar({
 				</button>
 			</>
 		)
+		const copy =
+			boardEntry && copyTargets.length > 0 ? (
+				<select
+					aria-label="Copy to"
+					className="bv-copy-select"
+					disabled={busy || tasks === 0}
+					onChange={(event) => {
+						const to = event.target.value
+						event.target.value = ""
+						if (to) onCopyTo(to)
+					}}
+					title="Copy this board's tasks to another board: add them, or replace what is there"
+					value="">
+					<option value="">Copy to…</option>
+					{copyTargets.map((target) => (
+						<option key={target.key} value={target.key}>
+							{target.label}
+						</option>
+					))}
+				</select>
+			) : null
+		const keep =
+			boardEntry && boardEntry.kind !== "saved" ? (
+				<button
+					className="bv-button"
+					disabled={busy || tasks === 0}
+					onClick={onSaveToMemory}
+					title="Save this board into Memory, to copy or start from later"
+					type="button">
+					Save to Memory
+				</button>
+			) : boardEntry?.kind === "saved" ? (
+				<button className="bv-button bv-danger" disabled={busy} onClick={onDeleteSavedBoard} type="button">
+					Delete
+				</button>
+			) : null
 		const actions = boardDraft ? (
 			<>
 				<button
 					className="bv-button bv-primary"
-					disabled={busy || tasks === 0}
+					disabled={busy || tasks === 0 || conversationOpen}
 					onClick={onStartFromBoardDraft}
+					title={
+						conversationOpen
+							? "A conversation is open: start a new one (the + button) first, or copy this draft to it"
+							: "The next new conversation starts from this board"
+					}
 					type="button">
 					Start a conversation with this board
 				</button>
@@ -931,7 +1133,7 @@ function ActionBar({
 					Discard
 				</button>
 			</>
-		) : tasks > 0 ? (
+		) : tasks > 0 && editable ? (
 			<button className="bv-button" disabled={busy} onClick={onBoardToPipeline} type="button">
 				Save as a pipeline
 			</button>
@@ -939,6 +1141,8 @@ function ActionBar({
 		right = (
 			<>
 				{io}
+				{copy}
+				{keep}
 				{actions}
 			</>
 		)

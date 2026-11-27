@@ -1,8 +1,10 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { approvePipeline, findPipeline, savePipeline } from "@cline/core"
+import { approvePipeline, findPipeline, savePipeline, TaskGraphStore } from "@cline/core"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { SavedBoardEntry } from "./board-io"
+import { BoardSlots, draftKey, type RecentBoard } from "./board-slots"
 import type { BoardEditAction } from "./draft"
 
 /**
@@ -74,13 +76,47 @@ import { openBoardViewerPanel } from "./panel"
 
 let root: string
 let boardTextValue: string | undefined
+let conversationValue: { id: string; live: boolean } | undefined
+let running = false
+let clock = 0
+let recentBoards: RecentBoard[] = []
+let savedList: SavedBoardEntry[] = []
+const savedEventsById = new Map<string, unknown[]>()
+const draftStore = new Map<number, unknown[] | undefined>()
 const boardEdit = vi.fn((_action: BoardEditAction) => ({ ok: true, lines: ["T1: renamed."] }))
-const draftStart = vi.fn(() => ({ ok: true, lines: ["Send your first message in the chat."] }))
-const draftDiscard = vi.fn(() => ({ ok: true, lines: ["The draft board is discarded."] }))
+const startConversation = vi.fn((_events: unknown[], onTaken: () => void) => onTaken())
+const saveConversation = vi.fn(async (_id: string, _title?: string) => ({ ok: true, lines: ["Saved the board as m9."] }))
+const saveEvents = vi.fn(async (_events: unknown[], _title?: string) => ({ ok: true, lines: ["Saved the board as m8."] }))
+const deleteSaved = vi.fn(async (_id: string, _memory: string) => true)
 const runAction = vi.fn((action: { op: string; run: string; node?: string }): { ok: boolean; lines: string[]; run?: string } =>
 	action.op === "rerun"
 		? { ok: true, lines: ["Re-running deploy-1 from up as deploy-2."], run: "deploy-2" }
 		: { ok: false, lines: ["deploy-1 is still running. Stop it first."] },
+)
+/** A board's events as core writes them: what Memory and a conversation's log hold. */
+function eventsOf(...titles: string[]): unknown[] {
+	const store = new TaskGraphStore()
+	store.plan({ tasks: titles.map((title) => ({ title })) }, { by: "person" }, { autoStart: false })
+	return [...store.getEvents()]
+}
+const boards = new BoardSlots(
+	{
+		workspaceRoot: () => root,
+		conversation: () => conversationValue,
+		liveText: () => boardTextValue,
+		liveEvents: () => undefined,
+		liveEdit: boardEdit,
+		turnRunning: () => running,
+		draftStorage: (slot) => ({ get: () => draftStore.get(slot), set: (events) => draftStore.set(slot, events) }),
+		recent: async () => recentBoards,
+		saved: () => savedList,
+		savedEvents: (id) => savedEventsById.get(id),
+		saveConversation,
+		saveEvents,
+		deleteSaved,
+		startConversation,
+	},
+	() => clock,
 )
 
 beforeEach(() => {
@@ -92,18 +128,19 @@ beforeEach(() => {
 	ui.pick = undefined
 	ui.picks.length = 0
 	boardTextValue = undefined
-	boardEdit.mockClear()
-	runAction.mockClear()
-	draftStart.mockClear()
-	draftDiscard.mockClear()
+	conversationValue = { id: "c1", live: true }
+	running = false
+	clock += 60_000
+	recentBoards = []
+	savedList = []
+	savedEventsById.clear()
+	for (const slot of [1, 2, 3]) boards.clear(draftKey(slot))
+	for (const mock of [boardEdit, runAction, startConversation, saveConversation, saveEvents, deleteSaved]) mock.mockClear()
 	openBoardViewerPanel({
 		extensionUri: {} as never,
 		workspaceRoot: () => root,
-		boardText: () => boardTextValue,
-		boardEdit,
+		boards,
 		runAction,
-		draftStart,
-		draftDiscard,
 	})
 })
 afterEach(() => {
@@ -251,7 +288,7 @@ describe("the board viewer's requests", () => {
 		expect(runAction).not.toHaveBeenCalled()
 	})
 
-	it("adds a task to the board, and hands the draft on or discards it once confirmed", async () => {
+	it("adds a task to the board, and hands a draft on or discards it once confirmed", async () => {
 		const added = await request({ type: "boardViewer/addTask", title: "  Write the README " })
 		expect(boardEdit).toHaveBeenCalledWith({ op: "plan", tasks: [{ title: "Write the README" }] })
 		expect(added).toMatchObject({ ok: true })
@@ -260,16 +297,123 @@ describe("the board viewer's requests", () => {
 			errors: ["Give the task a title."],
 		})
 
+		// No conversation open: the board shown first is Draft 1.
+		conversationValue = undefined
+		expect(await request({ type: "boardViewer/addTask", title: "Plan the release" })).toMatchObject({ ok: true })
+		expect(boards.hasTasks(draftKey(1))).toBe(true)
 		expect(await request({ type: "boardViewer/startFromDraft" })).toMatchObject({
 			ok: true,
-			lines: ["Send your first message in the chat."],
+			lines: ["Send your first message in the chat: the new conversation starts from this board."],
 		})
+		expect(startConversation).toHaveBeenCalledTimes(1)
+		// Taken by the new conversation: the draft is empty again.
+		expect(boards.hasTasks(draftKey(1))).toBe(false)
+
+		await request({ type: "boardViewer/addTask", title: "Spare", board: "draft:2" })
 		ui.warning = undefined
-		expect(await request({ type: "boardViewer/discardDraft" })).toMatchObject({ ok: false })
-		expect(draftDiscard).not.toHaveBeenCalled()
+		expect(await request({ type: "boardViewer/discardDraft", board: "draft:2" })).toMatchObject({ ok: false })
+		expect(boards.hasTasks(draftKey(2))).toBe(true)
 		ui.warning = "Discard"
-		expect(await request({ type: "boardViewer/discardDraft" })).toMatchObject({ ok: true })
-		expect(draftDiscard).toHaveBeenCalledTimes(1)
+		expect(await request({ type: "boardViewer/discardDraft", board: "draft:2" })).toMatchObject({ ok: true })
+		expect(boards.hasTasks(draftKey(2))).toBe(false)
+	})
+
+	it("lists this conversation's board, three drafts, the recent conversations' and the ones saved in Memory", async () => {
+		boardTextValue = JSON.stringify({ tasks: [{ id: "T1", title: "Live", status: "active" }] })
+		recentBoards = [
+			{ id: "s-old", title: "Fix the game\nmore", at: "2026-11-27T06:00:00Z", events: eventsOf("Old one", "Old two") },
+		]
+		savedList = [{ id: "m1", memory: "main", title: "Release", tasks: 1, open: 1, savedAt: "2026-11-20T10:00:00Z" }]
+		savedEventsById.set("m1", eventsOf("Saved one"))
+		await request({ type: "boardViewer/addTask", title: "Draft task", board: "draft:3" })
+		ui.posted.length = 0
+		ui.receive?.({ type: "boardViewer/ready" })
+		await vi.waitFor(() => {
+			if (!ui.posted.some((posted) => (posted as { type?: string }).type === "boardViewer/data")) throw new Error("no data")
+		})
+		const data = (
+			ui.posted.find((posted) => (posted as { type?: string }).type === "boardViewer/data") as {
+				data: { boards: { key: string; kind: string; label: string; tasks: number; editable: boolean }[] }
+			}
+		).data
+		expect(data.boards.map((entry) => [entry.key, entry.label, entry.tasks, entry.editable])).toEqual([
+			["live", "This conversation", 1, true],
+			["draft:1", "Draft 1", 0, true],
+			["draft:2", "Draft 2", 0, true],
+			["draft:3", "Draft 3", 1, true],
+			["recent:s-old", "Fix the game", 2, false],
+			["saved:main/m1", "Release", 1, false],
+		])
+	})
+
+	it("copies a board to this conversation or a draft, Add or Replace, and Replace waits while the model works", async () => {
+		recentBoards = [{ id: "s-old", title: "Earlier", events: eventsOf("Old one", "Old two") }]
+		ui.posted.length = 0
+		ui.receive?.({ type: "boardViewer/ready" })
+		await vi.waitFor(() => {
+			if (!ui.posted.some((posted) => (posted as { type?: string }).type === "boardViewer/data")) throw new Error("no data")
+		})
+
+		// Into an empty draft: nothing to ask.
+		const intoDraft = await request({ type: "boardViewer/copyBoard", from: "recent:s-old", to: "draft:1" })
+		expect(intoDraft).toMatchObject({ ok: true })
+		expect(intoDraft.lines?.[0]).toBe('Copied 2 tasks from the board of "Earlier" to Draft 1.')
+		// Into a draft with tasks: Replace empties it first.
+		ui.warning = "Replace"
+		await request({ type: "boardViewer/copyBoard", from: "recent:s-old", to: "draft:1" })
+		expect(JSON.parse(boards.text(draftKey(1)) ?? "{}").tasks.map((task: { title: string }) => task.title)).toEqual([
+			"Old one",
+			"Old two",
+		])
+
+		// This conversation, with tasks: Replace removes its tasks, then plans.
+		boardTextValue = JSON.stringify({
+			tasks: [
+				{ id: "T1", title: "Live" },
+				{ id: "T1.1", title: "Step", parent: "T1" },
+			],
+		})
+		await request({ type: "boardViewer/copyBoard", from: "draft:1", to: "live" })
+		expect(boardEdit.mock.calls.map((call) => call[0].op)).toEqual(["remove", "plan"])
+		expect(boardEdit.mock.calls[0]?.[0]).toEqual({ op: "remove", ids: ["T1"] })
+
+		// While the model works only Add is offered; a Replace that slips in is refused.
+		boardEdit.mockClear()
+		running = true
+		ui.warning = "Replace"
+		const refused = await request({ type: "boardViewer/copyBoard", from: "draft:1", to: "live" })
+		expect(refused).toMatchObject({ ok: false })
+		expect(boardEdit).not.toHaveBeenCalled()
+		ui.warning = "Add"
+		expect(await request({ type: "boardViewer/copyBoard", from: "draft:1", to: "live" })).toMatchObject({ ok: true })
+		expect(boardEdit.mock.calls.map((call) => call[0].op)).toEqual(["plan"])
+
+		// An earlier conversation's board and a saved one are not changed in place.
+		expect(await request({ type: "boardViewer/addTask", title: "No", board: "recent:s-old" })).toMatchObject({ ok: false })
+		expect(await request({ type: "boardViewer/copyBoard", from: "draft:1", to: "recent:s-old" })).toMatchObject({
+			ok: false,
+		})
+		// A conversation reopened and not resumed: its board changes once it is.
+		conversationValue = { id: "c1", live: false }
+		expect(await request({ type: "boardViewer/addTask", title: "Later" })).toMatchObject({
+			ok: false,
+			errors: ["This conversation's board changes while its session runs: send a message to resume it."],
+		})
+	})
+
+	it("saves a board into Memory and deletes a saved one only once confirmed", async () => {
+		await request({ type: "boardViewer/addTask", title: "Keep me", board: "draft:2" })
+		expect(await request({ type: "boardViewer/saveBoardToMemory", board: "draft:2" })).toMatchObject({ ok: true })
+		expect(saveEvents).toHaveBeenCalledWith(expect.any(Array), "Draft 2")
+		expect(await request({ type: "boardViewer/saveBoardToMemory", board: "live" })).toMatchObject({ ok: true })
+		expect(saveConversation).toHaveBeenCalledWith("c1", undefined)
+
+		ui.warning = undefined
+		expect(await request({ type: "boardViewer/deleteSavedBoard", board: "saved:main/m1" })).toMatchObject({ ok: false })
+		expect(deleteSaved).not.toHaveBeenCalled()
+		ui.warning = "Delete"
+		expect(await request({ type: "boardViewer/deleteSavedBoard", board: "saved:main/m1" })).toMatchObject({ ok: true })
+		expect(deleteSaved).toHaveBeenCalledWith("m1", "main")
 	})
 
 	it("deletes a task only once the person confirms, naming its steps; adds a step under a task", async () => {

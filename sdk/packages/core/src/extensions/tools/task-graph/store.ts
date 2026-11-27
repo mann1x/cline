@@ -418,11 +418,20 @@ export class TaskGraphStore {
 	 * Undefined for no log or an empty one.
 	 */
 	static readSnapshot(logPath: string): TaskGraphSnapshot | undefined {
-		const store = new TaskGraphStore({ logPath });
-		const events = store.readLog();
-		if (events.length === 0) return undefined;
-		store.events = events;
-		store.state = foldTaskEvents(events);
+		return TaskGraphStore.snapshotOf(new TaskGraphStore({ logPath }).readLog());
+	}
+
+	/**
+	 * The board some events make, as the task panel's row carries it: a draft,
+	 * a board saved in Memory, another conversation's log. Undefined when they
+	 * make no tasks.
+	 */
+	static snapshotOf(events: readonly unknown[]): TaskGraphSnapshot | undefined {
+		const valid = events.filter(isTaskEvent);
+		if (valid.length === 0) return undefined;
+		const store = new TaskGraphStore();
+		store.events = valid;
+		store.state = foldTaskEvents(valid);
 		return store.isEmpty() ? undefined : store.snapshot();
 	}
 

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { CoreTaskGraphControl } from "@cline/core"
+import { type CoreTaskGraphControl, TaskGraphStore } from "@cline/core"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { TaskBoardMemory } from "./task-board-memory"
 
@@ -30,6 +30,7 @@ function fakeMemory() {
 			boards.set(id, saved)
 			return { id, text: input.text, memory: saved.memory, tags: [], createdAt: "" }
 		}),
+		forget: vi.fn(async (id: string) => boards.delete(id)),
 		readBoard: (id: string) => {
 			const saved = boards.get(id)
 			return saved ? { item: { id }, board: { ...saved.board, savedAt: "", format: "x", version: 1 } } : undefined
@@ -67,6 +68,20 @@ describe("TaskBoardMemory", () => {
 			text: "board of s1",
 			board: { sessionId: "s1", title: "Fix the ledger", tasks: 2, open: 1, keepUpdated: false },
 		})
+	})
+
+	it("saves a draft's events as a board tied to no conversation, and deletes a saved board", async () => {
+		const memory = fakeMemory()
+		const boards = new TaskBoardMemory({ memory: () => memory as never, cwd: async () => "/w" })
+		const store = new TaskGraphStore()
+		store.plan({ tasks: [{ title: "One" }, { title: "Two" }] }, { by: "person" }, { autoStart: false })
+		const lines = await boards.saveEvents({ events: [...store.getEvents()], title: "Draft 2" })
+		expect(lines[0]).toContain('Saved the board as m1 in "main" (2 tasks, 2 open)')
+		expect(memory.boards.get("m1")?.board).toMatchObject({ title: "Draft 2", tasks: 2, keepUpdated: false })
+		expect((await boards.saveEvents({ events: [] }))[0]).toContain("empty")
+		expect(await boards.deleteSaved("m1", "main")).toBe(true)
+		expect(memory.forget).toHaveBeenCalledWith("m1", { memories: ["main"] })
+		expect(memory.boards.has("m1")).toBe(false)
 	})
 
 	it("refuses to save with Memory off, or an empty board", async () => {

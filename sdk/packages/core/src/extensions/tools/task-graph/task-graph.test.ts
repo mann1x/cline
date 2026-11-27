@@ -336,6 +336,22 @@ describe("the log and the conversation", () => {
 		expect(seen.at(-1)).toEqual(["T1", "T2"]);
 	});
 
+	it("makes a board from events alone, ignoring what is not an event", () => {
+		const store = new TaskGraphStore();
+		store.plan(
+			{ tasks: [{ title: "A" }, { title: "B" }] },
+			{},
+			{ autoStart: false },
+		);
+		const snapshot = TaskGraphStore.snapshotOf([
+			...store.getEvents(),
+			{ not: "an event" },
+		]);
+		expect(snapshot?.tasks.map((t) => t.title)).toEqual(["A", "B"]);
+		expect(TaskGraphStore.snapshotOf([])).toBeUndefined();
+		expect(TaskGraphStore.snapshotOf([{ junk: true }])).toBeUndefined();
+	});
+
 	it("reads a log's board without writing it, for a conversation reopened before its session starts", () => {
 		const logPath = join(dir, "s.tasks.jsonl");
 		build(logPath);

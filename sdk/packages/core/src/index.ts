@@ -1652,10 +1652,16 @@ export {
 	type SddAction,
 	type SddToolOptions,
 } from "./extensions/tools/sdd-tool";
+// A task log's events, checked one by one (a board read from Memory or a file).
+export {
+	isTaskEvent,
+	type TaskEvent,
+} from "./extensions/tools/task-graph/model";
 // The task board read from a conversation's log, for saving a board from a
 // conversation that has no live session (task graph phase 2).
 export {
 	type ExportedTaskBoard,
+	exportTaskEvents,
 	exportTaskLog,
 } from "./extensions/tools/task-graph/saved-board";
 // A board the person builds before a conversation exists (the Board tab's

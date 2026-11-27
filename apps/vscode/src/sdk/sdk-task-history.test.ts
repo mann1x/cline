@@ -261,6 +261,47 @@ describe("SdkTaskHistory", () => {
 		}
 	})
 
+	it("lists the workspace's newest conversations that have a board, newest first, without the open one", async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "history-recent-"))
+		try {
+			const { TaskGraphStore } = await import("@cline/core")
+			const board = (id: string, title: string) => {
+				const store = new TaskGraphStore({ logPath: path.join(dir, id, `${id}.tasks.jsonl`) })
+				store.plan({ tasks: [{ title }] })
+			}
+			const record = (id: string, updatedAt: string, workspaceRoot: string, title?: string) =>
+				makeSessionRecord(id, {
+					messagesPath: path.join(dir, id, `${id}.messages.json`),
+					workspaceRoot,
+					cwd: workspaceRoot,
+					updatedAt,
+					...(title ? { metadata: { title } } : {}),
+				})
+			board("a", "Old work")
+			board("b", "New work")
+			board("c", "Other repo")
+			board("open", "Open one")
+			// "empty" has no board log.
+			const { history } = makeHistory([
+				record("a", "2026-11-20T00:00:00Z", "/repo"),
+				record("b", "2026-11-26T00:00:00Z", "/repo", "Fix the game"),
+				record("c", "2026-11-27T00:00:00Z", "/elsewhere"),
+				record("open", "2026-11-27T01:00:00Z", "/repo"),
+				record("empty", "2026-11-27T02:00:00Z", "/repo"),
+			])
+
+			const boards = await history.recentTaskBoards("/repo", 10, "open")
+			expect(boards.map((entry) => [entry.id, entry.title])).toEqual([
+				["b", "Fix the game"],
+				["a", "a"],
+			])
+			expect(boards[0]?.events.length).toBeGreaterThan(0)
+			expect((await history.recentTaskBoards("/repo", 1, "open")).map((entry) => entry.id)).toEqual(["b"])
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
 	it("retags only the final turn's text, styled by the mode recovered from user_input wrappers", async () => {
 		const { history, readMessages } = makeHistory([makeSessionRecord("task-1")])
 		readMessages.mockResolvedValueOnce([

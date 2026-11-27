@@ -45,7 +45,8 @@ export {
 	installOcrLanguages,
 	parseOcrLanguages,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"
-export { exportTaskLog } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/saved-board"
+export { isTaskEvent } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/model"
+export { exportTaskEvents, exportTaskLog } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/saved-board"
 export { TaskGraphStore } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/store"
 export {
 	boardPlanFromEvents,

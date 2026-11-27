@@ -152,6 +152,29 @@
 	letter-spacing: 0;
 	text-transform: none;
 }
+.bv-rail-sub {
+	color: var(--bv-muted);
+	font-size: 11px;
+	padding: 6px 14px 2px;
+}
+.bv-board-group + .bv-board-group {
+	margin-top: 2px;
+}
+.bv-board-readonly {
+	color: var(--bv-muted);
+	font-style: italic;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.bv-copy-select {
+	background: var(--vscode-dropdown-background, var(--bv-surface));
+	border: 1px solid var(--vscode-dropdown-border, var(--bv-border));
+	border-radius: 2px;
+	color: var(--vscode-dropdown-foreground, var(--bv-fg));
+	font: inherit;
+	padding: 2px 6px;
+}
 .bv-rail-empty {
 	color: var(--bv-muted);
 	padding: 2px 14px 4px;

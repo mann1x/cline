@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import path from "node:path"
 import {
 	type ClineCoreListHistoryOptions,
+	exportTaskLog,
 	type RoundRecord,
 	readRoundRecords,
 	readSessionCheckpointHistory,
@@ -500,13 +501,67 @@ export class SdkTaskHistory {
 	 */
 	private readTaskBoardRow(taskId: string, sdkRecord: SessionHistoryRecord | undefined, ts: number): ClineMessage[] {
 		try {
-			const messagesPath = typeof sdkRecord?.messagesPath === "string" ? sdkRecord.messagesPath.trim() : ""
-			const sessionDir = messagesPath ? path.dirname(messagesPath) : path.join(resolveSessionDataDir(), taskId)
-			const snapshot = TaskGraphStore.readSnapshot(path.join(sessionDir, `${taskId}.tasks.jsonl`))
+			const snapshot = TaskGraphStore.readSnapshot(this.taskLogPath(taskId, sdkRecord))
 			return snapshot ? [{ ts, type: "say", say: "task_graph", text: JSON.stringify(snapshot), partial: false }] : []
 		} catch {
 			return []
 		}
+	}
+
+	/** A conversation's board log, beside its transcript. */
+	private taskLogPath(taskId: string, sdkRecord: SessionHistoryRecord | undefined): string {
+		const messagesPath = typeof sdkRecord?.messagesPath === "string" ? sdkRecord.messagesPath.trim() : ""
+		const sessionDir = messagesPath ? path.dirname(messagesPath) : path.join(resolveSessionDataDir(), taskId)
+		return path.join(sessionDir, `${taskId}.tasks.jsonl`)
+	}
+
+	/**
+	 * The newest conversations of a workspace that have a task board, for the
+	 * Board tab's "Recent conversations": each with its board's events as
+	 * saved (owner, 2026-11-27: a board must be recoverable from an earlier
+	 * conversation).
+	 */
+	async recentTaskBoards(
+		workspaceRoot: string | undefined,
+		limit: number,
+		exclude?: string,
+	): Promise<{ id: string; title?: string; at?: string; events: unknown[] }[]> {
+		const samePath = (a: string | undefined, b: string) =>
+			!!a &&
+			path
+				.resolve(a)
+				.replace(/[\\/]+$/, "")
+				.toLowerCase() ===
+				path
+					.resolve(b)
+					.replace(/[\\/]+$/, "")
+					.toLowerCase()
+		const records = [...(await this.listHistory({ limit: 200 }))].sort((a, b) =>
+			String(b.updatedAt ?? b.startedAt ?? "").localeCompare(String(a.updatedAt ?? a.startedAt ?? "")),
+		)
+		const boards: { id: string; title?: string; at?: string; events: unknown[] }[] = []
+		for (const record of records) {
+			if (boards.length >= limit) break
+			if (record.sessionId === exclude) continue
+			if (workspaceRoot && !samePath(record.workspaceRoot || record.cwd, workspaceRoot)) continue
+			try {
+				const exported = exportTaskLog(this.taskLogPath(record.sessionId, record), { sessionId: record.sessionId })
+				if (!exported || exported.tasks === 0) continue
+				const title =
+					(typeof record.metadata?.title === "string" && record.metadata.title.trim()) ||
+					record.prompt?.trim() ||
+					undefined
+				boards.push({
+					id: record.sessionId,
+					...(title ? { title } : {}),
+					...(record.updatedAt || record.startedAt ? { at: String(record.updatedAt ?? record.startedAt) } : {}),
+					events: exported.events,
+				})
+			} catch {
+				// An unreadable log is a conversation without a board here.
+			}
+		}
+		return boards
 	}
 
 	async getClineMessages(

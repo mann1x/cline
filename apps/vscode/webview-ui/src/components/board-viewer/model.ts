@@ -8,6 +8,7 @@
 import {
 	BOARD_VIEWER_DATA,
 	BOARD_VIEWER_REPLY,
+	type ViewerBoardEntry,
 	type ViewerData,
 	type ViewerPipeline,
 	type ViewerRequest,
@@ -17,6 +18,7 @@ import type { ClineMessage } from "@shared/ExtensionMessage"
 import { findLatestTaskGraph, type TaskGraphPanelSnapshot } from "@/components/chat/task-header/TaskGraphPanel"
 
 export type {
+	ViewerBoardEntry,
 	ViewerBoardTask,
 	ViewerData,
 	ViewerEvent,
@@ -51,6 +53,8 @@ export function readViewerMessage(message: unknown): ViewerData | undefined {
 		workspace: typeof data.workspace === "string" ? data.workspace : "",
 		...(typeof data.boardText === "string" ? { boardText: data.boardText } : {}),
 		...(data.boardDraft === true ? { boardDraft: true } : {}),
+		...(Array.isArray(data.boards) ? { boards: readBoardEntries(data.boards) } : {}),
+		...(data.turnRunning === true ? { turnRunning: true } : {}),
 		...(isObject(data.catalog)
 			? {
 					catalog: {
@@ -76,6 +80,33 @@ export function readViewerMessage(message: unknown): ViewerData | undefined {
 			: [],
 		...(isObject(data.focus) ? { focus: data.focus as ViewerData["focus"] } : {}),
 	}
+}
+
+const BOARD_KINDS = new Set(["conversation", "draft", "recent", "saved"])
+
+function readBoardEntries(list: unknown[]): ViewerBoardEntry[] {
+	return list
+		.filter(
+			(entry): entry is Record<string, unknown> =>
+				isObject(entry) && typeof entry.key === "string" && BOARD_KINDS.has(String(entry.kind)),
+		)
+		.map((entry) => ({
+			key: entry.key as string,
+			kind: entry.kind as ViewerBoardEntry["kind"],
+			label: typeof entry.label === "string" ? entry.label : (entry.key as string),
+			...(typeof entry.detail === "string" ? { detail: entry.detail } : {}),
+			...(typeof entry.text === "string" ? { text: entry.text } : {}),
+			tasks: typeof entry.tasks === "number" ? entry.tasks : 0,
+			open: typeof entry.open === "number" ? entry.open : 0,
+			editable: entry.editable === true,
+			...(typeof entry.readOnly === "string" ? { readOnly: entry.readOnly } : {}),
+		}))
+}
+
+/** A board's row text, read with the task panel's own parser. */
+export function readBoardText(text: string | undefined): TaskGraphPanelSnapshot | undefined {
+	if (!text) return undefined
+	return findLatestTaskGraph([{ ts: 0, type: "say", say: "task_graph", text } as ClineMessage])
 }
 
 /** The conversation's board, read with the task panel's own parser. */

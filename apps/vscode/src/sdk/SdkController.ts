@@ -1057,6 +1057,43 @@ export class Controller {
 		return this.taskBoardMemory.savedBoardEvents(id, memory)
 	}
 
+	/** The Board tab's "Recent conversations": this workspace's newest conversations with a board. */
+	recentTaskBoards(
+		workspaceRoot: string | undefined,
+		limit: number,
+		exclude?: string,
+	): Promise<{ id: string; title?: string; at?: string; events: unknown[] }[]> {
+		return this.taskHistory.recentTaskBoards(workspaceRoot, limit, exclude)
+	}
+
+	/** The Board tab's "Save to Memory" for a conversation's board, by its id (live or from its log). */
+	async saveTaskBoardOf(sessionId: string, title?: string): Promise<{ ok: boolean; lines: string[] }> {
+		const named = title ?? (await this.taskHistory.findHistoryItem(sessionId).catch(() => undefined))?.task
+		const lines = await this.taskBoardMemory.save({ sessionId, keepUpdated: false, ...(named ? { title: named } : {}) })
+		return { ok: lines[0]?.startsWith("Saved") ?? false, lines }
+	}
+
+	/** The Board tab's "Save to Memory" for a draft. */
+	async saveTaskBoardEvents(events: unknown[], title?: string): Promise<{ ok: boolean; lines: string[] }> {
+		const lines = await this.taskBoardMemory.saveEvents({ events, ...(title ? { title } : {}) })
+		return { ok: lines[0]?.startsWith("Saved") ?? false, lines }
+	}
+
+	/** The Board tab's Delete on a board saved in Memory. */
+	deleteSavedTaskBoard(id: string, memory: string): Promise<boolean> {
+		return this.taskBoardMemory.deleteSaved(id, memory)
+	}
+
+	/** Whether the conversation on screen has a session that takes board changes now. */
+	taskBoardIsLive(): boolean {
+		return !!this.liveTaskGraphControl()
+	}
+
+	/** Whether the conversation on screen is in the middle of a turn. */
+	isTurnRunning(): boolean {
+		return this.sessions.getActiveSession()?.isRunning === true
+	}
+
 	/** The task panel's "Save to memory": the memories to choose from. */
 	taskBoardMemories(): Promise<{ enabled: boolean; names: string[]; preferred: string }> {
 		return this.taskBoardMemory.memories()

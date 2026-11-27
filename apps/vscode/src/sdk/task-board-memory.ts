@@ -1,4 +1,11 @@
-import { type CoreTaskGraphControl, type ExportedTaskBoard, exportTaskLog, sharedMemory } from "@cline/core"
+import {
+	type CoreTaskGraphControl,
+	type ExportedTaskBoard,
+	exportTaskEvents,
+	exportTaskLog,
+	isTaskEvent,
+	sharedMemory,
+} from "@cline/core"
 import { MAIN_MEMORY, memorySelectionFor } from "@cline/shared"
 import { Logger } from "@shared/services/Logger"
 import { readMemorySettings } from "./library-config"
@@ -31,7 +38,7 @@ interface BoardLink {
 /** How long changes are gathered before a keep-updated board is written. */
 const KEEP_UPDATED_DEBOUNCE_MS = 1500
 
-type MemoryLike = Pick<ReturnType<typeof sharedMemory>, "saveBoard" | "readBoard" | "listMemories" | "list">
+type MemoryLike = Pick<ReturnType<typeof sharedMemory>, "saveBoard" | "readBoard" | "listMemories" | "list" | "forget">
 
 /**
  * The task board and Memory (task graph phase 2, PLAN-task-graph.md section 11):
@@ -213,5 +220,42 @@ export class TaskBoardMemory {
 				input.keepUpdated ? ", kept up to date from here" : ""
 			}.`,
 		]
+	}
+
+	/**
+	 * The Board tab's "Save to Memory" for a board with no conversation behind
+	 * it (a draft): its events, saved as a board into the memory this
+	 * workspace stores to. Not tied to any conversation.
+	 */
+	async saveEvents(input: { events: unknown[]; title?: string; memory?: string }): Promise<string[]> {
+		const { enabled, names, preferred } = await this.memories()
+		if (!enabled) return ["Memory is off. Turn it on under Settings → Memory to save the board."]
+		const title = input.title?.trim()
+		const exported = exportTaskEvents(input.events.filter(isTaskEvent), {
+			sessionId: "board-tab",
+			...(title ? { title } : {}),
+		})
+		if (exported.tasks === 0) return ["The board is empty: there is nothing to save."]
+		const memory = input.memory && names.includes(input.memory) ? input.memory : preferred
+		const item = await this.memory.saveBoard({
+			memory,
+			text: exported.text,
+			board: {
+				sessionId: "board-tab",
+				...(title ? { title } : {}),
+				keepUpdated: false,
+				tasks: exported.tasks,
+				open: exported.open,
+				events: exported.events,
+			},
+		})
+		return [
+			`Saved the board as ${item.id} in "${memory}" (${exported.tasks} task${exported.tasks === 1 ? "" : "s"}, ${exported.open} open).`,
+		]
+	}
+
+	/** The Board tab's Delete on a board saved in Memory. */
+	async deleteSaved(id: string, memory: string): Promise<boolean> {
+		return this.memory.forget(id, { memories: [memory] })
 	}
 }

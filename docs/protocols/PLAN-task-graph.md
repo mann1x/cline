@@ -660,6 +660,26 @@ Taken 2026-11-20:
    updated (section 11).
 6. **Phase 0 runs on eleven2go's 3090.**
 
+Taken 2026-11-27 (the Board tab's boards, owner):
+
+7. **The Board tab lists every board**: this conversation's, three drafts
+   (per workspace, kept across reloads; Draft 1 is the old single draft), the
+   workspace's ten newest conversations that have a board (read from their
+   `<id>.tasks.jsonl`), and the boards saved in Memory. Host side:
+   `apps/vscode/src/hosts/vscode/board-viewer/board-slots.ts`, keyed `live`,
+   `draft:N`, `recent:<id>`, `saved:<memory>/<id>`.
+8. **Only this conversation (while its session is live) and the drafts are
+   changed in place.** The others are viewed, copied, saved to Memory, and a
+   saved one deleted. Copying takes the tasks as a fresh plan, as Load does.
+9. **Copy asks Add or Replace** when the target has tasks. **Replace on this
+   conversation waits until its model stops** (refused again at apply time):
+   tasks gone under a working model leave it acting on what is no longer
+   there. Every change to this conversation's board is the person's and the
+   model is told (`TaskGraphTracker.edit`): with its next tool results while
+   it works, at the start of its next run otherwise.
+10. **Three drafts, not one and not open-ended** (owner's pick): Memory keeps
+    named copies, so drafts are working space.
+
 ## Testing: does it get used (section 12)
 
 The harness (automaticum) arms, on the same task set and model:

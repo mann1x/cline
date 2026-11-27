@@ -42,9 +42,9 @@ import {
 } from "./core/storage/state-migrations"
 import { boardChanged, setBoardViewerOpener } from "./core/webview/board-viewer-hooks"
 import { workspaceResolver } from "./core/workspace"
+import { BoardSlots } from "./hosts/vscode/board-viewer/board-slots"
 import { viewerCatalog } from "./hosts/vscode/board-viewer/catalog"
 import { focusForFile } from "./hosts/vscode/board-viewer/collect"
-import { DraftBoard } from "./hosts/vscode/board-viewer/draft"
 import { type BoardViewerDeps, openBoardViewerPanel } from "./hosts/vscode/board-viewer/panel"
 import { findMatchingNotebookCell, getContextForCommand, showWebview } from "./hosts/vscode/commandUtils"
 import { abortCommitGeneration, generateCommitMsg } from "./hosts/vscode/commit-message-generator"
@@ -225,72 +225,60 @@ export async function activate(context: vscode.ExtensionContext) {
 	// in an editor-area panel. From the palette, a pipeline file's title bar
 	// (which hands it the file) and the task panel's "Open board".
 	{
-		// With no conversation open, the Board tab builds a draft board that the
-		// next new conversation starts from (kept per workspace across reloads).
-		const draftBoard = new DraftBoard({
-			get: () => context.workspaceState.get<unknown[]>(DRAFT_BOARD_KEY),
-			set: (events) => void context.workspaceState.update(DRAFT_BOARD_KEY, events),
-		})
-		const conversationOpen = () => !!webview.controller.task
-		const boardViewerDeps: BoardViewerDeps = {
-			extensionUri: context.extensionUri,
+		// Every board the Board tab lists: this conversation's, three drafts
+		// (kept per workspace across reloads; Draft 1 is the draft board from
+		// before there were three), the recent conversations' and the boards
+		// saved in Memory.
+		const boards = new BoardSlots({
 			workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-			boardText: () => {
-				if (!conversationOpen()) return draftBoard.text()
+			conversation: () => {
+				const task = webview.controller.task
+				return task ? { id: task.taskId, live: webview.controller.taskBoardIsLive() } : undefined
+			},
+			liveText: () => {
 				const messages = webview.controller.task?.messageStateHandler.getClineMessages() ?? []
 				for (let i = messages.length - 1; i >= 0; i--) {
 					if (messages[i].say === "task_graph" && messages[i].text) return messages[i].text
 				}
 				return undefined
 			},
-			boardIsDraft: () => !conversationOpen(),
-			boardEdit: (action) =>
-				conversationOpen()
-					? webview.controller.taskGraphAction(action as Parameters<typeof webview.controller.taskGraphAction>[0])
-					: draftBoard.edit(action),
-			draftStart: () => {
-				if (conversationOpen()) {
-					return {
-						ok: false,
-						lines: ["A conversation is open. Start a new one (the + button) to hand it this board."],
-					}
+			liveEvents: () => webview.controller.exportTaskBoardEvents(),
+			liveEdit: (action) =>
+				webview.controller.taskGraphAction(action as Parameters<typeof webview.controller.taskGraphAction>[0]),
+			turnRunning: () => webview.controller.isTurnRunning(),
+			draftStorage: (slot) => {
+				const key = slot === 1 ? DRAFT_BOARD_KEY : `${DRAFT_BOARD_KEY}.${slot}`
+				return {
+					get: () => context.workspaceState.get<unknown[]>(key),
+					set: (events) => void context.workspaceState.update(key, events),
 				}
-				if (draftBoard.isEmpty()) return { ok: false, lines: ["The draft board has no tasks yet."] }
+			},
+			recent: (root, limit, exclude) => webview.controller.recentTaskBoards(root, limit, exclude),
+			saved: () => webview.controller.savedTaskBoards(),
+			savedEvents: (id, memory) => webview.controller.savedTaskBoardEvents(id, memory),
+			saveConversation: (id, title) => webview.controller.saveTaskBoardOf(id, title),
+			saveEvents: (events, title) => webview.controller.saveTaskBoardEvents(events, title),
+			deleteSaved: (id, memory) => webview.controller.deleteSavedTaskBoard(id, memory),
+			startConversation: (events, onTaken) => {
 				webview.controller.useTaskBoard({
-					events: draftBoard.events(),
+					events,
 					by: "person",
 					keepUpdated: false,
 					about: "the person made it in the Board tab for this conversation",
 					onTaken: () => {
-						draftBoard.clear()
+						onTaken()
 						boardChanged()
 					},
 				})
 				void vscode.commands.executeCommand("cerebriline.SidebarProvider.focus")
-				return {
-					ok: true,
-					lines: ["Send your first message in the chat: the new conversation starts from this board."],
-				}
 			},
-			draftDiscard: () => {
-				draftBoard.clear()
-				return { ok: true, lines: ["The draft board is discarded."] }
-			},
+		})
+		const boardViewerDeps: BoardViewerDeps = {
+			extensionUri: context.extensionUri,
+			workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+			boards,
 			runAction: (action) => webview.controller.pipelineRunAction(action),
 			catalog: () => viewerCatalog(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath),
-			boardIo: {
-				workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-				isDraft: () => !conversationOpen(),
-				events: () => (conversationOpen() ? webview.controller.exportTaskBoardEvents() : draftBoard.events()),
-				hasTasks: () => !draftBoard.isEmpty(),
-				plan: (tasks) =>
-					conversationOpen()
-						? webview.controller.taskGraphAction({ op: "plan", tasks })
-						: draftBoard.edit({ op: "plan", tasks }),
-				clearDraft: () => draftBoard.clear(),
-				savedBoards: () => webview.controller.savedTaskBoards(),
-				savedBoardEvents: (id, memory) => webview.controller.savedTaskBoardEvents(id, memory),
-			},
 		}
 		setBoardViewerOpener((focus) => openBoardViewerPanel(boardViewerDeps, focus))
 		context.subscriptions.push(
