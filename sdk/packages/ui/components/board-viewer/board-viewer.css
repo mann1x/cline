@@ -1,35 +1,62 @@
 /*
- * The board viewer. Everything is drawn from the VS Code theme's own
- * variables, so the panel follows light, dark and high-contrast themes the
- * way the editor does; the fallbacks are only for a host that sets none.
- * Unlayered on purpose: the chat's Tailwind base rules sit in a layer, and
- * these must win over them inside the panel.
+ * The board viewer. Inside VS Code everything is drawn from the editor
+ * theme's own variables, so the panel follows light, dark and high-contrast
+ * themes the way the editor does. In another application, where no
+ * `--vscode-*` variable is set, it falls back to the `@cline/ui` theme
+ * tokens (`@cline/ui/theme/index.css`), and to fixed colours when neither is
+ * there. A host restyles it by setting the `--bv-*` variables on `.bv`, and
+ * sizes it with `--bv-height` (the viewport's height by default).
+ * Unlayered on purpose: Tailwind's base rules sit in a layer, and these must
+ * win over them inside the panel.
  */
 
-.bv {
-	--bv-bg: var(--vscode-editor-background, #1e1e1e);
-	--bv-fg: var(--vscode-editor-foreground, #d4d4d4);
-	--bv-muted: var(--vscode-descriptionForeground, #9d9d9d);
-	--bv-rail: var(--vscode-sideBar-background, var(--vscode-editor-background, #181818));
-	--bv-surface: var(--vscode-editorWidget-background, #252526);
-	--bv-border: var(--vscode-panel-border, var(--vscode-widget-border, #3c3c3c));
-	--bv-accent: var(--vscode-focusBorder, #0078d4);
-	--bv-hover: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
-	--bv-selected: var(--vscode-list-activeSelectionBackground, rgba(0, 120, 212, 0.3));
-	--bv-selected-fg: var(--vscode-list-activeSelectionForeground, inherit);
-	--bv-link: var(--vscode-textLink-foreground, #3794ff);
-	--bv-mono: var(--vscode-editor-font-family, "Geist Mono Variable", ui-monospace, monospace);
-	--bv-sans: var(--vscode-font-family, system-ui, sans-serif);
+@import "@xyflow/react/dist/style.css";
 
-	--bv-done: var(--vscode-testing-iconPassed, #73c991);
-	--bv-failed: var(--vscode-testing-iconFailed, #f14c4c);
-	--bv-running: var(--vscode-progressBar-background, #0e70c0);
-	--bv-waiting: var(--vscode-editorWarning-foreground, #cca700);
-	--bv-idle: var(--vscode-descriptionForeground, #9d9d9d);
+.bv {
+	--bv-bg: var(--vscode-editor-background, var(--background, #1e1e1e));
+	--bv-fg: var(--vscode-editor-foreground, var(--foreground, #d4d4d4));
+	--bv-muted: var(
+		--vscode-descriptionForeground,
+		var(--muted-foreground, #9d9d9d)
+	);
+	--bv-rail: var(--vscode-sideBar-background, var(--sidebar, var(--bv-bg)));
+	--bv-surface: var(--vscode-editorWidget-background, var(--card, #252526));
+	--bv-border: var(
+		--vscode-panel-border,
+		var(--vscode-widget-border, var(--border, #3c3c3c))
+	);
+	--bv-accent: var(--vscode-focusBorder, var(--ring, #0078d4));
+	--bv-hover: var(
+		--vscode-list-hoverBackground,
+		var(--surface-hover, rgba(128, 128, 128, 0.12))
+	);
+	--bv-selected: var(
+		--vscode-list-activeSelectionBackground,
+		var(--selection-background, rgba(0, 120, 212, 0.3))
+	);
+	--bv-selected-fg: var(--vscode-list-activeSelectionForeground, inherit);
+	--bv-link: var(--vscode-textLink-foreground, var(--info-text, #3794ff));
+	--bv-mono: var(
+		--vscode-editor-font-family,
+		var(--font-mono, "Geist Mono Variable", ui-monospace, monospace)
+	);
+	--bv-sans: var(--vscode-font-family, var(--font-sans, system-ui, sans-serif));
+
+	--bv-done: var(--vscode-testing-iconPassed, var(--success-solid, #73c991));
+	--bv-failed: var(--vscode-testing-iconFailed, var(--error-solid, #f14c4c));
+	--bv-running: var(
+		--vscode-progressBar-background,
+		var(--info-solid, #0e70c0)
+	);
+	--bv-waiting: var(
+		--vscode-editorWarning-foreground,
+		var(--warning-solid, #cca700)
+	);
+	--bv-idle: var(--bv-muted);
 
 	display: flex;
 	flex-direction: column;
-	height: 100vh;
+	height: var(--bv-height, 100vh);
 	background: var(--bv-bg);
 	color: var(--bv-fg);
 	font-family: var(--bv-sans);
@@ -375,10 +402,18 @@
 }
 .bv-canvas .react-flow {
 	--xy-background-color: var(--bv-bg);
-	--xy-background-pattern-color: color-mix(in srgb, var(--bv-muted) 30%, transparent);
+	--xy-background-pattern-color: color-mix(
+		in srgb,
+		var(--bv-muted) 30%,
+		transparent
+	);
 	--xy-edge-stroke: var(--bv-idle);
 	--xy-minimap-background-color: var(--bv-surface);
-	--xy-minimap-mask-background-color: color-mix(in srgb, var(--bv-bg) 60%, transparent);
+	--xy-minimap-mask-background-color: color-mix(
+		in srgb,
+		var(--bv-bg) 60%,
+		transparent
+	);
 	--xy-controls-button-background-color: var(--bv-surface);
 	--xy-controls-button-background-color-hover: var(--bv-hover);
 	--xy-controls-button-color: var(--bv-fg);
@@ -746,7 +781,7 @@
 	border: none;
 	border-radius: 3px;
 	background: transparent;
-	color: var(--vscode-foreground);
+	color: var(--vscode-foreground, var(--bv-fg));
 	font-size: 16px;
 	line-height: 22px;
 	cursor: pointer;
@@ -757,7 +792,7 @@
 	background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
 }
 .bv-reply-close:focus-visible {
-	outline: 1px solid var(--vscode-focusBorder);
+	outline: 1px solid var(--bv-accent);
 	opacity: 1;
 }
 .bv-reply[data-ok="false"] {
@@ -815,16 +850,19 @@
 	min-width: 0;
 	padding: 3px 6px;
 }
-.bv-check {
+.bv-check,
+.bv-check-mark {
 	appearance: none;
 	background: none;
 	border: 0;
 	color: inherit;
-	cursor: pointer;
-	font-size: 12px;
+	display: inline-flex;
 	margin-right: 6px;
 	padding: 0;
 	vertical-align: -2px;
+}
+.bv-check {
+	cursor: pointer;
 }
 
 /* Diff of a proposal against the approved version */
@@ -1036,8 +1074,14 @@
 	white-space: nowrap;
 }
 .bv-complete-list li[aria-selected="true"] {
-	background: var(--vscode-editorSuggestWidget-selectedBackground, var(--bv-selected));
-	color: var(--vscode-editorSuggestWidget-selectedForeground, var(--bv-selected-fg));
+	background: var(
+		--vscode-editorSuggestWidget-selectedBackground,
+		var(--bv-selected)
+	);
+	color: var(
+		--vscode-editorSuggestWidget-selectedForeground,
+		var(--bv-selected-fg)
+	);
 }
 .bv-segmented {
 	display: inline-flex;

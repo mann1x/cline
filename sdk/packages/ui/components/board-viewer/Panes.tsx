@@ -1,40 +1,60 @@
-import { useMemo, useState } from "react"
-import type { TaskGraphPanelSnapshot, TaskGraphPanelTask } from "@/components/chat/task-header/TaskGraphPanel"
-import { lineDiff } from "./edit"
-import { taskStatus } from "./graph"
-import { shortJson } from "./Inspector"
-import { formatDuration, type ViewerPipeline, type ViewerPipelineDefinition, type ViewerRun } from "./model"
-import { eventSummary, runNodeOrder, runReport } from "./report"
+import type {
+	ViewerSnapshot,
+	ViewerSnapshotTask,
+} from "@cline/taskboard/protocol";
+import { useMemo, useState } from "react";
+import { lineDiff } from "./edit.js";
+import { taskStatus } from "./graph.js";
+import { shortJson } from "./Inspector.js";
+import {
+	formatDuration,
+	type ViewerPipeline,
+	type ViewerPipelineDefinition,
+	type ViewerRun,
+} from "./model.js";
+import { eventSummary, runNodeOrder, runReport } from "./report.js";
 
 const clock = (ts: number | undefined) => {
-	if (ts === undefined) return ""
-	const date = new Date(ts)
-	const pad = (n: number) => String(n).padStart(2, "0")
-	const today = new Date()
-	const time = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+	if (ts === undefined) return "";
+	const date = new Date(ts);
+	const pad = (n: number) => String(n).padStart(2, "0");
+	const today = new Date();
+	const time = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 	return date.toDateString() === today.toDateString()
 		? time
-		: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`
-}
+		: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`;
+};
 
 const Chip = ({ status }: { status: string }) => (
 	<span className="bv-chip" data-status={status}>
 		{status}
 	</span>
-)
+);
 
 /** Plan: the board as a list, one column of the canvas per step. */
-export function PlanPane({ board, onSelect }: { board: TaskGraphPanelSnapshot; onSelect: (task: string) => void }) {
-	const byId = new Map(board.tasks.map((task) => [task.id, task]))
-	const placed = new Set(board.layers.flat())
+export function PlanPane({
+	board,
+	onSelect,
+}: {
+	board: ViewerSnapshot;
+	onSelect: (task: string) => void;
+}) {
+	const byId = new Map(board.tasks.map((task) => [task.id, task]));
+	const placed = new Set(board.layers.flat());
 	const steps = board.layers
-		.map((layer) => layer.map((id) => byId.get(id)).filter((task): task is TaskGraphPanelTask => !!task))
-		.filter((layer) => layer.length > 0)
-	const rest = board.tasks.filter((task) => !placed.has(task.id))
+		.map((layer) =>
+			layer
+				.map((id) => byId.get(id))
+				.filter((task): task is ViewerSnapshotTask => !!task),
+		)
+		.filter((layer) => layer.length > 0);
+	const rest = board.tasks.filter((task) => !placed.has(task.id));
 	const groups = [
 		...steps.map((tasks, index) => ({ title: `Step ${index + 1}`, tasks })),
-		...(rest.length > 0 ? [{ title: steps.length > 0 ? "Not placed" : "Tasks", tasks: rest }] : []),
-	]
+		...(rest.length > 0
+			? [{ title: steps.length > 0 ? "Not placed" : "Tasks", tasks: rest }]
+			: []),
+	];
 	return (
 		<div className="bv-pane">
 			{groups.map((group) => (
@@ -52,11 +72,18 @@ export function PlanPane({ board, onSelect }: { board: TaskGraphPanelSnapshot; o
 											<Chip status={taskStatus(task)} />
 										</td>
 										<td>
-											<button className="bv-row-button" onClick={() => onSelect(task.id)} type="button">
+											<button
+												className="bv-row-button"
+												onClick={() => onSelect(task.id)}
+												type="button"
+											>
 												{task.title}
 											</button>
 										</td>
-										<td className="bv-mono" style={{ color: "var(--bv-muted)" }}>
+										<td
+											className="bv-mono"
+											style={{ color: "var(--bv-muted)" }}
+										>
 											{(task.waitsOn ?? task.openDepends).join(", ")}
 										</td>
 									</tr>
@@ -67,21 +94,21 @@ export function PlanPane({ board, onSelect }: { board: TaskGraphPanelSnapshot; o
 				</section>
 			))}
 		</div>
-	)
+	);
 }
 
 /** Definition: the file as it is, with its validation and approval. */
 /** The whole definition as JSON, applied to the draft (phase 4). */
 export interface DefinitionEdit {
 	/** The definition shown: the draft's, or the file's. */
-	definition: ViewerPipelineDefinition
-	onApply: (json: string) => string | undefined
+	definition: ViewerPipelineDefinition;
+	onApply: (json: string) => string | undefined;
 }
 
 function DefinitionEditor({ edit }: { edit: DefinitionEdit }) {
-	const shown = JSON.stringify(edit.definition, null, "\t")
-	const [text, setText] = useState(shown)
-	const [error, setError] = useState<string>()
+	const shown = JSON.stringify(edit.definition, null, "\t");
+	const [text, setText] = useState(shown);
+	const [error, setError] = useState<string>();
 	return (
 		<section className="bv-section">
 			<h3 className="bv-h">Edit as JSON</h3>
@@ -89,8 +116,8 @@ function DefinitionEditor({ edit }: { edit: DefinitionEdit }) {
 				aria-label="The pipeline as JSON"
 				className="bv-editor bv-tall"
 				onChange={(event) => {
-					setText(event.target.value)
-					setError(undefined)
+					setText(event.target.value);
+					setError(undefined);
 				}}
 				spellCheck={false}
 				value={text}
@@ -101,15 +128,21 @@ function DefinitionEditor({ edit }: { edit: DefinitionEdit }) {
 					className="bv-button bv-primary"
 					disabled={text === shown}
 					onClick={() => setError(edit.onApply(text))}
-					type="button">
+					type="button"
+				>
 					Apply to the draft
 				</button>
-				<button className="bv-button" disabled={text === shown} onClick={() => setText(shown)} type="button">
+				<button
+					className="bv-button"
+					disabled={text === shown}
+					onClick={() => setText(shown)}
+					type="button"
+				>
 					Undo
 				</button>
 			</div>
 		</section>
-	)
+	);
 }
 
 export function DefinitionPane({
@@ -118,18 +151,22 @@ export function DefinitionPane({
 	onOpenFile,
 	edit,
 }: {
-	pipeline?: ViewerPipeline
-	run?: ViewerRun
-	onOpenFile: (path: string) => void
-	edit?: DefinitionEdit
+	pipeline?: ViewerPipeline;
+	run?: ViewerRun;
+	onOpenFile: (path: string) => void;
+	edit?: DefinitionEdit;
 }) {
 	if (run) {
-		const changed = pipeline && run.hash && pipeline.hash !== run.hash
+		const changed = pipeline && run.hash && pipeline.hash !== run.hash;
 		return (
 			<div className="bv-pane">
 				<div className="bv-actions">
 					{pipeline && (
-						<button className="bv-button" onClick={() => onOpenFile(pipeline.path)} type="button">
+						<button
+							className="bv-button"
+							onClick={() => onOpenFile(pipeline.path)}
+							type="button"
+						>
 							Open {pipeline.name}'s file
 						</button>
 					)}
@@ -137,24 +174,34 @@ export function DefinitionPane({
 				{run.definition ? (
 					<>
 						<div className="bv-note">
-							The definition this run used{run.hash ? ` (version ${run.hash})` : ""}
-							{changed ? `. The file has changed since: it is now version ${pipeline.hash}.` : "."}
+							The definition this run used
+							{run.hash ? ` (version ${run.hash})` : ""}
+							{changed
+								? `. The file has changed since: it is now version ${pipeline.hash}.`
+								: "."}
 						</div>
-						<pre className="bv-pre bv-tall">{shortJson(run.definition, 200_000)}</pre>
+						<pre className="bv-pre bv-tall">
+							{shortJson(run.definition, 200_000)}
+						</pre>
 					</>
 				) : (
 					<div className="bv-note">
-						This run's journal did not record its definition (runs before 4.100.302 did not).
+						This run's journal did not record its definition (runs before
+						4.100.302 did not).
 					</div>
 				)}
 			</div>
-		)
+		);
 	}
-	if (!pipeline) return null
+	if (!pipeline) return null;
 	return (
 		<div className="bv-pane">
 			<div className="bv-actions">
-				<button className="bv-button" onClick={() => onOpenFile(pipeline.path)} type="button">
+				<button
+					className="bv-button"
+					onClick={() => onOpenFile(pipeline.path)}
+					type="button"
+				>
 					Open file
 				</button>
 			</div>
@@ -190,14 +237,14 @@ export function DefinitionPane({
 				<pre className="bv-pre bv-tall">{pipeline.text}</pre>
 			)}
 		</div>
-	)
+	);
 }
 
 const when = (iso: string | undefined) => {
-	if (!iso) return ""
-	const ts = Date.parse(iso)
-	return Number.isFinite(ts) ? clock(ts) : iso
-}
+	if (!iso) return "";
+	const ts = Date.parse(iso);
+	return Number.isFinite(ts) ? clock(ts) : iso;
+};
 
 /** Versions: the proposal against the approved version, and the versions kept. */
 export function VersionsPane({ pipeline }: { pipeline: ViewerPipeline }) {
@@ -207,16 +254,19 @@ export function VersionsPane({ pipeline }: { pipeline: ViewerPipeline }) {
 				? lineDiff(pipeline.approvedText, pipeline.text)
 				: undefined,
 		[pipeline.approvedText, pipeline.text, pipeline.isApproved],
-	)
-	const versions = pipeline.versions ?? []
+	);
+	const versions = pipeline.versions ?? [];
 	return (
 		<div className="bv-pane">
 			{pipeline.isApproved ? (
-				<div className="bv-note">The file is the approved version {pipeline.hash}.</div>
+				<div className="bv-note">
+					The file is the approved version {pipeline.hash}.
+				</div>
 			) : diff ? (
 				<section className="bv-section">
 					<h3 className="bv-h">
-						Version {pipeline.hash} against the approved {pipeline.approved?.hash}
+						Version {pipeline.hash} against the approved{" "}
+						{pipeline.approved?.hash}
 					</h3>
 					<pre className="bv-pre bv-diff bv-tall">
 						{diff.map((line, index) => (
@@ -230,8 +280,9 @@ export function VersionsPane({ pipeline }: { pipeline: ViewerPipeline }) {
 				</section>
 			) : pipeline.approved ? (
 				<div className="bv-note">
-					The approved version {pipeline.approved.hash} was not kept here (it was approved before versions were kept),
-					so there is nothing to compare against: Git has it.
+					The approved version {pipeline.approved.hash} was not kept here (it
+					was approved before versions were kept), so there is nothing to
+					compare against: Git has it.
 				</div>
 			) : (
 				<div className="bv-note">Never approved: the whole file is new.</div>
@@ -239,7 +290,9 @@ export function VersionsPane({ pipeline }: { pipeline: ViewerPipeline }) {
 			<section className="bv-section">
 				<h3 className="bv-h">Kept versions</h3>
 				{versions.length === 0 ? (
-					<div className="bv-note">None kept yet: a version is kept when it is saved or approved.</div>
+					<div className="bv-note">
+						None kept yet: a version is kept when it is saved or approved.
+					</div>
 				) : (
 					<table className="bv-table">
 						<thead>
@@ -257,8 +310,12 @@ export function VersionsPane({ pipeline }: { pipeline: ViewerPipeline }) {
 									<td>{version.by === "model" ? "the model" : "you"}</td>
 									<td>{when(version.at)}</td>
 									<td>
-										{version.hash === pipeline.approved?.hash && <Chip status="approved" />}
-										{version.hash === pipeline.hash && <Chip status="current" />}
+										{version.hash === pipeline.approved?.hash && (
+											<Chip status="approved" />
+										)}
+										{version.hash === pipeline.hash && (
+											<Chip status="current" />
+										)}
 										{version.rejected && <Chip status="rejected" />}
 									</td>
 								</tr>
@@ -268,17 +325,23 @@ export function VersionsPane({ pipeline }: { pipeline: ViewerPipeline }) {
 				)}
 			</section>
 		</div>
-	)
+	);
 }
 
 /** A pipeline's runs. */
-export function RunsPane({ runs, onOpenRun }: { runs: ViewerRun[]; onOpenRun: (run: string) => void }) {
+export function RunsPane({
+	runs,
+	onOpenRun,
+}: {
+	runs: ViewerRun[];
+	onOpenRun: (run: string) => void;
+}) {
 	if (runs.length === 0) {
 		return (
 			<div className="bv-pane">
 				<div className="bv-note">No runs of this pipeline yet.</div>
 			</div>
-		)
+		);
 	}
 	return (
 		<div className="bv-pane">
@@ -298,7 +361,11 @@ export function RunsPane({ runs, onOpenRun }: { runs: ViewerRun[]; onOpenRun: (r
 						{runs.map((run) => (
 							<tr key={run.id}>
 								<td>
-									<button className="bv-row-button bv-mono" onClick={() => onOpenRun(run.id)} type="button">
+									<button
+										className="bv-row-button bv-mono"
+										onClick={() => onOpenRun(run.id)}
+										type="button"
+									>
 										{run.id}
 									</button>
 								</td>
@@ -319,7 +386,7 @@ export function RunsPane({ runs, onOpenRun }: { runs: ViewerRun[]; onOpenRun: (r
 				</table>
 			</div>
 		</div>
-	)
+	);
 }
 
 /** Run monitor: one row per node, a bar over the run's span for each. */
@@ -328,23 +395,33 @@ export function RunMonitorPane({
 	definition,
 	onSelect,
 }: {
-	run: ViewerRun
-	definition?: ViewerPipelineDefinition
-	onSelect: (node: string) => void
+	run: ViewerRun;
+	definition?: ViewerPipelineDefinition;
+	onSelect: (node: string) => void;
 }) {
-	const order = runNodeOrder(run, definition)
-	const types = new Map((definition?.nodes ?? []).map((node) => [node.id, node.type]))
-	const lastTs = run.events.at(-1)?.ts
-	const start = run.startedAt ?? Math.min(...order.map((id) => run.nodes[id]?.startedAt ?? Number.POSITIVE_INFINITY))
-	const end = run.endedAt ?? lastTs ?? start
-	const span = Math.max(end - start, 1)
-	const pct = (ts: number) => `${Math.min(100, Math.max(0, ((ts - start) / span) * 100))}%`
+	const order = runNodeOrder(run, definition);
+	const types = new Map(
+		(definition?.nodes ?? []).map((node) => [node.id, node.type]),
+	);
+	const lastTs = run.events.at(-1)?.ts;
+	const start =
+		run.startedAt ??
+		Math.min(
+			...order.map(
+				(id) => run.nodes[id]?.startedAt ?? Number.POSITIVE_INFINITY,
+			),
+		);
+	const end = run.endedAt ?? lastTs ?? start;
+	const span = Math.max(end - start, 1);
+	const pct = (ts: number) =>
+		`${Math.min(100, Math.max(0, ((ts - start) / span) * 100))}%`;
 	return (
 		<div className="bv-pane">
 			<dl className="bv-kv" style={{ marginBottom: 14 }}>
 				<dt>Status</dt>
 				<dd>
-					<Chip status={run.status} /> {run.error && <span className="bv-error">{run.error}</span>}
+					<Chip status={run.status} />{" "}
+					{run.error && <span className="bv-error">{run.error}</span>}
 				</dd>
 				<dt>Pipeline</dt>
 				<dd>
@@ -356,7 +433,8 @@ export function RunMonitorPane({
 						<dt>Started</dt>
 						<dd>
 							{clock(run.startedAt)}
-							{run.endedAt !== undefined && `, took ${formatDuration(run.endedAt - run.startedAt)}`}
+							{run.endedAt !== undefined &&
+								`, took ${formatDuration(run.endedAt - run.startedAt)}`}
 						</dd>
 					</>
 				)}
@@ -398,26 +476,44 @@ export function RunMonitorPane({
 					<div className="bv-timeline-head" role="columnheader">
 						{clock(start)} → {formatDuration(span)}
 					</div>
-					<div className="bv-timeline-head" role="columnheader" style={{ textAlign: "right" }}>
+					<div
+						className="bv-timeline-head"
+						role="columnheader"
+						style={{ textAlign: "right" }}
+					>
 						Took
 					</div>
 					{order.map((id) => {
-						const state = run.nodes[id]
-						const status = state ? (state.waitingOn ? "waiting" : state.status) : "pending"
-						const from = state?.startedAt
-						const to = state?.endedAt ?? (status === "running" || status === "waiting" ? end : undefined)
+						const state = run.nodes[id];
+						const status = state
+							? state.waitingOn
+								? "waiting"
+								: state.status
+							: "pending";
+						const from = state?.startedAt;
+						const to =
+							state?.endedAt ??
+							(status === "running" || status === "waiting" ? end : undefined);
 						return (
 							<div key={id} role="row" style={{ display: "contents" }}>
 								<div className="bv-timeline-name" role="cell">
-									<button className="bv-row-button bv-mono" onClick={() => onSelect(id)} type="button">
+									<button
+										className="bv-row-button bv-mono"
+										onClick={() => onSelect(id)}
+										type="button"
+									>
 										{id}
 									</button>{" "}
-									<span style={{ color: "var(--bv-muted)" }}>{types.get(id) ?? ""}</span>
+									<span style={{ color: "var(--bv-muted)" }}>
+										{types.get(id) ?? ""}
+									</span>
 								</div>
 								<div role="cell">
 									<Chip status={status} />
 									{state && state.attempts > 1 && (
-										<span style={{ color: "var(--bv-muted)", marginLeft: 4 }}>×{state.attempts}</span>
+										<span style={{ color: "var(--bv-muted)", marginLeft: 4 }}>
+											×{state.attempts}
+										</span>
 									)}
 								</div>
 								<div className="bv-track" role="cell">
@@ -439,30 +535,42 @@ export function RunMonitorPane({
 										: ""}
 								</div>
 							</div>
-						)
+						);
 					})}
 				</div>
 			)}
 		</div>
-	)
+	);
 }
 
 /** Activity: the journal, oldest first, with each event's time into the run. */
 export function ActivityPane({ run }: { run: ViewerRun }) {
-	const [node, setNode] = useState("")
-	const start = run.startedAt ?? run.events[0]?.ts ?? 0
+	const [node, setNode] = useState("");
+	const start = run.startedAt ?? run.events[0]?.ts ?? 0;
 	const nodes = useMemo(
-		() => [...new Set(run.events.map((event) => event.node).filter((id): id is string => typeof id === "string"))],
+		() => [
+			...new Set(
+				run.events
+					.map((event) => event.node)
+					.filter((id): id is string => typeof id === "string"),
+			),
+		],
 		[run.events],
-	)
-	const events = node ? run.events.filter((event) => event.node === node) : run.events
+	);
+	const events = node
+		? run.events.filter((event) => event.node === node)
+		: run.events;
 	return (
 		<div className="bv-pane">
 			<div className="bv-actions" style={{ alignItems: "center" }}>
 				<label htmlFor="bv-activity-node" style={{ color: "var(--bv-muted)" }}>
 					Node
 				</label>
-				<select id="bv-activity-node" onChange={(event) => setNode(event.target.value)} value={node}>
+				<select
+					id="bv-activity-node"
+					onChange={(event) => setNode(event.target.value)}
+					value={node}
+				>
 					<option value="">All</option>
 					{nodes.map((id) => (
 						<option key={id} value={id}>
@@ -489,19 +597,23 @@ export function ActivityPane({ run }: { run: ViewerRun }) {
 					<tbody>
 						{events.map((event, index) => (
 							<tr key={`${event.ts}-${index}`}>
-								<td className="bv-event-time">+{formatDuration(event.ts - start) || "0 ms"}</td>
+								<td className="bv-event-time">
+									+{formatDuration(event.ts - start) || "0 ms"}
+								</td>
 								<td className="bv-event-kind" data-kind={event.t}>
 									{event.t}
 								</td>
 								<td className="bv-mono">{event.node ?? ""}</td>
-								<td style={{ overflowWrap: "anywhere" }}>{eventSummary(event)}</td>
+								<td style={{ overflowWrap: "anywhere" }}>
+									{eventSummary(event)}
+								</td>
 							</tr>
 						))}
 					</tbody>
 				</table>
 			</div>
 		</div>
-	)
+	);
 }
 
 /** Report: the run's summary as Markdown, to copy or save. */
@@ -510,12 +622,12 @@ export function ReportPane({
 	definition,
 	onSave,
 }: {
-	run: ViewerRun
-	definition?: ViewerPipelineDefinition
-	onSave: (name: string, text: string) => void
+	run: ViewerRun;
+	definition?: ViewerPipelineDefinition;
+	onSave: (name: string, text: string) => void;
 }) {
-	const text = useMemo(() => runReport(run, definition), [run, definition])
-	const [copied, setCopied] = useState(false)
+	const text = useMemo(() => runReport(run, definition), [run, definition]);
+	const [copied, setCopied] = useState(false);
 	return (
 		<div className="bv-pane">
 			<div className="bv-actions" style={{ alignItems: "center" }}>
@@ -523,14 +635,19 @@ export function ReportPane({
 					className="bv-button"
 					onClick={() => {
 						void navigator.clipboard?.writeText(text).then(() => {
-							setCopied(true)
-							setTimeout(() => setCopied(false), 1500)
-						})
+							setCopied(true);
+							setTimeout(() => setCopied(false), 1500);
+						});
 					}}
-					type="button">
+					type="button"
+				>
 					Copy
 				</button>
-				<button className="bv-button" onClick={() => onSave(run.id, text)} type="button">
+				<button
+					className="bv-button"
+					onClick={() => onSave(run.id, text)}
+					type="button"
+				>
 					Save…
 				</button>
 				{copied && (
@@ -541,5 +658,5 @@ export function ReportPane({
 			</div>
 			<pre className="bv-pre bv-wrap bv-tall">{text}</pre>
 		</div>
-	)
+	);
 }

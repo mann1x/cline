@@ -451,7 +451,19 @@ node sdk/scripts/smoke-cerebriline-ui.mjs --dir <that dir> --work <dir on a real
 dependency (consumers apply `patches/@shadcn%2Freact@0.3.1.patch`, as upstream
 documents), and its relative imports need `.js` extensions or Node consumers
 fail to load it, which the UI smoke catches (`tool-summary/agents` did, before
-the first publish). Its README and ADOPTION guide are upstream's, renamed.
+the first publish). Its README and ADOPTION guide are upstream's, renamed, with
+a section on the fork's Board tab added.
+
+`ui` also carries the Board tab (`@cline/ui/components/board-viewer` and its
+`board-viewer.css`), moved out of the webview: it depends on `taskboard` (for
+`@cline/taskboard/protocol`) and has `@xyflow/react` and `@dagrejs/dagre` as
+optional peers. The webview renders it from `ui`'s `dist`, so **run
+`bun run build` in `sdk/packages/ui` (or `build:sdk`) before building the
+webview** after changing it. The UI smoke takes `shared` and `taskboard` from
+the release's tarballs through the consumers' `overrides`: the renamed `ui`
+asks for them at the release's exact version, which is not on npm while the
+smoke runs, and bun does not match a registry range against a tarball given
+beside it. A third consumer installs the Board tab with its peers and loads it.
 
 `cerebriline-sdk-publish.yml` runs those on every `v*` tag and then publishes
 in dependency order, `ui` last. **No npm token is stored**: the job uses npm's trusted

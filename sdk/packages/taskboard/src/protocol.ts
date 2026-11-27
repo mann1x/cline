@@ -288,3 +288,68 @@ export type ViewerRequest =
 			run: string;
 			node?: string;
 	  };
+
+/**
+ * A task as a board's text carries it: the task graph's `TaskSnapshot` as a
+ * client reads it. Restated, and read defensively, for the same reason as the
+ * rest of this file: a saved board outlives the version that wrote it.
+ */
+export interface ViewerSnapshotTask {
+	id: string;
+	title: string;
+	description?: string;
+	status: "pending" | "active" | "waiting" | "done" | "cancelled";
+	priority: "H" | "M" | "L";
+	parent?: string;
+	depends: string[];
+	openDepends: string[];
+	acceptance: { text: string; done: boolean }[];
+	later: boolean;
+	claimedBy?: string;
+	files: string[];
+	/** What it waits on besides other tasks. Absent on older boards. */
+	gates?: { spec: string; open: boolean; failed?: string }[];
+	/** Typed links and attachments. Absent on older boards. */
+	links?: { type: string; target: string }[];
+	/** Open dependencies, then closed gates. Absent on older boards. */
+	waitsOn?: string[];
+	/** The tool call that created it. */
+	createdCall?: string;
+	notes: string[];
+	outcome?: string;
+	ready: boolean;
+	blocked: boolean;
+}
+
+/** A whole board: its tasks, and the dependency layers they fall into. */
+export interface ViewerSnapshot {
+	tasks: ViewerSnapshotTask[];
+	layers: string[][];
+}
+
+/**
+ * A board from its text (`ViewerData.boardText`, a board entry's `text`, or a
+ * conversation's `task_graph` row), or undefined when it is not one. Tasks
+ * without an id, title or status are dropped.
+ */
+export function readBoardSnapshot(
+	text: string | undefined,
+): ViewerSnapshot | undefined {
+	if (!text) return undefined;
+	let parsed: Partial<ViewerSnapshot>;
+	try {
+		parsed = JSON.parse(text) as Partial<ViewerSnapshot>;
+	} catch {
+		return undefined;
+	}
+	if (!parsed || !Array.isArray(parsed.tasks)) return undefined;
+	return {
+		tasks: parsed.tasks.filter(
+			(task): task is ViewerSnapshotTask =>
+				typeof task?.id === "string" &&
+				typeof task?.title === "string" &&
+				typeof task?.status === "string",
+		),
+		layers: Array.isArray(parsed.layers) ? parsed.layers : [],
+	};
+}

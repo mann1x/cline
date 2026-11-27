@@ -1,3 +1,4 @@
+import { readBoardSnapshot, type ViewerSnapshot, type ViewerSnapshotTask } from "@shared/board-viewer"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
@@ -14,64 +15,20 @@ import { FileServiceClient, StateServiceClient } from "@/services/grpc-client"
  *
  * Core sends the whole board as a `say: "task_graph"` row after every change,
  * and the newest one wins, as the checklist's does. The shape mirrors core's
- * `TaskGraphSnapshot`; it is restated rather than imported because the
- * webview does not depend on `@cline/core`, and read defensively because a
+ * `TaskGraphSnapshot`, as `@cline/taskboard/protocol` restates it for
+ * clients, and is read with that protocol's defensive parser because a
  * persisted row outlives the version that wrote it.
  */
 
-export interface TaskGraphPanelTask {
-	id: string
-	title: string
-	description?: string
-	status: "pending" | "active" | "waiting" | "done" | "cancelled"
-	priority: "H" | "M" | "L"
-	parent?: string
-	depends: string[]
-	openDepends: string[]
-	acceptance: { text: string; done: boolean }[]
-	later: boolean
-	claimedBy?: string
-	files: string[]
-	/** What it waits on besides other tasks (phase 5). Absent on older rows. */
-	gates?: { spec: string; open: boolean; failed?: string }[]
-	/** Typed links and attachments (phase 5). Absent on older rows. */
-	links?: { type: string; target: string }[]
-	/** Open dependencies, then closed gates. Absent on older rows. */
-	waitsOn?: string[]
-	/** The tool call that created it: its chat row carries the same id. */
-	createdCall?: string
-	notes: string[]
-	outcome?: string
-	ready: boolean
-	blocked: boolean
-}
-
-export interface TaskGraphPanelSnapshot {
-	tasks: TaskGraphPanelTask[]
-	layers: string[][]
-}
+export type TaskGraphPanelTask = ViewerSnapshotTask
+export type TaskGraphPanelSnapshot = ViewerSnapshot
 
 /** The newest board in the transcript, or undefined. */
 export function findLatestTaskGraph(messages: ClineMessage[]): TaskGraphPanelSnapshot | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i]
-		if (message.say !== "task_graph" || !message.text) {
-			continue
-		}
-		try {
-			const parsed = JSON.parse(message.text) as Partial<TaskGraphPanelSnapshot>
-			if (!Array.isArray(parsed.tasks)) {
-				return undefined
-			}
-			return {
-				tasks: parsed.tasks.filter(
-					(task): task is TaskGraphPanelTask =>
-						typeof task?.id === "string" && typeof task?.title === "string" && typeof task?.status === "string",
-				),
-				layers: Array.isArray(parsed.layers) ? parsed.layers : [],
-			}
-		} catch {
-			return undefined
+		if (message.say === "task_graph" && message.text) {
+			return readBoardSnapshot(message.text)
 		}
 	}
 	return undefined

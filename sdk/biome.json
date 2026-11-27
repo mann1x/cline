@@ -71,6 +71,7 @@
 									"!@cline/core/cloud",
 									"!@cline/core/telemetry",
 									"!@cline/core/rpc",
+									"!@cline/taskboard/protocol",
 									"!@cline/shared/browser",
 									"!@cline/shared/node",
 									"!@cline/shared/types",
@@ -126,6 +127,20 @@
 					},
 					"suspicious": {
 						"noDocumentCookie": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": [
+				"packages/ui/components/board-viewer/**",
+				"packages/ui/tests/board-viewer/**"
+			],
+			"linter": {
+				"rules": {
+					"a11y": "info",
+					"suspicious": {
+						"noArrayIndexKey": "info"
 					}
 				}
 			}

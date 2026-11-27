@@ -7,11 +7,13 @@
  * every entry point, resolves the stylesheets, type-checks a consumer and
  * compiles the Tailwind contract. That is the check worth having, so it is run
  * here rather than rewritten: a copy is made with the scope renamed and the
- * `@cerebriline/shared` tarball installed beside the archive (the renamed `ui`
- * asks for it at the release's exact version, which is not on npm yet when
- * this runs). Upstream's file is left as it is, so merges do not touch it.
+ * `@cerebriline/shared` and `@cerebriline/taskboard` taken from the release's
+ * tarballs through the consumers' `overrides` (the renamed `ui` asks for them
+ * at the release's exact version, which is not on npm yet when this runs). Upstream's file is left as it is, so merges do not touch it.
  * Each substitution is counted: if upstream reshapes the script, this stops
- * instead of quietly checking less.
+ * instead of quietly checking less. Upstream's script knows nothing of the
+ * fork's Board tab, so a third consumer installs it with its optional peers
+ * and loads it.
  *
  *   node sdk/scripts/smoke-cerebriline-ui.mjs --dir <tarballs> [--work <dir>]
  *
@@ -21,6 +23,7 @@
 
 import { execFileSync } from "node:child_process";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -57,6 +60,7 @@ const find = (pkg) => {
 };
 const ui = find("ui");
 const shared = find("shared");
+const taskboard = find("taskboard");
 
 const upstreamScript = join(
 	dirname(fileURLToPath(import.meta.url)),
@@ -81,12 +85,25 @@ function replace(pattern, replacement, expected) {
 
 // Every specifier, CSS import and type-check consumer names the package.
 replace("@cline/ui", "@cerebriline/ui", "some");
-// Both consumers (bun add, npm install) take the archive; the renamed ui needs
-// the renamed shared from the same release beside it.
+// The renamed ui asks for the renamed shared and taskboard at the release's
+// exact version, which is not on npm while this runs: each consumer is told to
+// take them from the release's tarballs (npm reads `overrides`, bun both).
+const fromRelease = {
+	"@cerebriline/shared": `file:${shared}`,
+	"@cerebriline/taskboard": `file:${taskboard}`,
+};
+const consumerManifest = (name) =>
+	JSON.stringify({
+		name,
+		private: true,
+		type: "module",
+		overrides: fromRelease,
+		resolutions: fromRelease,
+	});
 replace(
-	"\t\t\tarchive,\n",
-	`\t\t\tarchive,\n\t\t\t${JSON.stringify(shared)},\n`,
-	2,
+	'JSON.stringify({ name: "cline-ui-smoke", private: true, type: "module" }, null, 2)',
+	`JSON.stringify(${consumerManifest("cline-ui-smoke")}, null, 2)`,
+	1,
 );
 // Nothing of upstream's scope may come in with it.
 replace(
@@ -108,4 +125,50 @@ execFileSync("bun", [copy, ui], {
 	// Upstream's script makes its consumers under the temp directory.
 	env: { ...process.env, TMPDIR: work },
 });
+
+// The Board tab: its entry loads in Node beside its optional peers, and both
+// stylesheets (its own, and the xyflow one it imports) resolve.
+const boardConsumer = join(work, "board-consumer");
+mkdirSync(boardConsumer, { recursive: true });
+writeFileSync(
+	join(boardConsumer, "package.json"),
+	`${JSON.stringify(JSON.parse(consumerManifest("board-consumer")), null, "\t")}\n`,
+);
+execFileSync(
+	"npm",
+	[
+		"install",
+		"--no-audit",
+		"--no-fund",
+		"--loglevel=error",
+		ui,
+		"react@18",
+		"react-dom@18",
+		"@xyflow/react@12",
+		"@dagrejs/dagre@3",
+	],
+	{ cwd: boardConsumer, stdio: "inherit" },
+);
+const boardCheck = `
+const board = await import("@cerebriline/ui/components/board-viewer");
+for (const name of ["BoardViewer", "windowMessageTransport", "readViewerMessage", "readBoardText"]) {
+	if (typeof board[name] !== "function") throw new Error("board-viewer is missing " + name);
+}
+const css = new URL(import.meta.resolve("@cerebriline/ui/components/board-viewer.css"));
+const text = (await import("node:fs")).readFileSync(css, "utf8");
+const imported = text.match(/@import "([^"]+)"/g) ?? [];
+if (imported.length === 0) throw new Error("board-viewer.css imports nothing");
+for (const line of imported) import.meta.resolve(line.slice(9, -1));
+if (text.includes("@cline/")) throw new Error("board-viewer.css names the @cline scope");
+`;
+execFileSync(process.execPath, ["--input-type=module", "-e", boardCheck], {
+	cwd: boardConsumer,
+	stdio: "inherit",
+});
+if (existsSync(join(boardConsumer, "node_modules", "@cline"))) {
+	throw new Error(
+		"the board consumer pulled in a package from the @cline scope",
+	);
+}
+console.log("ok   @cerebriline/ui/components/board-viewer");
 console.log(`ok   @cerebriline/ui (${ui.split("/").at(-1)})`);

@@ -180,6 +180,30 @@ function proseOf(text) {
 	);
 }
 
+/** What this fork adds to the ui package, after upstream's own README. */
+const UI_BOARD_SECTION = `
+
+## The Board tab
+
+\`${TO_SCOPE}/ui/components/board-viewer\` is Cerebriline's Board tab: a
+conversation's task board, the workspace's pipelines and their runs on one
+canvas, with the inspector, the step form and the run monitor. It draws what
+the host sends and asks the host for every change, over a transport you give
+it; the host side is \`createBoardBackend\` from
+[\`${TO_SCOPE}/taskboard\`](https://www.npmjs.com/package/${TO_SCOPE}/taskboard).
+
+\`\`\`tsx
+import { BoardViewer, windowMessageTransport } from "${TO_SCOPE}/ui/components/board-viewer"
+import "${TO_SCOPE}/ui/components/board-viewer.css"
+
+const transport = windowMessageTransport((request) => window.parent.postMessage(request, "*"))
+root.render(<BoardViewer transport={transport} />)
+\`\`\`
+
+It needs \`@xyflow/react\` and \`@dagrejs/dagre\` (optional peers). Inside VS Code it
+takes the editor theme's colours; elsewhere the theme tokens of this package,
+and any \`--bv-*\` variable set on \`.bv\`.`;
+
 function readme(name, description, upstream) {
 	const install = `npm install ${TO_SCOPE}/sdk`;
 	const body =
@@ -225,9 +249,9 @@ classes. The guides: [task board](${REPOSITORY}/blob/main/docs/features/task-boa
 [pipelines](${REPOSITORY}/blob/main/docs/features/pipelines.mdx).`
 				: upstream
 					? // Upstream's README leads with its own `# @cline/ui` title.
-						proseOf(upstream)
+						`${proseOf(upstream)
 							.replace(/^#[^\n]*\n+/, "")
-							.trimEnd()
+							.trimEnd()}${name === "ui" ? UI_BOARD_SECTION : ""}`
 					: `${description ?? "Part of the Cerebriline SDK."}
 
 Installed as a dependency of [\`${TO_SCOPE}/sdk\`](https://www.npmjs.com/package/${TO_SCOPE}/sdk);
