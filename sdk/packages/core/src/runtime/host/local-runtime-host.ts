@@ -98,6 +98,7 @@ import {
 	createBackgroundDelegationRegistry,
 	startBackgroundDelegation,
 } from "../../extensions/tools/team/background-delegations";
+import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
 import {
 	type ConfiguredAgentDelegationResult,
 	type ConfiguredAgentSummary,
@@ -3804,7 +3805,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 		sessionId: string,
 	): Promise<ConfiguredAgentSummary[]> {
 		const live = this.sessions.get(sessionId.trim());
-		return listConfiguredAgentSummaries(live?.runtime.configuredAgents);
+		return listConfiguredAgentSummaries(
+			live
+				? (live.runtime.readConfiguredAgents?.() ??
+						live.runtime.configuredAgents)
+				: undefined,
+		);
 	}
 
 	/**
@@ -3833,8 +3839,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			);
 		}
 		const result = await delegateToConfiguredAgent({
-			agents: live.runtime.configuredAgents,
-			tools: live.runtime.tools,
+			...currentConfiguredAgents(live.runtime),
 			agentName: input.agentName,
 			prompt: input.prompt,
 			sessionId,
@@ -3876,8 +3881,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			);
 		}
 		return startBackgroundDelegation(this.backgroundDelegationsFor(sessionId), {
-			agents: live.runtime.configuredAgents,
-			tools: live.runtime.tools,
+			...currentConfiguredAgents(live.runtime),
 			agentName: input.agentName,
 			prompt: input.prompt,
 			sessionId,
@@ -5455,4 +5459,28 @@ function filesInPlay(
 		files.push(...entries[at].files);
 	}
 	return [...new Set(files)].slice(0, FILES_IN_PLAY_MAX);
+}
+
+/**
+ * The agents a person's `/agent` or `/delegate` can name, and the tools that
+ * run them: the agent files as they are now when the session can run agents,
+ * so one written or edited mid-conversation works without a reload; else the
+ * set the session started with.
+ */
+function currentConfiguredAgents(runtime: {
+	configuredAgents?: readonly ConfiguredAgentConfig[];
+	tools: AgentTool[];
+	readConfiguredAgents?: () => readonly ConfiguredAgentConfig[];
+	buildConfiguredAgentTools?: (
+		agents: readonly ConfiguredAgentConfig[],
+	) => AgentTool[];
+}): {
+	agents: readonly ConfiguredAgentConfig[] | undefined;
+	tools: AgentTool[];
+} {
+	if (!runtime.readConfiguredAgents || !runtime.buildConfiguredAgentTools) {
+		return { agents: runtime.configuredAgents, tools: runtime.tools };
+	}
+	const agents = runtime.readConfiguredAgents();
+	return { agents, tools: runtime.buildConfiguredAgentTools(agents) };
 }

@@ -133,6 +133,70 @@ describe("DefaultRuntimeBuilder configured agent execution", () => {
 		}
 	});
 
+	it("an agent written after the session started is listed and runs on the person's say-so; the model's tools stay as they were", async () => {
+		// Owner, 2026-11-27: the first agent, made in Customize -> Agents while a
+		// conversation was open, did not complete for `/agent` until a reload.
+		const { DefaultRuntimeBuilder } = await import("./runtime-builder");
+		const { delegateToConfiguredAgent, listConfiguredAgentSummaries } =
+			await import("../../extensions/tools/team/delegate-to-agent");
+		const tempHome = mkdtempSync(join(tmpdir(), "cline-agent-home-"));
+		const workspaceRoot = mkdtempSync(join(tmpdir(), "cline-agent-root-"));
+		tempDirs.push(tempHome, workspaceRoot);
+		process.env.HOME = tempHome;
+		setHomeDir(tempHome);
+
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({ cwd: workspaceRoot, workspaceRoot }),
+			configExtensions: [],
+		});
+		expect(runtime.configuredAgents).toEqual([]);
+		expect(runtime.readConfiguredAgents?.()).toEqual([]);
+
+		const agentsDir = join(workspaceRoot, ".cline", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "reviewer.md"),
+			`---\nname: "Reviewer"\ndescription: "Reviews a change"\ntools:\n  - "read_files"\n---\nYou review code.`,
+			"utf8",
+		);
+
+		const agents = runtime.readConfiguredAgents?.() ?? [];
+		expect(listConfiguredAgentSummaries(agents).map((a) => a.name)).toEqual([
+			"Reviewer",
+		]);
+		const tools = runtime.buildConfiguredAgentTools?.(agents) ?? [];
+		const result = await delegateToConfiguredAgent({
+			agents,
+			tools,
+			agentName: "reviewer",
+			prompt: "review this change",
+			sessionId: "s1",
+			parentAgentId: "parent-agent",
+			conversationId: "parent-conversation",
+		});
+		expect(result).toMatchObject({
+			agentName: "Reviewer",
+			text: "configured result",
+		});
+		expect(runMock).toHaveBeenCalledWith("review this change");
+		// The model's tools are the ones the session started with.
+		expect(
+			runtime.tools.some((tool) => tool.name.startsWith("subagent_")),
+		).toBe(false);
+
+		// With subagents off nothing is loaded, now or later.
+		const off = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({
+				cwd: workspaceRoot,
+				workspaceRoot,
+				enableSpawnAgent: false,
+			}),
+			configExtensions: [],
+		});
+		expect(off.readConfiguredAgents).toBeUndefined();
+		expect(off.buildConfiguredAgentTools).toBeUndefined();
+	});
+
 	it("invokes configured agents with host callbacks, scoped tools, skills, overrides, and parent context", async () => {
 		const { DefaultRuntimeBuilder } = await import("./runtime-builder");
 		const tempHome = mkdtempSync(join(tmpdir(), "cline-agent-home-"));

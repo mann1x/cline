@@ -1236,6 +1236,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// Kept by name as well as registered, so a `spawn_agent` batch entry can
 		// run as one of them (`agents[].type`).
 		let configuredAgentTools: AgentTool[] = [];
+		let buildConfiguredAgentTools:
+			| ((agents: readonly ConfiguredAgentConfig[]) => AgentTool[])
+			| undefined;
 		// Which agent each open configured-agent workspace belongs to, for the
 		// attribution of its revisions.
 		const configuredAgentNames = new Map<string, string>();
@@ -1250,11 +1253,13 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					effectiveToolPolicies,
 				),
 			);
-			if (configuredAgents.configs.length > 0) {
-				configuredAgentTools = filterAvailableTools(
+			// Kept, so the person's `/agent` and `/delegate` can run an agent
+			// written after the session started (SessionRuntime.readConfiguredAgents).
+			buildConfiguredAgentTools = (agents) =>
+				filterAvailableTools(
 					createConfiguredAgentTools({
 						configProvider: delegatedAgentConfigProvider,
-						agents: configuredAgents.configs,
+						agents: [...agents],
 						...(config.sessionId ? { sessionId: config.sessionId } : {}),
 						// So a node that could not run an agent leaves a
 						// line: the agent is re-queued and succeeds, so the
@@ -1362,6 +1367,10 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						},
 					}),
 					effectiveToolPolicies,
+				);
+			if (configuredAgents.configs.length > 0) {
+				configuredAgentTools = buildConfiguredAgentTools(
+					configuredAgents.configs,
 				);
 				tools.push(...configuredAgentTools);
 			}
@@ -1740,6 +1749,14 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			// Carried out so a host can delegate to one by name. The tools above
 			// are what the model sees; this is what the user wrote.
 			configuredAgents: configuredAgents.configs,
+			...(buildConfiguredAgentTools
+				? {
+						readConfiguredAgents: () =>
+							loadConfiguredAgentConfigs({ workspaceRoot: workspaceConfigRoot })
+								.configs,
+						buildConfiguredAgentTools,
+					}
+				: {}),
 			logger: logger ?? config.logger,
 			telemetry: telemetry ?? config.telemetry,
 			teamRuntime,

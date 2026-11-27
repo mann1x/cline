@@ -65,6 +65,20 @@ export interface BuiltRuntime {
 	 * wrote and named.
 	 */
 	configuredAgents?: readonly ConfiguredAgentConfig[];
+	/**
+	 * The agent files as they are now, read again from the same folders. Set
+	 * when the session can run agents. An agent written or edited after the
+	 * session started is listed and runs on the person's `/agent` and
+	 * `/delegate` without a window reload (owner, 2026-11-27: "if I add an
+	 * agent it should reload it"). The model's own tools keep the set the
+	 * session started with: they are in every request, and changing them
+	 * mid-conversation makes the model read the whole prompt again.
+	 */
+	readConfiguredAgents?: () => readonly ConfiguredAgentConfig[];
+	/** The tools that run these agents, built as the session built its own. */
+	buildConfiguredAgentTools?: (
+		agents: readonly ConfiguredAgentConfig[],
+	) => AgentTool[];
 	extensions?: AgentConfig["extensions"];
 	completionPolicy?: AgentConfig["completionPolicy"];
 	/** Why a tool this session withholds is absent, by tool name. */
