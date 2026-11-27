@@ -5,6 +5,18 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.313] — 2026-11-27
+
+### Fixes
+
+- **Pipelines: the model is told how to approve a pipeline in the app you're
+  using.** When the model ran a pipeline nobody had approved, the refusal
+  named the CLI's `/pipelines` command first and VS Code's board viewer
+  second, so a model in VS Code told you to use a `/pipelines` command that
+  doesn't exist there. Now VS Code names **Approve** on the Board tab and the
+  command palette's **Cerebriline: Approve Pipeline**, and the CLI names
+  `/pipelines approve <name>`.
+
 ## [4.100.312] — 2026-11-27
 
 ### Documentation
