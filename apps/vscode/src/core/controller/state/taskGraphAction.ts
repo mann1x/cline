@@ -27,6 +27,9 @@ export async function taskGraphAction(controller: Controller, request: StringReq
 		answer = controller.taskGraphAction({ op: "update", updates: action.updates })
 	} else if (action?.op === "plan" && Array.isArray(action.tasks)) {
 		answer = controller.taskGraphAction({ op: "plan", tasks: action.tasks })
+	} else if (action?.op === "remove" && Array.isArray((action as { ids?: unknown }).ids)) {
+		const ids = (action as { ids: unknown[] }).ids.filter((id): id is string => typeof id === "string")
+		answer = controller.taskGraphAction({ op: "remove", ids })
 	} else if (action?.op === "memories") {
 		const memories = await controller.taskBoardMemories()
 		return ProtoString.create({ value: JSON.stringify({ ok: memories.enabled, lines: [], memories }) })

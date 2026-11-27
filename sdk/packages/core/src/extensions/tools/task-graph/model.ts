@@ -225,7 +225,34 @@ interface TaskEventBase {
 
 export type TaskEvent =
 	| (TaskEventBase & { op: "create"; task: TaskCreateFields })
-	| (TaskEventBase & { op: "update"; update: TaskUpdateFields });
+	| (TaskEventBase & { op: "update"; update: TaskUpdateFields })
+	/**
+	 * The person deleted tasks (the store lists a task's steps with it). They
+	 * leave the board, and the tasks after them stop waiting on them. Ids are
+	 * never handed out again.
+	 */
+	| (TaskEventBase & { op: "remove"; ids: string[] });
+
+/** A logged event's change: what `record` takes and a saved board replays. */
+export type TaskEventBody =
+	| { op: "create"; task: TaskCreateFields }
+	| { op: "update"; update: TaskUpdateFields }
+	| { op: "remove"; ids: string[] };
+
+/** The tasks an event is about, for readers that follow one task. */
+export function taskEventTargets(event: TaskEvent): string[] {
+	if (event.op === "create") return [event.task.id];
+	if (event.op === "update") return [event.update.id];
+	return event.ids;
+}
+
+/** Whether a parsed log line is an event this build folds. */
+export function isTaskEvent(value: unknown): value is TaskEvent {
+	if (!value || typeof value !== "object") return false;
+	const op = (value as { op?: unknown }).op;
+	if (op === "create" || op === "update") return true;
+	return op === "remove" && Array.isArray((value as { ids?: unknown }).ids);
+}
 
 export interface TaskGraphState {
 	tasks: Map<string, Task>;
@@ -320,6 +347,19 @@ export function applyTaskEvent(state: TaskGraphState, event: TaskEvent): void {
 			const top = Number(fields.id.slice(1));
 			if (Number.isFinite(top)) {
 				state.nextTop = Math.max(state.nextTop, top + 1);
+			}
+		}
+		return;
+	}
+	if (event.op === "remove") {
+		const gone = new Set(event.ids.filter((id) => state.tasks.has(id)));
+		if (gone.size === 0) return;
+		for (const id of gone) state.tasks.delete(id);
+		state.order = state.order.filter((id) => !gone.has(id));
+		for (const task of state.tasks.values()) {
+			if (task.depends.some((id) => gone.has(id))) {
+				task.depends = task.depends.filter((id) => !gone.has(id));
+				task.touchedSeq = event.seq;
 			}
 		}
 		return;

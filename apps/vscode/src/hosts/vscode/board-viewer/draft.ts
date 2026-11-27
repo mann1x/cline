@@ -9,7 +9,10 @@ import { TaskGraphStore } from "@cline/core"
  * is; the draft is cleared once a conversation takes it.
  */
 
-export type BoardEditAction = { op: "update"; updates: unknown[] } | { op: "plan"; tasks: unknown[] }
+export type BoardEditAction =
+	| { op: "update"; updates: unknown[] }
+	| { op: "plan"; tasks: unknown[] }
+	| { op: "remove"; ids: string[] }
 
 export interface DraftStorage {
 	get(): unknown[] | undefined
@@ -48,7 +51,9 @@ export class DraftBoard {
 		const outcome =
 			action.op === "plan"
 				? this.store.plan({ tasks: action.tasks }, origin, { autoStart: false })
-				: this.store.update({ updates: action.updates }, origin)
+				: action.op === "remove"
+					? this.store.remove(action.ids, origin)
+					: this.store.update({ updates: action.updates }, origin)
 		this.storage.set(this.events())
 		return { ok: outcome.changed, lines: outcome.lines }
 	}

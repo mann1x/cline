@@ -19,6 +19,7 @@
  */
 
 import { join } from "node:path";
+import { isClosed } from "../tools/task-graph/model";
 import type { TaskGraphStore } from "../tools/task-graph/store";
 import { TaskGraphStore as Board } from "../tools/task-graph/store";
 import { buildConfiguredAgentToolName } from "../tools/team/configured-agent-tool";
@@ -58,6 +59,11 @@ export interface NodeContext {
 	signal: AbortSignal;
 	/** The run's task on the conversation's board, when it has one. */
 	task?: string;
+	/**
+	 * The run's task, made now if it has none: a run with no task of its own
+	 * gets one only while it waits on the person (an approval, a `human:`).
+	 */
+	ensureTask?: () => string | undefined;
 	/** The pipelines this run is inside, outermost first, its own last. */
 	stack: string[];
 	/** A test run: what it starts is a test too. */
@@ -134,8 +140,14 @@ export interface PipelineRunOptions {
 	parentRun?: string;
 	/** `$env`: what the host allows a pipeline to read. */
 	env?: Record<string, string>;
-	/** The conversation's board: the run gets one task on it. */
+	/**
+	 * The conversation's board. A run for a task (`forTask`) acts on that
+	 * task; a run without one puts a task on the board only while it waits
+	 * on the person, and takes it off when the run ends.
+	 */
 	board?: TaskGraphStore;
+	/** The board task the run is for: it waits on the run, and the run's approvals ask on it. */
+	forTask?: string;
 	now?: () => number;
 	/** Every journal event, as it is written. */
 	onEvent?: (event: JournalEvent, run: PipelineRun) => void;
@@ -286,7 +298,7 @@ export class PipelineRun {
 			nextRunId(options.journalDir, options.definition.name),
 		);
 		run.inputs = inputs;
-		run.openConversationTask();
+		run.takeTask();
 		run.write({
 			t: "run",
 			ts: run.now(),
@@ -363,7 +375,7 @@ export class PipelineRun {
 			nextRunId(options.journalDir, options.definition.name),
 		);
 		run.inputs = inputs;
-		run.openConversationTask();
+		run.takeTask();
 		run.write({
 			t: "run",
 			ts: run.now(),
@@ -529,7 +541,7 @@ export class PipelineRun {
 		const fold = foldJournal(events);
 		if (!fold.run) return undefined;
 		run.inputs = fold.run.inputs;
-		run.conversationTask = fold.run.task;
+		run.conversationTask = fold.run.task ?? run.ownTaskOnBoard();
 		for (const [id, state] of fold.nodes) {
 			if (!run.nodes.has(id)) continue;
 			run.states.set(id, { ...state });
@@ -558,9 +570,43 @@ export class PipelineRun {
 	// The conversation's board
 	// ---------------------------------------------------------------------
 
-	private openConversationTask(): void {
+	/** The task the run was started for, when the board has it open. */
+	private takeTask(): void {
+		const id = this.options.forTask;
+		const task = id ? this.options.board?.getState().tasks.get(id) : undefined;
+		if (task && !isClosed(task.status)) this.conversationTask = id;
+	}
+
+	/** Whether the run's task is the run's own, made to ask the person, not one it was started for. */
+	private ownsTask(id: string | undefined): boolean {
+		return (
+			!!id &&
+			this.options.board?.getState().tasks.get(id)?.claimedBy ===
+				pipelineHolder(this.id)
+		);
+	}
+
+	/** A task of the run's own left on the board by a host that stopped, for a resume. */
+	private ownTaskOnBoard(): string | undefined {
+		const state = this.options.board?.getState();
+		const holder = pipelineHolder(this.id);
+		return state?.order.find((id) => {
+			const task = state.tasks.get(id);
+			return task?.claimedBy === holder && !isClosed(task.status);
+		});
+	}
+
+	/**
+	 * The task the run's approvals and waits ask on: the task it was started
+	 * for, or one of its own, made now and taken off when the run ends.
+	 */
+	private ensureConversationTask(): string | undefined {
 		const store = this.options.board;
-		if (!store) return;
+		if (!store) return undefined;
+		const current = this.conversationTask
+			? store.getState().tasks.get(this.conversationTask)
+			: undefined;
+		if (current) return current.id;
 		const holder = pipelineHolder(this.id);
 		const number = /-(\d+)$/.exec(this.id)?.[1] ?? "";
 		const outcome = store.plan(
@@ -568,7 +614,7 @@ export class PipelineRun {
 				tasks: [
 					{
 						title: `▶ ${this.definition.name} #${number}`,
-						description: `Pipeline run ${this.id}${this.definition.description ? `: ${this.definition.description}` : ""}. It runs on its own; a task that needs its result can wait on it with the gate pipeline:${this.id}.`,
+						description: `Pipeline run ${this.id}${this.definition.description ? `: ${this.definition.description}` : ""}. It is waiting for the person; it leaves the board when the run ends.`,
 					},
 				],
 			},
@@ -576,16 +622,17 @@ export class PipelineRun {
 			{ autoStart: false },
 		);
 		const id = /Created \d+: (T[\d.]+)/.exec(outcome.lines[0] ?? "")?.[1];
-		if (!id) return;
+		if (!id) return undefined;
 		this.conversationTask = id;
 		store.setPipelineLive(holder, true);
 		store.update({ updates: [{ id, status: "active" }] }, { by: holder });
+		return id;
 	}
 
 	private reopenConversationTask(): void {
 		const store = this.options.board;
 		const id = this.conversationTask;
-		if (!store || !id) return;
+		if (!store || !id || !this.ownsTask(id)) return;
 		const holder = pipelineHolder(this.id);
 		store.setPipelineLive(holder, true);
 		store.update(
@@ -602,24 +649,11 @@ export class PipelineRun {
 		const holder = pipelineHolder(this.id);
 		const lines: string[] = [];
 		const id = this.conversationTask;
-		if (id) {
-			const counts = this.counts();
-			const note =
-				result.status === "done"
-					? `${counts.done} node${counts.done === 1 ? "" : "s"} done${counts.skipped ? `, ${counts.skipped} skipped` : ""}`
-					: `${result.status}${result.error ? `: ${result.error}` : ""}`;
-			const status =
-				result.status === "done"
-					? "done"
-					: result.status === "failed"
-						? "cancelled"
-						: "waiting";
-			lines.push(
-				...store.update({ updates: [{ id, status, note }] }, { by: holder })
-					.lines,
-			);
-		}
+		const owned = this.ownsTask(id);
 		store.setPipelineLive(holder, false);
+		// The run's own task was there to ask the person: it goes with the run.
+		// The task it was started for stays, and its gate says how the run ended.
+		if (owned && id) store.remove([id], { by: holder });
 		if (result.status !== "stopped") {
 			const gate = `pipeline:${this.id}`;
 			lines.push(
@@ -951,6 +985,7 @@ export class PipelineRun {
 			node: node.id,
 			signal,
 			...(this.conversationTask ? { task: this.conversationTask } : {}),
+			ensureTask: () => this.ensureConversationTask(),
 			stack: [...(this.options.stack ?? []), this.definition.name],
 			...(this.options.usePins ? { test: true } : {}),
 		};
@@ -1313,23 +1348,6 @@ export class PipelineRun {
 	// ---------------------------------------------------------------------
 	// Views
 	// ---------------------------------------------------------------------
-
-	private counts(): {
-		done: number;
-		skipped: number;
-		failed: number;
-		total: number;
-	} {
-		let done = 0;
-		let skipped = 0;
-		let failed = 0;
-		for (const state of this.states.values()) {
-			if (state.status === "done") done++;
-			else if (state.status === "skipped") skipped++;
-			else if (state.status === "failed") failed++;
-		}
-		return { done, skipped, failed, total: this.states.size };
-	}
 
 	/** Where the run stands, node by node. */
 	view(): {

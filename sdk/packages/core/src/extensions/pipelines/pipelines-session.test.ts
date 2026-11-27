@@ -211,7 +211,7 @@ describe("the session host", () => {
 		);
 	});
 
-	it("an approval is a human gate on the run's task: Resolve approves, removing it rejects", async () => {
+	it("an approval is a human gate on a task the run makes for it, gone when the run ends: Resolve approves, removing it rejects", async () => {
 		const board = new TaskGraphStore();
 		savePipeline(root, {
 			name: "Gated",
@@ -235,14 +235,13 @@ describe("the session host", () => {
 		for (const answer of ["resolve", "remove"] as const) {
 			const s = session({ board });
 			const run = s.run("gated");
-			const task = run.view().task as string;
-			await until(
-				() =>
-					board
-						.getState()
-						.tasks.get(task)
-						?.gates.some((gate) => gate.spec === "human:Ship it?") ?? false,
-			);
+			const asking = () =>
+				[...board.getState().tasks.values()].find((entry) =>
+					entry.gates.some((gate) => gate.spec === "human:Ship it?"),
+				);
+			await until(() => !!asking());
+			const task = asking()?.id as string;
+			expect(board.getState().tasks.get(task)?.title).toMatch(/^▶ Gated #/);
 			expect(board.getState().tasks.get(task)?.status).toBe("waiting");
 			board.update(
 				{
@@ -264,8 +263,46 @@ describe("the session host", () => {
 					(node) => node.id === (answer === "resolve" ? "yes" : "no"),
 				)?.status,
 			).toBe("done");
-			expect(board.getState().tasks.get(task)?.status).toBe("done");
+			expect(board.getState().tasks.has(task)).toBe(false);
 		}
+		expect(board.getState().order).toEqual([]);
+	});
+
+	it("an approval in a run for a task asks on that task, which keeps waiting on the run", async () => {
+		const board = new TaskGraphStore();
+		savePipeline(root, {
+			name: "Gated",
+			nodes: [{ id: "ask", type: "approval", message: "Ship it?" }],
+		});
+		approvePipeline(root, "gated");
+		board.plan(
+			{ tasks: [{ title: "Ship", gate: ["use-pipeline:gated"] }] },
+			{ by: "person" },
+		);
+		const run = session({ board }).run("gated");
+		const ship = () => board.getState().tasks.get("T1");
+		await until(
+			() =>
+				ship()?.gates.some((gate) => gate.spec === "human:Ship it?") ?? false,
+		);
+		expect(board.getState().order).toEqual(["T1"]);
+		board.update(
+			{ updates: [{ id: "T1", gate_open: ["human:Ship it?"] }] },
+			{ by: "user" },
+		);
+		for (
+			let i = 0;
+			i < 200 && ship()?.gates.some((g) => g.spec === "human:Ship it?");
+			i++
+		)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		// The answer came off; the task still waits on the run, not active by the run's hand.
+		expect(ship()?.gates.map((gate) => gate.spec)).toEqual([
+			`pipeline:${run.id}`,
+		]);
+		await run.result();
+		expect(board.getState().order).toEqual(["T1"]);
+		expect(ship()?.claimedBy).toBeUndefined();
 	});
 
 	it("run with a task: the task waits on the run, and the model is told when it ends", async () => {

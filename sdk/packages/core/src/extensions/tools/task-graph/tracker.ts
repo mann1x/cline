@@ -522,10 +522,15 @@ interface QueuedNudge {
 	from: Set<unknown>;
 }
 
-/** A change from the task panel: `task_update`'s or `task_plan`'s input, as the person's. */
+/**
+ * A change from the task panel or the Board tab: `task_update`'s or
+ * `task_plan`'s input, as the person's, or a delete, which only the person
+ * has.
+ */
 export type TaskGraphEdit =
 	| { op: "update"; updates: unknown[] }
-	| { op: "plan"; tasks: unknown[] };
+	| { op: "plan"; tasks: unknown[] }
+	| { op: "remove"; ids: string[] };
 
 export interface TaskGraphEditOutcome {
 	lines: string[];
@@ -1335,6 +1340,8 @@ export class TaskGraphTracker {
 			outcome = this.store.update({ updates: action.updates }, origin);
 		} else if (action.op === "plan") {
 			outcome = this.store.plan({ tasks: action.tasks }, origin);
+		} else if (action.op === "remove") {
+			outcome = this.store.remove(action.ids, origin);
 		} else {
 			return {
 				lines: [`Unknown change: ${String((action as { op?: unknown }).op)}.`],

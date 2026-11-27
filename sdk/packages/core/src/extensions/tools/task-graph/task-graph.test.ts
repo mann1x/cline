@@ -1393,3 +1393,67 @@ describe("a task_progress sent out of habit", () => {
 		expect(tracker.store.snapshot().counts.total).toBe(0);
 	});
 });
+
+describe("the person deletes a task", () => {
+	it("goes with its steps, unblocks what came after it, survives a reload, and never reuses its id", () => {
+		const dir = mkdtempSync(join(tmpdir(), "tg-remove-"));
+		try {
+			const logPath = join(dir, "board.jsonl");
+			const store = new TaskGraphStore({ logPath });
+			store.plan(
+				{
+					tasks: [
+						{ title: "Design" },
+						{ title: "Sketch", parent: "#1" },
+						{ title: "Build", depends: ["#1"] },
+					],
+				},
+				{ by: "model" },
+			);
+			const outcome = store.remove(["T1"], { by: "user" });
+			expect(outcome.changed).toBe(true);
+			expect(outcome.lines[0]).toBe(
+				"Deleted T1 Design; T1.1 Sketch. T2 no longer waits on them.",
+			);
+			expect(store.getState().order).toEqual(["T2"]);
+			expect(store.getState().tasks.get("T2")?.depends).toEqual([]);
+			const reloaded = new TaskGraphStore({ logPath });
+			reloaded.reconcile(undefined);
+			expect(reloaded.getState().order).toEqual(["T2"]);
+			reloaded.plan({ tasks: [{ title: "Next" }] }, { by: "model" });
+			expect(reloaded.getState().order).toEqual(["T2", "T3"]);
+			expect(store.remove(["T9"]).lines).toEqual([
+				"T9: there is no such task.",
+			]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("is refused while a live run holds the task", () => {
+		const store = new TaskGraphStore();
+		store.plan({ tasks: [{ title: "Held" }] }, { by: "model" });
+		store.update(
+			{ updates: [{ id: "T1", status: "active" }] },
+			{ by: "pipeline:nightly-1" },
+		);
+		store.setPipelineLive("pipeline:nightly-1", true);
+		const refused = store.remove(["T1"], { by: "user" });
+		expect(refused.changed).toBe(false);
+		expect(refused.lines[0]).toContain(
+			"held by pipeline:nightly-1, still running",
+		);
+		store.setPipelineLive("pipeline:nightly-1", false);
+		expect(store.remove(["T1"], { by: "user" }).changed).toBe(true);
+	});
+
+	it("comes to the model as the person's change", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "Old idea" }] }, { by: "model" });
+		const outcome = tracker.edit({ op: "remove", ids: ["T1"] });
+		expect(outcome.changed).toBe(true);
+		expect(tracker.takeRunStartNote()).toContain(
+			"[SYSTEM] The person changed the task board: Deleted T1 Old idea.",
+		);
+	});
+});

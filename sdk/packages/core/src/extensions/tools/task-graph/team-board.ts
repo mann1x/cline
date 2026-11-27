@@ -23,6 +23,7 @@ import type {
 } from "@cline/shared";
 import type { TeamTaskBoard } from "../team/multi-agent";
 import { shortTitle } from "./board";
+import { taskEventTargets } from "./model";
 import { normalizeTaskId } from "./readers";
 import type { TaskGraphSnapshot, TaskGraphStore, TaskSnapshot } from "./store";
 
@@ -121,8 +122,7 @@ export function createGraphTeamBoard(
 		let updated = 0;
 		let by = "model";
 		for (const event of store.getEvents()) {
-			const target = event.op === "create" ? event.task.id : event.update.id;
-			if (target !== id) continue;
+			if (!taskEventTargets(event).includes(id)) continue;
 			if (event.op === "create") {
 				created = event.ts;
 				by = event.by;

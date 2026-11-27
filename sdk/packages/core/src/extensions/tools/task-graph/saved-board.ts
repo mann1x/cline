@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { renderSavedBoard } from "./board";
-import { countTasks, foldTaskEvents, type TaskEvent } from "./model";
+import {
+	countTasks,
+	foldTaskEvents,
+	isTaskEvent,
+	type TaskEvent,
+} from "./model";
 
 /** A board as it is saved into a memory. */
 export interface ExportedTaskBoard {
@@ -44,10 +49,8 @@ export function exportTaskLog(
 	for (const line of readFileSync(logPath, "utf8").split("\n")) {
 		if (!line.trim()) continue;
 		try {
-			const event = JSON.parse(line) as TaskEvent;
-			if (event && (event.op === "create" || event.op === "update")) {
-				events.push(event);
-			}
+			const event = JSON.parse(line) as unknown;
+			if (isTaskEvent(event)) events.push(event);
 		} catch {
 			// A torn last line is what a crash mid-append leaves; skip it.
 		}

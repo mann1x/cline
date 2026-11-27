@@ -35,6 +35,7 @@ import {
 	isPipelineHeld,
 	isPipelineUseGate,
 	isReady,
+	isTaskEvent,
 	isTaskLinkType,
 	nextTaskId,
 	openDependencies,
@@ -46,6 +47,7 @@ import {
 	type TaskAuthor,
 	type TaskCreateFields,
 	type TaskEvent,
+	type TaskEventBody,
 	type TaskGate,
 	type TaskGraphState,
 	type TaskLink,
@@ -214,12 +216,7 @@ export interface TaskGraphSeed {
 }
 
 /** A saved event's change, without its log position, time, author or call. */
-function seedEventBody(
-	raw: unknown,
-):
-	| { op: "create"; task: TaskCreateFields }
-	| { op: "update"; update: TaskUpdateFields }
-	| undefined {
+function seedEventBody(raw: unknown): TaskEventBody | undefined {
 	if (!raw || typeof raw !== "object") return undefined;
 	const event = raw as { op?: unknown; task?: unknown; update?: unknown };
 	if (
@@ -236,6 +233,17 @@ function seedEventBody(
 		typeof (event.update as { id?: unknown }).id === "string"
 	) {
 		return { op: "update", update: event.update as TaskUpdateFields };
+	}
+	if (
+		event.op === "remove" &&
+		Array.isArray((event as { ids?: unknown }).ids)
+	) {
+		return {
+			op: "remove",
+			ids: (event as { ids: unknown[] }).ids.filter(
+				(id): id is string => typeof id === "string",
+			),
+		};
 	}
 	return undefined;
 }
@@ -425,10 +433,8 @@ export class TaskGraphStore {
 		for (const line of readFileSync(this.logPath, "utf8").split("\n")) {
 			if (!line.trim()) continue;
 			try {
-				const event = JSON.parse(line) as TaskEvent;
-				if (event && (event.op === "create" || event.op === "update")) {
-					events.push(event);
-				}
+				const event = JSON.parse(line) as unknown;
+				if (isTaskEvent(event)) events.push(event);
 			} catch {
 				// A torn last line from a crash mid-write: the events before it
 				// stand, and the next append starts a clean line.
@@ -566,12 +572,7 @@ export class TaskGraphStore {
 		return "empty";
 	}
 
-	private record(
-		body:
-			| { op: "create"; task: TaskCreateFields }
-			| { op: "update"; update: TaskUpdateFields },
-		origin: TaskChangeOrigin,
-	): void {
+	private record(body: TaskEventBody, origin: TaskChangeOrigin): void {
 		const event = {
 			...body,
 			seq: this.state.lastSeq + 1,
@@ -1342,6 +1343,77 @@ export class TaskGraphStore {
 	 * Returns the way to stop. A watcher's trouble never stops the store, and
 	 * a watcher that changes the store should do it later, not inside the call.
 	 */
+	/**
+	 * The person deletes tasks, each with its steps. Only the person: the
+	 * model's tools have no delete, it cancels. A task a live run holds (a
+	 * teammate, a pipeline run) is refused until the run ends. The tasks after
+	 * a deleted one stop waiting on it.
+	 */
+	remove(
+		ids: readonly string[],
+		origin: TaskChangeOrigin = {},
+	): TaskOperationOutcome {
+		const lines: string[] = [];
+		const asked = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+		const unknown = asked.filter((id) => !this.state.tasks.has(id));
+		for (const id of unknown) lines.push(`${id}: there is no such task.`);
+		const gone: string[] = [];
+		const withSteps = (id: string): string[] => [
+			id,
+			...this.state.order.filter((other) => other.startsWith(`${id}.`)),
+		];
+		for (const id of asked.filter((one) => this.state.tasks.has(one))) {
+			const family = withSteps(id).filter((one) => !gone.includes(one));
+			const held = family
+				.map((one) => this.state.tasks.get(one) as Task)
+				.find(
+					(task) =>
+						!isClosed(task.status) &&
+						!!task.claimedBy &&
+						this.holderLive(task.claimedBy),
+				);
+			if (held) {
+				lines.push(
+					`${id} not deleted: ${held.id} is held by ${held.claimedBy}, still running. Stop it first.`,
+				);
+				continue;
+			}
+			gone.push(...family);
+		}
+		if (gone.length === 0) return { lines, changed: false, readyNow: [] };
+		const readyBefore = new Set(readyTasks(this.state).map((task) => task.id));
+		const freed = this.state.order.filter(
+			(id) =>
+				!gone.includes(id) &&
+				(this.state.tasks.get(id) as Task).depends.some((dep) =>
+					gone.includes(dep),
+				),
+		);
+		const titles = gone.map(
+			(id) =>
+				`${id} ${shortTitle((this.state.tasks.get(id) as Task).title, 50)}`,
+		);
+		this.record({ op: "remove", ids: gone }, origin);
+		lines.unshift(
+			`Deleted ${titles.join("; ")}.${freed.length ? ` ${freed.join(", ")} no longer wait${freed.length === 1 ? "s" : ""} on ${gone.length === 1 ? "it" : "them"}.` : ""}`,
+		);
+		const readyNow = readyTasks(this.state)
+			.map((task) => task.id)
+			.filter((id) => !readyBefore.has(id));
+		if (readyNow.length > 0) {
+			lines.push(
+				`Ready now: ${readyNow
+					.map(
+						(id) =>
+							`${id} ${shortTitle((this.state.tasks.get(id) as Task).title, 50)}`,
+					)
+					.join("; ")}.`,
+			);
+		}
+		this.changed();
+		return { lines, changed: true, readyNow };
+	}
+
 	watch(listener: (store: TaskGraphStore) => void): () => void {
 		this.watchers.add(listener);
 		return () => this.watchers.delete(listener);

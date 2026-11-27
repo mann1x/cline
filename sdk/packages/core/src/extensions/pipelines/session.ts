@@ -300,12 +300,13 @@ export class PipelineSession {
 		context: NodeContext,
 	): Promise<{ open: true } | { failed: string } | { removed: true }> {
 		const board = this.options.board;
-		const task = context.task;
+		const task = context.task ?? context.ensureTask?.();
 		if (!board || !task) {
 			return {
 				failed: `${spec} needs the conversation's task board, and this run has none`,
 			};
 		}
+		context.task = task;
 		board.update(
 			{ updates: [{ id: task, gate: [spec] }] },
 			{ by: pipelineHolder(context.run) },
@@ -325,14 +326,28 @@ export class PipelineSession {
 		}
 	}
 
-	/** The run's task goes back to active once what it waited on is settled. */
+	/**
+	 * What the run waited on is settled: its gate comes off the task. The
+	 * run's own task goes back to active; a task the run was started for
+	 * keeps waiting on the run.
+	 */
 	private resumeTask(context: NodeContext, spec: string): void {
 		const board = this.options.board;
 		const task = context.task;
 		if (!board || !task) return;
+		const holder = pipelineHolder(context.run);
+		const own = board.getState().tasks.get(task)?.claimedBy === holder;
 		board.update(
-			{ updates: [{ id: task, status: "active", gate_remove: [spec] }] },
-			{ by: pipelineHolder(context.run) },
+			{
+				updates: [
+					{
+						id: task,
+						...(own ? { status: "active" } : {}),
+						gate_remove: [spec],
+					},
+				],
+			},
+			{ by: holder },
 		);
 	}
 
@@ -606,7 +621,7 @@ export class PipelineSession {
 				})
 				.map((gate) => gate.spec);
 		const task = gateTask ?? this.taskUsing(name, file.name);
-		const run = this.startApproved(file, inputs, []);
+		const run = this.startApproved(file, inputs, [], undefined, task);
 		if (task && board) {
 			const replaced = uses(task);
 			board.update(
@@ -650,11 +665,13 @@ export class PipelineSession {
 		inputs: Record<string, unknown>,
 		stack: string[],
 		parentRun?: string,
+		forTask?: string,
 	): PipelineRun {
 		const definition = this.approvedDefinition(file);
 		return this.track(
 			PipelineRun.start({
 				...this.baseOptions(definition, file.hash),
+				...(forTask ? { forTask } : {}),
 				inputs,
 				...(stack.length ? { stack } : {}),
 				...(parentRun ? { parentRun } : {}),
@@ -813,7 +830,18 @@ export class PipelineSession {
 		const definition = test
 			? { ...file.definition, name: fold.run.pipeline }
 			: this.approvedDefinition(file);
-		return this.track(
+		// The task the earlier run was for now waits on this one.
+		const board = this.options.board;
+		const before = fold.run.task
+			? board?.getState().tasks.get(fold.run.task)
+			: undefined;
+		const forTask =
+			before &&
+			!isClosed(before.status) &&
+			!before.claimedBy?.startsWith("pipeline:")
+				? before.id
+				: undefined;
+		const next = this.track(
 			PipelineRun.rerun({
 				...this.baseOptions(
 					definition,
@@ -828,10 +856,26 @@ export class PipelineSession {
 				),
 				from: runId,
 				node,
+				...(forTask ? { forTask } : {}),
 				...(test ? { usePins: true } : {}),
 			}),
 			{ test },
 		);
+		if (forTask && board) {
+			board.update(
+				{
+					updates: [
+						{
+							id: forTask,
+							gate: [`pipeline:${next.id}`],
+							gate_remove: [`pipeline:${runId}`],
+						},
+					],
+				},
+				{ by: "model" },
+			);
+		}
+		return next;
 	}
 
 	/**

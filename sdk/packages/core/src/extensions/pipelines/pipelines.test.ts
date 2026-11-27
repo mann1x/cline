@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openWork } from "../tools/task-graph/model";
 import { TaskGraphStore } from "../tools/task-graph/store";
 import { fill, fillString, parseExpression, test as truth } from "./expr";
 import { foldJournal, readJournal } from "./journal";
@@ -648,7 +647,7 @@ describe("running a pipeline", () => {
 });
 
 describe("a run on the conversation's board", () => {
-	it("is one task held by the run: refused to the model, no block to its auto-start or close-out", async () => {
+	it("puts nothing on the board while it runs on its own; what waits on it opens when it ends", async () => {
 		const board = new TaskGraphStore();
 		let release: () => void = () => {};
 		const gate = new Promise<void>((resolve) => {
@@ -668,17 +667,8 @@ describe("a run on the conversation's board", () => {
 			host,
 			{ board },
 		);
-		const task = board.snapshot().tasks[0];
-		expect(task?.title).toBe("▶ Nightly #1");
-		expect(task?.status).toBe("active");
-		expect(task?.claimedBy).toBe("pipeline:nightly-1");
-		// The model's change is refused while the run is live.
-		const refused = board.update(
-			{ updates: [{ id: "T1", status: "done" }] },
-			{ by: "model" },
-		);
-		expect(refused.lines.join(" ")).toContain("held by pipeline:nightly-1");
-		// Its own work starts beside the run, and the close-out does not ask for the run.
+		expect(board.snapshot().tasks).toEqual([]);
+		expect(run.view().task).toBeUndefined();
 		board.plan({
 			tasks: [
 				{ title: "Review the docs" },
@@ -686,19 +676,40 @@ describe("a run on the conversation's board", () => {
 			],
 		});
 		expect(
-			board.snapshot().tasks.find((entry) => entry.id === "T2")?.status,
+			board.snapshot().tasks.find((entry) => entry.id === "T1")?.status,
 		).toBe("active");
-		expect(openWork(board.getState()).map((entry) => entry.id)).toEqual(["T2"]);
 		release();
 		const result = await run.result();
-		expect(board.snapshot().tasks[0]?.status).toBe("done");
-		expect(board.snapshot().tasks[0]?.outcome).toBe("1 node done");
+		expect(board.snapshot().tasks.map((entry) => entry.title)).toEqual([
+			"Review the docs",
+			"Ship",
+		]);
 		expect(
-			board.snapshot().tasks.find((entry) => entry.id === "T3")?.gates[0]?.open,
+			board.snapshot().tasks.find((entry) => entry.id === "T2")?.gates[0]?.open,
 		).toBe(true);
 		expect(result.boardLines.join(" ")).toContain(
-			"T3: pipeline:nightly-1 opened.",
+			"T2: pipeline:nightly-1 opened.",
 		);
+	});
+
+	it("a run for a task acts on that task and adds none", async () => {
+		const board = new TaskGraphStore();
+		const { host } = fakeHost({ ok: { exit: 0 } });
+		board.plan({
+			tasks: [{ title: "Deploy", gate: ["pipeline:deploy-1"] }],
+		});
+		const run = start(
+			{ name: "Deploy", nodes: [{ id: "x", type: "command", command: "ok" }] },
+			host,
+			{ board, forTask: "T1" },
+		);
+		expect(run.view().task).toBe("T1");
+		await run.result();
+		const tasks = board.snapshot().tasks;
+		expect(tasks.map((entry) => entry.title)).toEqual(["Deploy"]);
+		// The run left its status alone: the gate opening is what moves it on.
+		expect(tasks[0]?.claimedBy).toBeUndefined();
+		expect(tasks[0]?.gates[0]?.open).toBe(true);
 	});
 
 	it("a failed run fails the gate that waited on it", async () => {
@@ -720,8 +731,7 @@ describe("a run on the conversation's board", () => {
 			.tasks.find((entry) => entry.title === "After");
 		expect(after?.gates[0]?.failed).toContain("the run failed");
 		expect(
-			board.snapshot().tasks.find((entry) => entry.title.startsWith("▶"))
-				?.status,
-		).toBe("cancelled");
+			board.snapshot().tasks.some((entry) => entry.title.startsWith("▶")),
+		).toBe(false);
 	});
 });
