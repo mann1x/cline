@@ -19,15 +19,15 @@ import type {
 	TerminalGuardDecision,
 	ToolResultFormat,
 } from "@cline/shared";
+import type {
+	TaskGraphEdit,
+	TaskGraphEditOutcome,
+	TaskGraphSnapshot,
+} from "@cline/taskboard";
 import type { CompactionRevisions } from "../extensions/context/compaction-revisions";
 import type { DocumentReaderSettings } from "../extensions/tools/executors/document/ocr";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
 import type { QaCredential } from "../extensions/tools/qa-credentials";
-import type { TaskGraphSnapshot } from "../extensions/tools/task-graph/store";
-import type {
-	TaskGraphEdit,
-	TaskGraphEditOutcome,
-} from "../extensions/tools/task-graph/tracker";
 import type {
 	AgentProfileConnection,
 	AgentProviderConnection,

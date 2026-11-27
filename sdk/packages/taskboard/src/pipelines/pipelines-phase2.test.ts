@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TaskGraphStore } from "../tools/task-graph/store";
+import { TaskGraphStore } from "../task-graph/store";
 import { appendJournal, foldJournal, readJournal } from "./journal";
 import type { PipelineDefinition } from "./model";
 import { PipelineSession, type PipelineSessionOptions } from "./session";

@@ -79,8 +79,8 @@ vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => ({
 }));
 
 const { AgentTeamsRuntime } = await import("./multi-agent");
-const { TaskGraphStore } = await import("../task-graph/store");
-const { createGraphTeamBoard } = await import("../task-graph/team-board");
+const { TaskGraphStore } = await import("@cline/taskboard");
+const { createGraphTeamBoard } = await import("@cline/taskboard");
 
 function result(
 	text: string,

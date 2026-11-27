@@ -9,9 +9,13 @@
  * graph replaced the checklist.) One list, built from the factories,
  * read by both.
  */
+
+import {
+	createPipelineTool,
+	PipelineSession,
+	TaskGraphTracker,
+} from "@cline/taskboard";
 import { createSessionRevisions } from "../../runtime/atomic/session-revisions";
-import { PipelineSession } from "../pipelines/session";
-import { createPipelineTool } from "../pipelines/tool";
 import {
 	createApplyPatchTool,
 	createAskQuestionTool,
@@ -28,7 +32,6 @@ import {
 	createWebFetchTool,
 } from "../tools/definitions";
 import { createListFilesTool } from "../tools/list-files";
-import { TaskGraphTracker } from "../tools/task-graph/tracker";
 import { createReadAgentReportTool } from "../tools/team/agent-reports";
 import { createAgentsStatusTool } from "../tools/team/agent-status";
 import { createLeadAgentTools } from "../tools/team/lead-agent-tools";

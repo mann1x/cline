@@ -21,6 +21,19 @@ import {
 	type ReasoningLoopLimitContext,
 } from "@cline/shared";
 import { setHomeDirIfUnset } from "@cline/shared/storage";
+import {
+	createGraphTeamBoard,
+	createPipelineTool,
+	PIPELINE_TOOL_NAME,
+	PipelineSession,
+	renderBoardListing,
+	renderMermaid,
+	TaskGraphTracker,
+	taskTemplateDirs,
+	withPipelineRules,
+	withTaskBoardRules,
+	withTaskGraphCapture,
+} from "@cline/taskboard";
 import { isOAuthProvider } from "../../auth/provider-auth-registry";
 import {
 	createCappedThinkingNoteWriter,
@@ -34,12 +47,6 @@ import {
 import type { CompactionRevisions } from "../../extensions/context/compaction-revisions";
 import { releasePolykvSession } from "../../extensions/context/polykv-session";
 import { buildToolLedger } from "../../extensions/context/tool-ledger";
-import { PipelineSession } from "../../extensions/pipelines/session";
-import {
-	createPipelineTool,
-	PIPELINE_TOOL_NAME,
-	withPipelineRules,
-} from "../../extensions/pipelines/tool";
 import type { ToolExecutors } from "../../extensions/tools";
 import {
 	DefaultToolNames,
@@ -61,15 +68,6 @@ import {
 	createLocalWorkspaceLister,
 	LIST_FILES_TOOL_NAME,
 } from "../../extensions/tools/list-files";
-import {
-	createGraphTeamBoard,
-	renderBoardListing,
-	renderMermaid,
-	TaskGraphTracker,
-	taskTemplateDirs,
-	withTaskBoardRules,
-	withTaskGraphCapture,
-} from "../../extensions/tools/task-graph";
 import {
 	buildTaskProgressState,
 	findLatestTaskProgress,
@@ -99,6 +97,7 @@ import {
 	startBackgroundDelegation,
 } from "../../extensions/tools/team/background-delegations";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
+import { buildConfiguredAgentToolName } from "../../extensions/tools/team/configured-agent-tool";
 import {
 	type ConfiguredAgentDelegationResult,
 	type ConfiguredAgentSummary,
@@ -239,6 +238,7 @@ import {
 } from "../orchestration/runtime-oauth-token-manager";
 import type { RuntimeBuilder } from "../orchestration/session-runtime";
 import { SessionRuntime } from "../orchestration/session-runtime-orchestrator";
+import { WRITE_CLASS_TOOL_NAMES } from "../safety/loop-detection";
 import {
 	createStruggleFeed,
 	StruggleDetector,
@@ -1320,6 +1320,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 					templateDirs: taskTemplateDirs(
 						configWithProvider.workspaceRoot ?? configWithProvider.cwd,
 					),
+					// The loop detector's list: the board counts the same writes.
+					writeToolNames: WRITE_CLASS_TOOL_NAMES,
 					onForcedClaim: (id, from, to) =>
 						configWithProvider.logger?.log?.(
 							`[task-graph] ${to} took ${id} over from ${from} (forced)`,
@@ -1446,6 +1448,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 							: {}),
 						log: (line) =>
 							configWithProvider.logger?.log?.(line, { sessionId }),
+						agentToolName: buildConfiguredAgentToolName,
 						...(configWithProvider.pipelines?.approveHow
 							? { approveHow: configWithProvider.pipelines.approveHow }
 							: {}),

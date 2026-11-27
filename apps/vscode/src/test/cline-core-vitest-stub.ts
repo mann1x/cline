@@ -22,14 +22,14 @@ export {
 	updateEvidence,
 } from "../../../../sdk/packages/core/src/extensions/browser/browser-launch"
 export { startBrowserProcess, wasAdopted } from "../../../../sdk/packages/core/src/extensions/browser/browser-process"
-export { boardToPipeline, pipelineToTemplate } from "../../../../sdk/packages/core/src/extensions/pipelines/convert"
-export { EXPRESSION_FUNCTIONS } from "../../../../sdk/packages/core/src/extensions/pipelines/expr"
+export { boardToPipeline, pipelineToTemplate } from "../../../../sdk/packages/taskboard/src/pipelines/convert"
+export { EXPRESSION_FUNCTIONS } from "../../../../sdk/packages/taskboard/src/pipelines/expr"
 export {
 	foldJournal,
 	PIPELINE_RUNS_DIR,
 	readJournal,
-} from "../../../../sdk/packages/core/src/extensions/pipelines/journal"
-export { validatePipeline } from "../../../../sdk/packages/core/src/extensions/pipelines/validate"
+} from "../../../../sdk/packages/taskboard/src/pipelines/journal"
+export { validatePipeline } from "../../../../sdk/packages/taskboard/src/pipelines/validate"
 export {
 	approvePipeline,
 	findPipeline,
@@ -40,14 +40,14 @@ export {
 	readPipelineVersion,
 	rejectPipeline,
 	savePipeline,
-} from "../../../../sdk/packages/core/src/extensions/pipelines/workspace"
+} from "../../../../sdk/packages/taskboard/src/pipelines/workspace"
 export {
 	installOcrLanguages,
 	parseOcrLanguages,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"
-export { isTaskEvent } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/model"
-export { exportTaskEvents, exportTaskLog } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/saved-board"
-export { TaskGraphStore } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/store"
+export { isTaskEvent } from "../../../../sdk/packages/taskboard/src/task-graph/model"
+export { exportTaskEvents, exportTaskLog } from "../../../../sdk/packages/taskboard/src/task-graph/saved-board"
+export { TaskGraphStore } from "../../../../sdk/packages/taskboard/src/task-graph/store"
 export {
 	boardPlanFromEvents,
 	expandTaskTemplate,
@@ -57,7 +57,7 @@ export {
 	TASK_TEMPLATE_DIR,
 	taskTemplateDirs,
 	templateSlug,
-} from "../../../../sdk/packages/core/src/extensions/tools/task-graph/templates"
+} from "../../../../sdk/packages/taskboard/src/task-graph/templates"
 export { createModelRequestWriter } from "../../../../sdk/packages/core/src/services/llms/model-request-files"
 export {
 	resolveSessionOutputCap,

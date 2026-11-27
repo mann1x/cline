@@ -1,0 +1,41 @@
+{
+	"name": "@cline/taskboard",
+	"version": "0.0.1",
+	"description": "Task board, task graph and pipelines of the Cerebriline SDK, for embedding in another application",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mann1x/cline",
+		"directory": "sdk/packages/taskboard"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"dependencies": {
+		"@cline/shared": "workspace:*"
+	},
+	"keywords": [
+		"agents",
+		"task-graph",
+		"pipelines",
+		"workflow",
+		"llm"
+	],
+	"license": "Apache-2.0",
+	"scripts": {
+		"build": "bun run bun.mts && bun tsc -p tsconfig.build.json",
+		"typecheck": "bun tsc -p tsconfig.dev.json --noEmit",
+		"test": "vitest run"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}

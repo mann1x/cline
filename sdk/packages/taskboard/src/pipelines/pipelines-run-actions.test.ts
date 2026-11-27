@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TaskGraphStore } from "../tools/task-graph/store";
+import { TaskGraphStore } from "../task-graph/store";
 import { foldJournal, PIPELINE_RUNS_DIR, readJournal } from "./journal";
 import type { PipelineDefinition } from "./model";
 import { PipelineSession } from "./session";

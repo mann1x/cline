@@ -2,7 +2,8 @@
 #
 # Upstream publishes the same five SDK packages as `@cline/*`, nightly, from
 # `sdk-publish.yml`, and `@cline/ui` on its own from `ui-publish.yml`; those
-# jobs only run on `cline/cline`. The fork publishes all six here. This is the fork's
+# jobs only run on `cline/cline`. The fork publishes them here, with its own
+# `taskboard` (the task board and pipelines, which core depends on). This is the fork's
 # own: its scope, its version (the release's), and only when a release is
 # tagged. The source keeps upstream's package names and they are renamed on
 # the packed output by `sdk/scripts/pack-cerebriline.mjs`, which explains why.
@@ -126,8 +127,17 @@ jobs:
                     echo "::warning::Only mann1x/cline is a trusted publisher of @cerebriline; skipping the npm publish"
                     exit 0
                   fi
+                  # core requires @cerebriline/taskboard at this exact version. A
+                  # package must exist on npm before it can have a trusted
+                  # publisher, so until its first version was published by hand
+                  # nothing is published: a core whose dependency is missing
+                  # would install for nobody.
+                  if ! npm view "@cerebriline/taskboard" version >/dev/null 2>&1; then
+                    echo "::error::@cerebriline/taskboard is not on npm yet; publish cerebriline-taskboard-$VERSION.tgz by hand once, set its trusted publisher, then re-run this job"
+                    exit 1
+                  fi
                   # Dependency order: each needs the ones before it to exist on npm.
-                  for name in shared llms agents core sdk; do
+                  for name in shared taskboard llms agents core sdk; do
                     if npm view "@cerebriline/$name@$VERSION" version >/dev/null 2>&1; then
                       echo "@cerebriline/$name@$VERSION is already on npm; skipped" | tee -a "$GITHUB_STEP_SUMMARY"
                       continue

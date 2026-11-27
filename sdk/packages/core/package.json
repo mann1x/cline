@@ -64,6 +64,7 @@
 		"@cline/agents": "workspace:*",
 		"@cline/llms": "workspace:*",
 		"@cline/shared": "workspace:*",
+		"@cline/taskboard": "workspace:*",
 		"@joplin/turndown-plugin-gfm": "1.0.68",
 		"@lingo-reader/epub-parser": "0.4.6",
 		"@lingo-reader/fb2-parser": "0.4.6",

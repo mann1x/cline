@@ -42,7 +42,21 @@
  */
 
 import type { AgentTool } from "@cline/shared";
-import { WRITE_CLASS_TOOL_NAMES } from "../../../runtime/safety/loop-detection";
+/**
+ * The tools that change files, by name: Cerebriline's editors and shell
+ * writers. A host whose tools have other names passes its own set as
+ * `writeToolNames`; @cline/core passes its loop detector's list.
+ */
+export const DEFAULT_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"editor",
+	"apply_patch",
+	"sed",
+	"awk",
+	"write_to_file",
+	"new_file",
+	"restore_file",
+]);
+
 import { renderBoard, shortTitle } from "./board";
 import {
 	decideCommitGate,
@@ -114,6 +128,12 @@ export interface TaskGraphTrackerOptions extends TaskGraphStoreOptions {
 	 * templates). The first is where the panel saves one.
 	 */
 	templateDirs?: string[];
+	/**
+	 * The tools that change files, which the board's nudges count (an edit
+	 * under no task, a task left untouched while files change). Default
+	 * {@link DEFAULT_WRITE_TOOL_NAMES}.
+	 */
+	writeToolNames?: ReadonlySet<string>;
 	// `planMode` (from the store options): the plan goes on the board, and
 	// nothing asks for work to be done, started or closed (that is act
 	// mode's, once the person agrees). Fixed for a session; a switch rebuilds it.
@@ -143,9 +163,12 @@ function readEditedPath(input: unknown): string | undefined {
 	return typeof path === "string" && path.trim() ? path.trim() : undefined;
 }
 
-function changesFiles(toolName: string | undefined, input: unknown): boolean {
-	if (toolName === undefined || !WRITE_CLASS_TOOL_NAMES.has(toolName))
-		return false;
+function changesFiles(
+	writeTools: ReadonlySet<string>,
+	toolName: string | undefined,
+	input: unknown,
+): boolean {
+	if (toolName === undefined || !writeTools.has(toolName)) return false;
 	if (toolName === "awk") return false;
 	if (toolName === "sed") {
 		return (
@@ -544,6 +567,7 @@ export class TaskGraphTracker {
 	private readonly planMode: boolean;
 	private readonly cwd: string | undefined;
 	private readonly templateDirs: string[];
+	private readonly writeTools: ReadonlySet<string>;
 	/** The team, once there is one: T1 and T4 speak only then. */
 	private team:
 		| {
@@ -592,6 +616,7 @@ export class TaskGraphTracker {
 		this.onNudge = options.onNudge;
 		this.cwd = options.cwd;
 		this.templateDirs = options.templateDirs ?? [];
+		this.writeTools = options.writeToolNames ?? DEFAULT_WRITE_TOOL_NAMES;
 		this.planMode = this.store.planMode;
 	}
 
@@ -1048,7 +1073,7 @@ export class TaskGraphTracker {
 		this.advanceDrift(
 			input,
 			toolName,
-			changesFiles(toolName, input),
+			changesFiles(this.writeTools, toolName, input),
 			this.queued !== queued,
 		);
 	}
@@ -1111,7 +1136,7 @@ export class TaskGraphTracker {
 
 	private nudgeForCall(input: unknown, toolName: string | undefined): void {
 		const snapshot = this.store.snapshot();
-		const writes = changesFiles(toolName, input);
+		const writes = changesFiles(this.writeTools, toolName, input);
 		if (!writes) {
 			// S1 by call count: planning is cheapest before the first change.
 			// Not in plan mode, where looking is the work: asked at call 4 there,
@@ -1212,7 +1237,11 @@ export class TaskGraphTracker {
 			this.drift.failure = readCommandFailure(toolName, result);
 		}
 		if (reportsFailure(result)) {
-			if (this.drift && changesFiles(toolName, input) && this.drift.writes > 0)
+			if (
+				this.drift &&
+				changesFiles(this.writeTools, toolName, input) &&
+				this.drift.writes > 0
+			)
 				this.drift.writes -= 1;
 			this.retractFailedWrite(input, toolName);
 			return;
@@ -1317,7 +1346,7 @@ export class TaskGraphTracker {
 
 	/** Take back what a call that then failed was counted for. */
 	retractFailedWrite(input: unknown, toolName?: string): void {
-		if (!changesFiles(toolName, input)) return;
+		if (!changesFiles(this.writeTools, toolName, input)) return;
 		if (this.staleFor && this.staleFor.writes > 0) this.staleFor.writes -= 1;
 		const queued = this.queued;
 		if (queued?.from.delete(input) && queued.from.size === 0) {

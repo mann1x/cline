@@ -56,6 +56,9 @@
 				"../../sdk/packages/core/src/*",
 				"../../sdk/packages/core/src/*/index.ts"
 			],
+			"@cline/taskboard": [
+				"../../sdk/packages/taskboard/src/index.ts"
+			],
 			"@cline/llms": [
 				"../../sdk/packages/llms/src/index.ts"
 			],

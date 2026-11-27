@@ -3,7 +3,7 @@
  * Pack the SDK for npm under the fork's own scope, `@cerebriline/*`.
  *
  * The source keeps upstream's names (`@cline/shared`, `ui`, `llms`, `agents`,
- * `core`, `sdk`): they are imported in several hundred files, and renaming
+ * `core`, `sdk`, and the fork's own `taskboard`): they are imported in several hundred files, and renaming
  * them there would turn every upstream merge into a conflict on each of those
  * lines. `@cline` on npm is upstream's, so the fork cannot publish to it. The
  * rename therefore happens here, on the packed output, and nowhere else.
@@ -44,11 +44,13 @@ import { parseArgs } from "node:util";
 const FROM_SCOPE = "@cline";
 const TO_SCOPE = "@cerebriline";
 /**
- * Dependency order: each depends only on the ones before it. `ui` is
- * upstream's React theme and components (`@cline/ui`, which upstream
- * publishes on its own cycle from `ui-publish.yml`); it needs only `shared`.
+ * Dependency order: each depends only on the ones before it. `taskboard` is
+ * the fork's task board and pipelines, which core uses and re-exports; it
+ * needs only `shared`. `ui` is upstream's React theme and components
+ * (`@cline/ui`, which upstream publishes on its own cycle from
+ * `ui-publish.yml`); it needs only `shared`.
  */
-const PACKAGES = ["shared", "ui", "llms", "agents", "core", "sdk"];
+const PACKAGES = ["shared", "taskboard", "ui", "llms", "agents", "core", "sdk"];
 /** The built file that says a package was built, where it is not `dist/index.js`. */
 const ENTRY = { ui: "dist/components/index.js" };
 const REPOSITORY = "https://github.com/mann1x/cline";
@@ -206,7 +208,22 @@ console.log(result.outputText)
 It carries what this fork adds for local and small models: delegated agents
 and swarms, a sandbox per agent, the change protocol and file revisions,
 opencoti and xOllama support, the media tools and the Document Reader.`
-			: upstream
+			: name === "taskboard"
+				? `The task board and pipelines of [Cerebriline](${REPOSITORY}), on their own:
+the conversation's plan as a task graph (dependencies, gates, acceptance, the
+\`task_plan\`, \`task_update\` and \`task_view\` tools) and pipelines (saved,
+approved DAGs of commands, tool calls, checks, waits, approvals and agents, run
+by the \`pipeline\` tool), for an application with its own agent loop.
+
+\`\`\`bash
+npm install ${TO_SCOPE}/taskboard
+\`\`\`
+
+Its only dependency is \`${TO_SCOPE}/shared\`. [\`${TO_SCOPE}/core\`](https://www.npmjs.com/package/${TO_SCOPE}/core)
+uses it and re-exports it, so an application on the full SDK gets the same
+classes. The guides: [task board](${REPOSITORY}/blob/main/docs/features/task-board.mdx),
+[pipelines](${REPOSITORY}/blob/main/docs/features/pipelines.mdx).`
+				: upstream
 				? // Upstream's README leads with its own `# @cline/ui` title.
 					proseOf(upstream)
 						.replace(/^#[^\n]*\n+/, "")

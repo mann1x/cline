@@ -8,7 +8,7 @@
  */
 
 import { type AgentTool, createTool } from "@cline/shared";
-import type { ToolOperationResult } from "../types";
+import type { ToolOperationResult } from "../tool-result";
 import { renderBoard, renderLayers, renderMermaid, renderTask } from "./board";
 import { isBlocked, type Task, waitsOn } from "./model";
 import { normalizeTaskId } from "./readers";

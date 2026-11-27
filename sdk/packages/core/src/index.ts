@@ -1072,6 +1072,63 @@ export {
 	sendTurnWithActModeContinuation,
 	withSwitchToActModeTool,
 } from "@cline/shared";
+// A task log's events, checked one by one (a board read from Memory or a file).
+// The task board read from a conversation's log, for saving a board from a
+// conversation that has no live session (task graph phase 2).
+// A board the person builds before a conversation exists (the Board tab's
+// draft), handed to the next new conversation as its seed.
+// Saved plans (task graph phase 3 templates), listed for the task panel even
+// when no session is running.
+export {
+	approvePipeline,
+	type BoardTaskLike,
+	boardPlanFromEvents,
+	boardToPipeline,
+	createPipelineTool,
+	EXPRESSION_FUNCTIONS,
+	type ExportedTaskBoard,
+	expandTaskTemplate,
+	exportTaskEvents,
+	exportTaskLog,
+	findPipeline,
+	findTaskTemplate,
+	foldJournal,
+	isTaskEvent,
+	listPipelines,
+	listPipelineVersions,
+	loadTaskTemplates,
+	NODE_TYPES,
+	PIPELINE_RUNS_DIR,
+	PIPELINE_TOOL_DESCRIPTION,
+	PIPELINE_TOOL_NAME,
+	PIPELINES_DIR,
+	type PipelineActOutcome,
+	type PipelineDefinition,
+	type PipelineFile,
+	type PipelineHost,
+	PipelineRun,
+	type PipelineRunAction,
+	type PipelineRunOptions,
+	type PipelineRunResult,
+	PipelineSession,
+	type PipelineVersion,
+	pipelineHash,
+	pipelineSlug,
+	pipelineToTemplate,
+	RUNNABLE_NODE_TYPES,
+	readJournal,
+	readPipelineVersion,
+	rejectPipeline,
+	savePipeline,
+	saveTaskTemplate,
+	TASK_TEMPLATE_DIR,
+	type TaskEvent,
+	TaskGraphStore,
+	type TaskTemplate,
+	taskTemplateDirs,
+	templateSlug,
+	validatePipeline,
+} from "@cline/taskboard";
 export {
 	type BrowserEngine,
 	browserCandidatePaths,
@@ -1233,41 +1290,6 @@ export {
 	repairHtmlServerTypescript,
 	workspaceLanguages,
 } from "./extensions/lsp/lsp-host";
-export {
-	approvePipeline,
-	type BoardTaskLike,
-	boardToPipeline,
-	createPipelineTool,
-	EXPRESSION_FUNCTIONS,
-	findPipeline,
-	foldJournal,
-	listPipelines,
-	listPipelineVersions,
-	NODE_TYPES,
-	PIPELINE_RUNS_DIR,
-	PIPELINE_TOOL_DESCRIPTION,
-	PIPELINE_TOOL_NAME,
-	PIPELINES_DIR,
-	type PipelineActOutcome,
-	type PipelineDefinition,
-	type PipelineFile,
-	type PipelineHost,
-	PipelineRun,
-	type PipelineRunAction,
-	type PipelineRunOptions,
-	type PipelineRunResult,
-	PipelineSession,
-	type PipelineVersion,
-	pipelineHash,
-	pipelineSlug,
-	pipelineToTemplate,
-	RUNNABLE_NODE_TYPES,
-	readJournal,
-	readPipelineVersion,
-	rejectPipeline,
-	savePipeline,
-	validatePipeline,
-} from "./extensions/pipelines";
 export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,
@@ -1652,34 +1674,6 @@ export {
 	type SddAction,
 	type SddToolOptions,
 } from "./extensions/tools/sdd-tool";
-// A task log's events, checked one by one (a board read from Memory or a file).
-export {
-	isTaskEvent,
-	type TaskEvent,
-} from "./extensions/tools/task-graph/model";
-// The task board read from a conversation's log, for saving a board from a
-// conversation that has no live session (task graph phase 2).
-export {
-	type ExportedTaskBoard,
-	exportTaskEvents,
-	exportTaskLog,
-} from "./extensions/tools/task-graph/saved-board";
-// A board the person builds before a conversation exists (the Board tab's
-// draft), handed to the next new conversation as its seed.
-export { TaskGraphStore } from "./extensions/tools/task-graph/store";
-// Saved plans (task graph phase 3 templates), listed for the task panel even
-// when no session is running.
-export {
-	boardPlanFromEvents,
-	expandTaskTemplate,
-	findTaskTemplate,
-	loadTaskTemplates,
-	saveTaskTemplate,
-	TASK_TEMPLATE_DIR,
-	type TaskTemplate,
-	taskTemplateDirs,
-	templateSlug,
-} from "./extensions/tools/task-graph/templates";
 export {
 	type AgentFileFields,
 	agentFileName,

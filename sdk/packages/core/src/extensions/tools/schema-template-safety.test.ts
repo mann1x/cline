@@ -1,7 +1,7 @@
 import { listTypesOnItems } from "@cline/shared";
+import { TaskGraphTracker } from "@cline/taskboard";
 import { describe, expect, it } from "vitest";
 import { createBuiltinTools } from "./index";
-import { TaskGraphTracker } from "./task-graph/tracker";
 
 // The shape, and why it matters: @cline/shared tools/template-safe-schema.ts
 // (a list `type` on an array's `items` node fails Gemma 4's canonical

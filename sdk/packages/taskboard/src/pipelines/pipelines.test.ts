@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TaskGraphStore } from "../tools/task-graph/store";
+import { TaskGraphStore } from "../task-graph/store";
 import { fill, fillString, parseExpression, test as truth } from "./expr";
 import { foldJournal, readJournal } from "./journal";
 import type { PipelineDefinition } from "./model";

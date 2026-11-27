@@ -21,11 +21,11 @@ import type {
 	TeamTaskListItem,
 	TeamTaskStatus,
 } from "@cline/shared";
-import type { TeamTaskBoard } from "../team/multi-agent";
 import { shortTitle } from "./board";
 import { taskEventTargets } from "./model";
 import { normalizeTaskId } from "./readers";
 import type { TaskGraphSnapshot, TaskGraphStore, TaskSnapshot } from "./store";
+import type { TeamTaskBoard } from "./team-types";
 
 const STATUS: Record<TaskSnapshot["status"], TeamTaskStatus> = {
 	pending: "pending",

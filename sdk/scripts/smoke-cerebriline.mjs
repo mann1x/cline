@@ -26,7 +26,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-const PACKAGES = ["shared", "llms", "agents", "core", "sdk"];
+const PACKAGES = ["shared", "taskboard", "llms", "agents", "core", "sdk"];
 const { values } = parseArgs({
 	options: { dir: { type: "string" }, work: { type: "string" } },
 	strict: true,
@@ -35,7 +35,7 @@ if (!values.dir) {
 	console.error("smoke-cerebriline: --dir <directory of tarballs> is required");
 	process.exit(1);
 }
-// Node loads these five; `ui` is React components and has its own check
+// Node loads these six; `ui` is React components and has its own check
 // (`smoke-cerebriline-ui.mjs`).
 const tarballs = readdirSync(resolve(values.dir))
 	.filter(

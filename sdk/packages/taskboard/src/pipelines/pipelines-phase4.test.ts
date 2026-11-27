@@ -10,7 +10,7 @@ import {
 	expandTaskTemplate,
 	readTaskTemplate,
 	saveTaskTemplate,
-} from "../tools/task-graph/templates";
+} from "../task-graph/templates";
 import {
 	acceptanceCommand,
 	boardToPipeline,

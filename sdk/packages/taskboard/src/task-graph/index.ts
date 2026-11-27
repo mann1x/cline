@@ -19,6 +19,7 @@ export {
 	foldTaskEvents,
 	isBlocked,
 	isReady,
+	isTaskEvent,
 	readyTasks,
 	type Task,
 	type TaskEvent,
@@ -47,20 +48,25 @@ export {
 	toolCallsInHistory,
 } from "./store";
 export { createGraphTeamBoard } from "./team-board";
+export type { TeamTaskBoard } from "./team-types";
 export {
+	boardPlanFromEvents,
 	boardToTemplate,
 	expandTaskTemplate,
+	findTaskTemplate,
 	loadTaskTemplates,
 	saveTaskTemplate,
 	TASK_TEMPLATE_DIR,
 	type TaskTemplate,
 	taskTemplateDirs,
+	templateSlug,
 } from "./templates";
-export { createTaskGraphTools } from "./tools";
+export { createTaskGraphTools, TEAM_PLAN_SENTENCE } from "./tools";
 export {
 	buildTaskBoardRules,
 	buildTaskGraphCloseOutNudge,
 	buildTaskGraphUntrackedNudge,
+	DEFAULT_WRITE_TOOL_NAMES,
 	TASK_BOARD_RULES_HEADING,
 	type TaskGraphEdit,
 	type TaskGraphEditOutcome,

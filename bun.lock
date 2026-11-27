@@ -364,7 +364,7 @@
     },
     "apps/vscode": {
       "name": "cerebriline",
-      "version": "4.100.302",
+      "version": "4.100.313",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.37.0",
         "@bufbuild/protobuf": "^2.2.5",
@@ -660,6 +660,7 @@
         "@cline/agents": "workspace:*",
         "@cline/llms": "workspace:*",
         "@cline/shared": "workspace:*",
+        "@cline/taskboard": "workspace:*",
         "@joplin/turndown-plugin-gfm": "1.0.68",
         "@lingo-reader/epub-parser": "0.4.6",
         "@lingo-reader/fb2-parser": "0.4.6",
@@ -773,6 +774,13 @@
         "jsonrepair": "^3.13.2",
         "zod": "^4.6.6",
         "zod-to-json-schema": "^3.25.1",
+      },
+    },
+    "sdk/packages/taskboard": {
+      "name": "@cline/taskboard",
+      "version": "0.0.1",
+      "dependencies": {
+        "@cline/shared": "workspace:*",
       },
     },
     "sdk/packages/ui": {
@@ -1143,6 +1151,8 @@
     "@cline/sdk": ["@cline/sdk@workspace:sdk/packages/sdk"],
 
     "@cline/shared": ["@cline/shared@workspace:sdk/packages/shared"],
+
+    "@cline/taskboard": ["@cline/taskboard@workspace:sdk/packages/taskboard"],
 
     "@cline/ui": ["@cline/ui@workspace:sdk/packages/ui"],
 

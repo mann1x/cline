@@ -9,10 +9,10 @@ import {
 	validatePromptTemplate,
 	YOLO_CLINE_SYSTEM_PROMPT,
 } from "@cline/shared";
+import { TaskGraphTracker } from "@cline/taskboard";
 import { describe, expect, it } from "vitest";
 import { createSessionRevisions } from "../../runtime/atomic/session-revisions";
 import { createDefaultTools } from "../tools/definitions";
-import { TaskGraphTracker } from "../tools/task-graph/tracker";
 import { parsePromptTemplate } from "./prompt-template-parser";
 import {
 	COMPUTED_TOOL_NAMES,

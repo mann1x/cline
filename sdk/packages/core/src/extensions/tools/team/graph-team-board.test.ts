@@ -1,9 +1,11 @@
+import {
+	createGraphTeamBoard,
+	TaskGraphStore,
+	TaskGraphTracker,
+	TEAM_PLAN_SENTENCE,
+} from "@cline/taskboard";
 import { describe, expect, it } from "vitest";
-import { AgentTeamsRuntime } from "../team/multi-agent";
-import { TaskGraphStore } from "./store";
-import { createGraphTeamBoard } from "./team-board";
-import { TEAM_PLAN_SENTENCE } from "./tools";
-import { TaskGraphTracker } from "./tracker";
+import { AgentTeamsRuntime } from "./multi-agent";
 
 function setup() {
 	const store = new TaskGraphStore();

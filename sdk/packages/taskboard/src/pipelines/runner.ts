@@ -19,10 +19,9 @@
  */
 
 import { join } from "node:path";
-import { isClosed } from "../tools/task-graph/model";
-import type { TaskGraphStore } from "../tools/task-graph/store";
-import { TaskGraphStore as Board } from "../tools/task-graph/store";
-import { buildConfiguredAgentToolName } from "../tools/team/configured-agent-tool";
+import { isClosed } from "../task-graph/model";
+import type { TaskGraphStore } from "../task-graph/store";
+import { TaskGraphStore as Board } from "../task-graph/store";
 import { type ExpressionScope, fill, fillString, test } from "./expr";
 import {
 	appendJournal,
@@ -112,6 +111,12 @@ export interface PipelineHost {
 		request: HttpRequest,
 		context: NodeContext,
 	): Promise<{ status: number; headers: Record<string, string>; body: string }>;
+	/**
+	 * The tool a configured agent named in an `agent` step is offered as.
+	 * Default `subagent_<name>`; @cline/core passes its own naming (which
+	 * also shortens and hashes long names).
+	 */
+	agentToolName?(agent: string): string;
 	/** Runs another workspace pipeline to its end. */
 	runPipeline?(
 		name: string,
@@ -1160,7 +1165,8 @@ export class PipelineRun {
 				const result = await raced(
 					agent.agent
 						? this.options.host.callTool(
-								configuredAgentTool(agent.agent),
+								this.options.host.agentToolName?.(agent.agent) ??
+									`subagent_${agent.agent}`,
 								{ prompt: task, wait: true },
 								context,
 							)
@@ -1446,11 +1452,6 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
 		};
 		signal.addEventListener("abort", onAbort, { once: true });
 	});
-}
-
-/** The tool a configured agent is offered as (`subagent_<name>`). */
-function configuredAgentTool(name: string): string {
-	return buildConfiguredAgentToolName(name);
 }
 
 /** The answer's text: a report's `text`, or the whole result as JSON. */

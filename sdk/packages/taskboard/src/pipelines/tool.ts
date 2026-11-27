@@ -6,7 +6,7 @@
  */
 
 import { type AgentTool, createTool } from "@cline/shared";
-import type { ToolOperationResult } from "../tools/types";
+import type { ToolOperationResult } from "../tool-result";
 import { EXPRESSION_FUNCTIONS } from "./expr";
 import { foldJournal, readJournal } from "./journal";
 import {

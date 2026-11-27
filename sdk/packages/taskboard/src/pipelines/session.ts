@@ -34,9 +34,9 @@ import {
 	decideCommitGate,
 	decideGitHubGate,
 	decideTimerGate,
-} from "../tools/task-graph/gates";
-import { isClosed, parseGate } from "../tools/task-graph/model";
-import type { TaskGraphStore } from "../tools/task-graph/store";
+} from "../task-graph/gates";
+import { isClosed, parseGate } from "../task-graph/model";
+import type { TaskGraphStore } from "../task-graph/store";
 import {
 	appendJournal,
 	foldJournal,
@@ -92,6 +92,8 @@ export interface PipelineSessionOptions {
 	/** How often a board gate, a commit or GitHub is looked at (ms). */
 	pollMs?: number;
 	log?: (line: string) => void;
+	/** The tool a configured agent is offered as (PipelineHost.agentToolName). */
+	agentToolName?: (agent: string) => string;
 	/** How the person approves `slug` in this host (CorePipelinesConfig.approveHow). */
 	approveHow?: (slug: string) => string;
 	/** Each run's journal events, for the host (the panel, the viewer). */
@@ -192,6 +194,9 @@ export class PipelineSession {
 			http: (request, context) => this.http(request, context),
 			runPipeline: (name, inputs, context) =>
 				this.runPipeline(name, inputs, context),
+			...(options.agentToolName
+				? { agentToolName: options.agentToolName }
+				: {}),
 		};
 	}
 

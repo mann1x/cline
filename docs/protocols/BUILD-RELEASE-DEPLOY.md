@@ -428,9 +428,10 @@ enough. This is a decision rather than a constraint — since the rename to
 
 ## The SDK on npm: `@cerebriline/*`
 
-The five SDK packages (`shared`, `llms`, `agents`, `core`, `sdk`) and the UI
-package (`ui`: upstream's React theme and components, `@cline/ui`) are
-published to npm under the fork's scope, **one version per Cerebriline
+The five SDK packages (`shared`, `llms`, `agents`, `core`, `sdk`), the fork's
+`taskboard` (the task board and pipelines, which core depends on and
+re-exports) and the UI package (`ui`: upstream's React theme and components,
+`@cline/ui`) are published to npm under the fork's scope, **one version per Cerebriline
 release, with the release's number**. Not nightly: between releases `main`
 carries test builds. Upstream publishes `@cline/ui` on its own cycle
 (`ui-publish.yml`); the fork publishes it with the rest.
@@ -458,8 +459,12 @@ publishing (GitHub OIDC). Each of the five packages names this workflow as its
 trusted publisher on npmjs.com (package → Settings → Trusted Publisher →
 GitHub Actions: `mann1x` / `cline` / `cerebriline-sdk-publish.yml`). A package
 must exist before it can be given one, so the first version of each was
-published by hand. Until `@cerebriline/ui` exists on npm the job skips it with
-a warning; publish one release's `cerebriline-ui-<version>.tgz` by hand once,
+published by hand. **`@cerebriline/taskboard` must be on npm before the first
+release whose core needs it:** core requires it at the same version, so the job
+refuses to publish anything while it is missing. Pack the release locally,
+publish `cerebriline-taskboard-<version>.tgz` by hand, set its trusted
+publisher, then tag (the job skips the version already there). Until
+`@cerebriline/ui` exists on npm the job skips it with a warning; publish one release's `cerebriline-ui-<version>.tgz` by hand once,
 then set its trusted publisher. To publish for an existing tag, or to rehearse:
 
 ```bash
