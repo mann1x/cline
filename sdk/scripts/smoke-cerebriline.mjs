@@ -35,8 +35,14 @@ if (!values.dir) {
 	console.error("smoke-cerebriline: --dir <directory of tarballs> is required");
 	process.exit(1);
 }
+// Node loads these five; `ui` is React components and has its own check
+// (`smoke-cerebriline-ui.mjs`).
 const tarballs = readdirSync(resolve(values.dir))
-	.filter((name) => name.endsWith(".tgz"))
+	.filter(
+		(name) =>
+			name.endsWith(".tgz") &&
+			PACKAGES.some((pkg) => name.startsWith(`cerebriline-${pkg}-`)),
+	)
 	.map((name) => join(resolve(values.dir), name));
 if (tarballs.length !== PACKAGES.length) {
 	console.error(

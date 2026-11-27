@@ -12,7 +12,7 @@
  * defensive; a malformed payload degrades to a generic label, never a throw.
  */
 
-import { AGENT_CONTROL_TOOL_NAMES, agentControlLabel } from "./agents";
+import { AGENT_CONTROL_TOOL_NAMES, agentControlLabel } from "./agents.js";
 import { countDiffLines, makeUnifiedDiff } from "./diff.js";
 import {
 	extractOutputMedia,

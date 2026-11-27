@@ -1,7 +1,8 @@
 # Publish the SDK to npm as `@cerebriline/*`, once per Cerebriline release.
 #
-# Upstream publishes the same five packages as `@cline/*`, nightly, from
-# `sdk-publish.yml`; that job only runs on `cline/cline`. This is the fork's
+# Upstream publishes the same five SDK packages as `@cline/*`, nightly, from
+# `sdk-publish.yml`, and `@cline/ui` on its own from `ui-publish.yml`; those
+# jobs only run on `cline/cline`. The fork publishes all six here. This is the fork's
 # own: its scope, its version (the release's), and only when a release is
 # tagged. The source keeps upstream's package names and they are renamed on
 # the packed output by `sdk/scripts/pack-cerebriline.mjs`, which explains why.
@@ -9,7 +10,9 @@
 # Order of work: build, pack, install the tarballs into an empty project and
 # load them (`smoke-cerebriline.mjs`), and only then publish, in dependency
 # order. A version that is already on npm is skipped, so a run that stopped
-# halfway can simply be run again.
+# halfway can simply be run again. `ui` goes last: nothing else needs it, and
+# until its first version exists on npm (published by hand, see below) it is
+# skipped with a warning rather than failing the release.
 #
 # No npm token is stored anywhere. Publishing uses npm's trusted publishing:
 # this job proves to npm, through GitHub's OIDC token, that it is this
@@ -20,7 +23,8 @@
 #   repository            cline
 #   workflow filename     cerebriline-sdk-publish.yml
 # A package has to exist before it can be given a trusted publisher, so the
-# very first version of each of the five was published by hand.
+# very first version of each was published by hand (the five SDK packages at
+# 4.100.240; `ui` from a release's packed tarball, then its trusted publisher).
 
 name: Cerebriline SDK Publish
 
@@ -95,6 +99,9 @@ jobs:
             - name: Install the tarballs and load them
               run: node sdk/scripts/smoke-cerebriline.mjs --dir "$RUNNER_TEMP/cerebriline-sdk"
 
+            - name: Check the UI package as upstream checks it
+              run: node sdk/scripts/smoke-cerebriline-ui.mjs --dir "$RUNNER_TEMP/cerebriline-sdk" --work "$RUNNER_TEMP/cerebriline-ui-smoke"
+
             - name: Check the tooling for trusted publishing
               if: github.event.inputs.dry_run != 'true'
               run: |
@@ -128,3 +135,14 @@ jobs:
                     npm publish "$RUNNER_TEMP/cerebriline-sdk/cerebriline-$name-$VERSION.tgz" --access public
                     echo "Published @cerebriline/$name@$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
                   done
+                  # The UI package: last, and only once it exists on npm, since a
+                  # trusted publisher can only be set on a package that exists.
+                  if ! npm view "@cerebriline/ui" version >/dev/null 2>&1; then
+                    echo "::warning::@cerebriline/ui is not on npm yet; publish cerebriline-ui-$VERSION.tgz by hand once and set its trusted publisher"
+                    echo "@cerebriline/ui skipped: first version not published yet" >> "$GITHUB_STEP_SUMMARY"
+                  elif npm view "@cerebriline/ui@$VERSION" version >/dev/null 2>&1; then
+                    echo "@cerebriline/ui@$VERSION is already on npm; skipped" | tee -a "$GITHUB_STEP_SUMMARY"
+                  else
+                    npm publish "$RUNNER_TEMP/cerebriline-sdk/cerebriline-ui-$VERSION.tgz" --access public
+                    echo "Published @cerebriline/ui@$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
+                  fi

@@ -2,7 +2,7 @@
 /**
  * Pack the SDK for npm under the fork's own scope, `@cerebriline/*`.
  *
- * The source keeps upstream's names (`@cline/shared`, `llms`, `agents`,
+ * The source keeps upstream's names (`@cline/shared`, `ui`, `llms`, `agents`,
  * `core`, `sdk`): they are imported in several hundred files, and renaming
  * them there would turn every upstream merge into a conflict on each of those
  * lines. `@cline` on npm is upstream's, so the fork cannot publish to it. The
@@ -12,8 +12,9 @@
  *   1. `bun pm pack` -- upstream's own packing, so `files` and the
  *      `workspace:*` ranges are handled the way upstream's publish handles them;
  *   2. unpack, and rewrite: the manifest's name, version, links and its
- *      dependencies on the other four; every module specifier and
- *      package-name string in the built `.js` and `.d.ts`;
+ *      dependencies on the others; every module specifier and package-name
+ *      string in the built `.js` and `.d.ts`, and in the sources and
+ *      stylesheets `ui` ships (`.ts`, `.tsx`, `.css`);
  *   3. add the licence and a README, and `npm pack` the result.
  *
  * Nothing is published. The tarballs land in `--out`; publishing is
@@ -42,12 +43,24 @@ import { parseArgs } from "node:util";
 
 const FROM_SCOPE = "@cline";
 const TO_SCOPE = "@cerebriline";
-/** Dependency order: each depends only on the ones before it. */
-const PACKAGES = ["shared", "llms", "agents", "core", "sdk"];
+/**
+ * Dependency order: each depends only on the ones before it. `ui` is
+ * upstream's React theme and components (`@cline/ui`, which upstream
+ * publishes on its own cycle from `ui-publish.yml`); it needs only `shared`.
+ */
+const PACKAGES = ["shared", "ui", "llms", "agents", "core", "sdk"];
+/** The built file that says a package was built, where it is not `dist/index.js`. */
+const ENTRY = { ui: "dist/components/index.js" };
 const REPOSITORY = "https://github.com/mann1x/cline";
 const HOMEPAGE = "https://github.com/mann1x/cline/tree/main/sdk";
-/** Text that can name a package: code, declarations, manifests. Not source maps. */
-const REWRITTEN = /\.(?:[cm]?js|d\.[cm]?ts|json)$/;
+/**
+ * Text that can name a package: code, declarations, manifests, and the
+ * sources and stylesheets `ui` ships (its CSS `@import`s `@cline/ui/theme/…`).
+ * Not source maps.
+ */
+const REWRITTEN = /\.(?:[cm]?[jt]sx?|json|css)$/;
+/** Markdown a package ships whose prose names the old scope (`ui`'s guides). */
+const PROSE = ["README.md", "ADOPTION.md"];
 
 const sdkRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(sdkRoot, "..");
@@ -73,6 +86,14 @@ const PATCHED = Object.keys(
  * lacks. The first session of a fresh install of 4.100.250 threw.
  */
 const EXACT = ["zod"];
+
+/**
+ * Patched dependencies a package keeps as a dependency instead of bundling.
+ * `ui` is plain `tsc` output, nothing is bundled, and upstream publishes it the
+ * same way: `@shadcn/react@0.3.1` stays a dependency and the README tells
+ * consumers to apply `patches/@shadcn%2Freact@0.3.1.patch` themselves.
+ */
+const KEEP_PATCHED = { ui: ["@shadcn/react"] };
 
 function installedVersion(packageDir, dependency) {
 	const entry = createRequire(join(packageDir, "package.json")).resolve(
@@ -149,7 +170,15 @@ function walk(directory, visit) {
 	}
 }
 
-function readme(name, description) {
+/** Upstream's own guide, with the scope renamed, for a package that has one. */
+function proseOf(text) {
+	return text.replace(
+		new RegExp(`${FROM_SCOPE}/(${PACKAGES.join("|")})\\b`, "g"),
+		`${TO_SCOPE}/$1`,
+	);
+}
+
+function readme(name, description, upstream) {
 	const install = `npm install ${TO_SCOPE}/sdk`;
 	const body =
 		name === "sdk"
@@ -177,7 +206,12 @@ console.log(result.outputText)
 It carries what this fork adds for local and small models: delegated agents
 and swarms, a sandbox per agent, the change protocol and file revisions,
 opencoti and xOllama support, the media tools and the Document Reader.`
-			: `${description ?? "Part of the Cerebriline SDK."}
+			: upstream
+				? // Upstream's README leads with its own `# @cline/ui` title.
+					proseOf(upstream)
+						.replace(/^#[^\n]*\n+/, "")
+						.trimEnd()
+				: `${description ?? "Part of the Cerebriline SDK."}
 
 Installed as a dependency of [\`${TO_SCOPE}/sdk\`](https://www.npmjs.com/package/${TO_SCOPE}/sdk);
 start there unless you need this layer on its own.`;
@@ -199,15 +233,19 @@ Needs Node 22 or newer. Apache-2.0, as upstream.
 
 function packOne(name) {
 	const packageDir = join(sdkRoot, "packages", name);
-	if (!existsSync(join(packageDir, "dist", "index.js"))) {
-		fail(`${name} has no dist/index.js; run \`bun run build:sdk\` first`);
+	const entry = ENTRY[name] ?? "dist/index.js";
+	if (!existsSync(join(packageDir, entry))) {
+		fail(`${name} has no ${entry}; run \`bun run build:sdk\` first`);
 	}
+	const keptPatched = KEEP_PATCHED[name] ?? [];
 
 	const rawDir = join(stageRoot, "raw");
 	mkdirSync(rawDir, { recursive: true });
 	const packed = run(
 		"bun",
-		["pm", "pack", "--destination", rawDir, "--quiet"],
+		// `--ignore-scripts`: `ui`'s `prepack` builds it, and this packs `dist`
+		// as `build:sdk` left it.
+		["pm", "pack", "--ignore-scripts", "--destination", rawDir, "--quiet"],
 		packageDir,
 	)
 		.trim()
@@ -239,6 +277,8 @@ function packOne(name) {
 	manifest.publishConfig = { access: "public" };
 	delete manifest.scripts;
 	delete manifest.devDependencies;
+	// Upstream's own marker for its release tooling.
+	delete manifest.internal;
 	for (const field of [
 		"dependencies",
 		"peerDependencies",
@@ -247,7 +287,7 @@ function packOne(name) {
 		const deps = manifest[field];
 		if (!deps) continue;
 		for (const dependency of Object.keys(deps)) {
-			if (PATCHED.includes(dependency)) {
+			if (PATCHED.includes(dependency) && !keptPatched.includes(dependency)) {
 				delete deps[dependency];
 				continue;
 			}
@@ -260,7 +300,7 @@ function packOne(name) {
 			);
 			if (!sibling) continue;
 			delete deps[dependency];
-			// Exact: the five are built and tested as one set.
+			// Exact: the packages are built and tested as one set.
 			deps[`${TO_SCOPE}/${sibling}`] = version;
 		}
 	}
@@ -278,10 +318,13 @@ function packOne(name) {
 		}
 	});
 
-	const importsPatched = new RegExp(
-		`(?:from\\s*|import\\s*\\(\\s*|require\\s*\\(\\s*)["'](${PATCHED.map((dependency) => dependency.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|")})["'/]`,
+	const bundled = PATCHED.filter(
+		(dependency) => !keptPatched.includes(dependency),
 	);
-	if (PATCHED.length > 0) {
+	const importsPatched = new RegExp(
+		`(?:from\\s*|import\\s*\\(\\s*|require\\s*\\(\\s*)["'](${bundled.map((dependency) => dependency.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|")})["'/]`,
+	);
+	if (bundled.length > 0) {
 		walk(stage, (path) => {
 			if (!/\.[cm]?js$/.test(path)) return;
 			const found = readFileSync(path, "utf8").match(importsPatched);
@@ -294,7 +337,18 @@ function packOne(name) {
 	}
 
 	cpSync(join(repoRoot, "LICENSE"), join(stage, "LICENSE"));
-	writeFileSync(join(stage, "README.md"), readme(name, description));
+	const upstreamReadme = join(stage, "README.md");
+	const upstream =
+		name === "ui" && existsSync(upstreamReadme)
+			? readFileSync(upstreamReadme, "utf8")
+			: undefined;
+	for (const guide of PROSE) {
+		const path = join(stage, guide);
+		if (guide !== "README.md" && existsSync(path)) {
+			writeFileSync(path, proseOf(readFileSync(path, "utf8")));
+		}
+	}
+	writeFileSync(join(stage, "README.md"), readme(name, description, upstream));
 
 	// What is left of the old scope, for the reader of the log to judge.
 	const left = new Map();

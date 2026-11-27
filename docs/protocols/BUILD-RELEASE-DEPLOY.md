@@ -428,9 +428,12 @@ enough. This is a decision rather than a constraint — since the rename to
 
 ## The SDK on npm: `@cerebriline/*`
 
-The five SDK packages (`shared`, `llms`, `agents`, `core`, `sdk`) are published
-to npm under the fork's scope, **one version per Cerebriline release, with the
-release's number**. Not nightly: between releases `main` carries test builds.
+The five SDK packages (`shared`, `llms`, `agents`, `core`, `sdk`) and the UI
+package (`ui`: upstream's React theme and components, `@cline/ui`) are
+published to npm under the fork's scope, **one version per Cerebriline
+release, with the release's number**. Not nightly: between releases `main`
+carries test builds. Upstream publishes `@cline/ui` on its own cycle
+(`ui-publish.yml`); the fork publishes it with the rest.
 
 The source keeps upstream's names (`@cline/*`), which are imported in several
 hundred files; renaming them there would make every upstream merge conflict.
@@ -440,15 +443,24 @@ hundred files; renaming them there would make every upstream merge conflict.
 bun run build:sdk
 node sdk/scripts/pack-cerebriline.mjs --version 4.100.240 --out <dir on a real disk>
 node sdk/scripts/smoke-cerebriline.mjs --dir <that dir>      # installs the tarballs in an empty project and loads them
+node sdk/scripts/smoke-cerebriline-ui.mjs --dir <that dir> --work <dir on a real disk>   # upstream's ui smoke, renamed
 ```
 
+`ui` is plain `tsc` output, not bundled: `@shadcn/react@0.3.1` stays a
+dependency (consumers apply `patches/@shadcn%2Freact@0.3.1.patch`, as upstream
+documents), and its relative imports need `.js` extensions or Node consumers
+fail to load it, which the UI smoke catches (`tool-summary/agents` did, before
+the first publish). Its README and ADOPTION guide are upstream's, renamed.
+
 `cerebriline-sdk-publish.yml` runs those on every `v*` tag and then publishes
-in dependency order. **No npm token is stored**: the job uses npm's trusted
+in dependency order, `ui` last. **No npm token is stored**: the job uses npm's trusted
 publishing (GitHub OIDC). Each of the five packages names this workflow as its
 trusted publisher on npmjs.com (package → Settings → Trusted Publisher →
 GitHub Actions: `mann1x` / `cline` / `cerebriline-sdk-publish.yml`). A package
 must exist before it can be given one, so the first version of each was
-published by hand. To publish for an existing tag, or to rehearse:
+published by hand. Until `@cerebriline/ui` exists on npm the job skips it with
+a warning; publish one release's `cerebriline-ui-<version>.tgz` by hand once,
+then set its trusted publisher. To publish for an existing tag, or to rehearse:
 
 ```bash
 gh workflow run cerebriline-sdk-publish.yml --repo mann1x/cline -f tag=v4.100.240 -f dry_run=true
