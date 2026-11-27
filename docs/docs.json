@@ -250,6 +250,7 @@
 							"sdk/guides/building-an-agent",
 							"sdk/guides/permission-handling",
 							"sdk/guides/multi-agent-teams",
+							"sdk/guides/embedding-the-task-board",
 							"sdk/guides/going-to-production"
 						]
 					},

@@ -48,6 +48,7 @@ Requires Node.js 22+.
 |---------|-------------|----------|
 | [desktop-app](./desktop-app) | Full Tauri + Next.js desktop app for running and inspecting chat sessions. | Sidecar runtime, websocket transport, session persistence |
 | [menubar](./menubar) | macOS menu bar app with Tauri. | Native app integration, compact UI |
+| [taskboard-web](./taskboard-web) | An agent with Cerebriline's task board, pipelines and Board tab in a web page: the board plans the work, you change it while the agent works. | `attachTaskBoard`, `createBoardBackend`, `sessionBoardSlots`, `BoardViewer` transport, WebSocket |
 | [vscode](./vscode) | VS Code extension with chat panel. | Extension API, webview, workspace context |
 
 ## SDK packages

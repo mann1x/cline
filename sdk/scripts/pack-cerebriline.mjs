@@ -245,8 +245,13 @@ npm install ${TO_SCOPE}/taskboard
 
 Its only dependency is \`${TO_SCOPE}/shared\`. [\`${TO_SCOPE}/core\`](https://www.npmjs.com/package/${TO_SCOPE}/core)
 uses it and re-exports it, so an application on the full SDK gets the same
-classes. The guides: [task board](${REPOSITORY}/blob/main/docs/features/task-board.mdx),
-[pipelines](${REPOSITORY}/blob/main/docs/features/pipelines.mdx).`
+classes. It also answers the Board tab of [\`${TO_SCOPE}/ui\`](https://www.npmjs.com/package/${TO_SCOPE}/ui)
+(\`createBoardBackend\`, \`sessionBoardSlots\`), so an application can show the
+board, pipelines and runs in its own window. The guides:
+[embedding the task board](${REPOSITORY}/blob/main/docs/sdk/guides/embedding-the-task-board.mdx),
+[task board](${REPOSITORY}/blob/main/docs/features/task-board.mdx),
+[pipelines](${REPOSITORY}/blob/main/docs/features/pipelines.mdx). A whole example:
+[\`apps/examples/taskboard-web\`](${REPOSITORY}/tree/main/apps/examples/taskboard-web).`
 				: upstream
 					? // Upstream's README leads with its own `# @cline/ui` title.
 						`${proseOf(upstream)

@@ -51,6 +51,11 @@ export {
 	tasksFromBoardFile,
 } from "./viewer/io";
 export {
+	SESSION_BOARD_LOG_SUFFIX,
+	type SessionBoardSlotsOptions,
+	sessionBoardSlots,
+} from "./viewer/session-slots";
+export {
 	type BoardRef,
 	BoardSlots,
 	type BoardSlotsDeps,

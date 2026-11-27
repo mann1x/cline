@@ -422,6 +422,15 @@ export class TaskGraphStore {
 	}
 
 	/**
+	 * The events a conversation's log holds, read and never written: another
+	 * conversation's board, to view, copy or save. Torn and foreign lines are
+	 * left out; no log reads as none.
+	 */
+	static readEvents(logPath: string): unknown[] {
+		return new TaskGraphStore({ logPath }).readLog();
+	}
+
+	/**
 	 * The board some events make, as the task panel's row carries it: a draft,
 	 * a board saved in Memory, another conversation's log. Undefined when they
 	 * make no tasks.

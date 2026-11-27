@@ -1,0 +1,16 @@
+{
+	"extends": "../../tsconfig.apps.json",
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"jsx": "react-jsx",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"types": ["bun"],
+		"noEmit": true,
+		"strict": true,
+		"skipLibCheck": true,
+		"esModuleInterop": true
+	},
+	"include": ["server", "shared", "web", "vite.config.ts"]
+}

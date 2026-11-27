@@ -1,0 +1,207 @@
+---
+title: "Embedding the task board"
+sidebarTitle: "Embedding the task board"
+description: "Give your own agent loop Cerebriline's task board and pipelines, and show the Board tab in your own application."
+---
+
+Cerebriline's [task board](/features/task-board), [pipelines](/features/pipelines) and [Board tab](/features/board-tab) are published as packages of their own, so an application with its own agent loop gets the same behaviour as the VS Code extension:
+
+| Package | What it gives you | Depends on |
+|---|---|---|
+| `@cerebriline/taskboard` | The board and pipelines for an agent loop (`attachTaskBoard`), and the Board tab's server side (`createBoardBackend`, `sessionBoardSlots`) | `@cerebriline/shared` |
+| `@cerebriline/ui` | The Board tab as a React component (`@cerebriline/ui/components/board-viewer`) | `@cerebriline/taskboard`; peers `react`, `@xyflow/react`, `@dagrejs/dagre` |
+| `@cerebriline/agents` | An agent loop, if you do not have one | `@cerebriline/llms` |
+
+A working whole is in the repository: [`apps/examples/taskboard-web`](https://github.com/mann1x/cline/tree/main/apps/examples/taskboard-web), an agent with the board and the Board tab in a web page. This guide walks through the same pieces.
+
+<Note>
+The source in the repository uses upstream's names (`@cline/taskboard`, `@cline/ui`); they are renamed to `@cerebriline/*` when published. The two are the same code.
+</Note>
+
+## 1. Give your loop the board
+
+The board is more than three tools. It watches every tool call (a file written under no task, a task left untouched while files change), speaks between turns (a gate opened, you edited the board), and has a say before the run ends (tasks still open). Each of those is a point in your loop, so `attachTaskBoard` hands you functions to call there rather than owning the loop:
+
+```bash
+npm install @cerebriline/taskboard @cerebriline/agents
+```
+
+```typescript
+import { Agent } from "@cerebriline/agents"
+import { attachTaskBoard } from "@cerebriline/taskboard"
+
+const board = attachTaskBoard({
+	sessionId: "conversation-1",
+	workspaceRoot: "/path/to/project",
+	logPath: "/path/to/project/.cerebriline/conversations/conversation-1.tasks.jsonl",
+})
+
+const tools = [...myTools, ...board.tools()].map((tool) => board.wrapTool(tool))
+board.setTools(() => tools) // what a pipeline's `tool` step may call
+
+const agent = new Agent({
+	providerId: "ollama",
+	modelId: "qwen3:8b",
+	systemPrompt: board.systemPrompt("You are a helpful agent."),
+	tools,
+	hooks: {
+		// The person's edits since the model last looked.
+		beforeRun: () => {
+			const note = board.runStartNote()
+			return note ? { appendContext: note } : undefined
+		},
+	},
+	completionPolicy: {
+		// Open tasks keep the run going.
+		completionGuard: board.completionGuard(),
+		// A gate opened, a task left behind: said after a turn's tools.
+		afterToolsReminder: () => board.afterToolsReminder(),
+	},
+})
+
+await agent.run("Add a changelog and a release checklist to the project.")
+```
+
+| Point in your loop | Call |
+|---|---|
+| System prompt | `board.systemPrompt(base)`: the board's rules (and the pipelines', when on) |
+| Tools | `board.tools()` (`task_plan`, `task_update`, `task_view`, and `pipeline`), every tool through `board.wrapTool` |
+| Before a run | `board.runStartNote()`: what changed on the board since the model last looked |
+| After a turn's tools | `board.afterToolsReminder()`: a reminder or news, if any |
+| Before the run ends | `board.completionGuard()()`: a reason to go on, if any |
+| The model struggles, the context is compacted | `board.noteStruggle()`, `board.noteCompaction()` |
+
+**Another agent framework.** The tools are plain `{ name, description, inputSchema, execute }` objects with a JSON Schema input, which map directly onto OpenAI function tools or the Vercel AI SDK's `tool()`. Call the other functions at the matching points of that framework's loop.
+
+**Which tools write files.** The board notices files written under no task by the tool's name. The default names are the extension's (`editor`, `write_to_file`, `apply_patch`, ...); pass `writeToolNames` for your own.
+
+### Keeping the board
+
+- `logPath`: every change is appended there, and a board with a log comes back when you attach it again with the same path.
+- `history`: the conversation's messages, when you resume one; the board is rebuilt from its tool calls if there is no log.
+- `seed`: start a new conversation from a board (a draft, a saved one): `{ events, by: "person", about }`.
+- `onChange`: called with the snapshot after every change, for your own panel.
+
+### Pipelines
+
+Pass `pipelines` (and a `workspaceRoot`) to add the `pipeline` tool. A pipeline the model saves is a proposal: it runs only after the person approves it.
+
+```typescript
+attachTaskBoard({
+	sessionId,
+	workspaceRoot,
+	pipelines: {
+		tools: () => tools,
+		requestApproval: async (request) => ({ approved: await askThePerson(request) }),
+		approveHow: () => "Ask the person to approve it on the Board tab.",
+		onRunChange: () => redrawBoardTab(),
+	},
+})
+```
+
+`board.pipelineControl` acts on runs (retry, skip, re-run, stop) as the person, and `board.recoverInterruptedRuns()` marks the runs a crash left half done.
+
+### Changing the board from your own UI
+
+`board.control` is what the person can do: `edit({ op: "plan" | "update" | "remove", ... })`, `snapshot()`, `exportBoard()`, `render()`, `mermaid()`, and saved plans (`templates`, `useTemplate`, `saveTemplate`). Every edit is the person's, and the model is told at its next run.
+
+## 2. The Board tab, server side
+
+The Board tab draws what its host sends and asks the host for every change. The host side is `createBoardBackend`: it answers the tab's requests and collects what it draws. `sessionBoardSlots` gives it every board the tab lists, from your conversations' attached boards and a few files.
+
+```typescript
+import { BOARD_VIEWER_DATA, createBoardBackend, sessionBoardSlots } from "@cerebriline/taskboard"
+
+const boards = sessionBoardSlots({
+	workspaceRoot: () => workspaceRoot,
+	// The conversation on screen, or none.
+	conversation: () => (current ? { board: current.board, running: current.running } : undefined),
+	// Where each conversation's `logPath` is: the tab's recent conversations.
+	logDir: () => `${workspaceRoot}/.cerebriline/conversations`,
+	// The person starts the next conversation from a draft.
+	startConversation: (seed, onTaken) => {
+		nextSeed = seed // give it to the next attachTaskBoard({ seed })
+		whenTaken = onTaken // call once that conversation has started
+	},
+})
+
+const backend = createBoardBackend({
+	workspaceRoot: () => workspaceRoot,
+	boards,
+	ui: hostUi, // how it asks the person: see below
+	runAction: (action) => current?.board.pipelineControl?.act(action) ?? { ok: false, lines: ["No conversation."] },
+})
+
+async function onMessageFromTab(message: unknown) {
+	const answer = await backend.handle(message)
+	if (answer.reply) sendToTab(answer.reply)
+	if (answer.ready || answer.refresh) await sendData()
+}
+
+async function sendData() {
+	// Draw at once from what is read; send again once the recent list is fresh.
+	sendToTab({ type: BOARD_VIEWER_DATA, data: await backend.data({ cachedOnly: true }) })
+	if (!backend.recentIsFresh()) sendToTab({ type: BOARD_VIEWER_DATA, data: await backend.data() })
+}
+```
+
+Send the data again whenever the board changes (`attachTaskBoard`'s `onChange`, and the pipelines' `onRunChange`). Drafts and saved boards are kept as JSON files under `<workspace>/.cerebriline/boards` (`storeDir` changes it). Without `boards`, the tab shows pipelines and runs only.
+
+### How the backend asks the person
+
+`ui` is a `BoardHostUi`: pick from a list, type a text, choose a button, show a notice, and read and write files. In VS Code these are the editor's quick pick, input box and dialogs. In a desktop app use your native dialogs. In a web app the server cannot open a dialog, so it sends the question to the page and waits for the answer; the example's [`server/dialogs.ts`](https://github.com/mann1x/cline/blob/main/apps/examples/taskboard-web/server/dialogs.ts) and [`web/Dialog.tsx`](https://github.com/mann1x/cline/blob/main/apps/examples/taskboard-web/web/Dialog.tsx) do this in about 200 lines.
+
+Create one backend per open tab, each with the `ui` of the window it is in, and share one `boards` between them.
+
+## 3. The Board tab, client side
+
+```bash
+npm install @cerebriline/ui react react-dom @xyflow/react @dagrejs/dagre
+```
+
+```tsx
+import { BoardViewer, type BoardViewerTransport } from "@cerebriline/ui/components/board-viewer"
+import "@cerebriline/ui/theme/tokens.css" // the theme's colours, or your own (below)
+import "@cerebriline/ui/components/board-viewer.css" // also brings xyflow's stylesheet
+
+const transport: BoardViewerTransport = {
+	send: (request) => socket.send(JSON.stringify({ channel: "board", message: request })),
+	subscribe: (listener) => {
+		const receive = (event: MessageEvent) => {
+			const message = JSON.parse(event.data)
+			if (message.channel === "board") listener(message.message)
+		}
+		socket.addEventListener("message", receive)
+		return () => socket.removeEventListener("message", receive)
+	},
+}
+
+root.render(<BoardViewer transport={transport} />)
+```
+
+Keep the transport stable: a new one subscribes again and tells the host the tab is ready again.
+
+The transport carries the messages of `@cerebriline/taskboard/protocol` both ways, and anything that moves JSON will do:
+
+| Host | `send` | `subscribe` |
+|---|---|---|
+| VS Code webview, iframe | `windowMessageTransport(post)`, with `post` as `acquireVsCodeApi().postMessage` or `parent.postMessage` | included |
+| WebSocket | `socket.send` with a channel tag | filter that channel |
+| Electron | `ipcRenderer.send("board", request)` | `ipcRenderer.on("board", ...)` |
+
+### Looks
+
+Inside VS Code the tab takes the editor theme's colours. Elsewhere it takes `@cerebriline/ui`'s theme tokens (`--background`, `--foreground`, `--border`, `--ring`, ...), switching to dark with a `dark` class on `<html>`. Every colour is also a `--bv-*` variable you can set on `.bv`, and `--bv-height` sizes it (the viewport's height by default):
+
+```css
+.my-board-pane .bv {
+	--bv-height: 100%;
+	--bv-accent: hotpink;
+}
+```
+
+## Things to know
+
+- **Board keys come from the tab.** `sessionBoardSlots` checks every id before it names a file, but the tab can change boards, approve pipelines and act on runs: serve it only to the person whose agent it is.
+- **One React.** The ui package's React is a peer. In a monorepo where the ui package resolves a copy of its own, dedupe it in your bundler (`resolve.dedupe: ["react", "react-dom"]` in Vite).
+- **The `@cerebriline/ui` main entry does not need the board's peers.** Only `@cerebriline/ui/components/board-viewer` imports `@xyflow/react` and `@dagrejs/dagre`.
