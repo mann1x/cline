@@ -5,7 +5,7 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.308] — 2026-11-27
+## [4.100.309] — 2026-11-27
 
 ### Agents
 
