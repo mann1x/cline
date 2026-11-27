@@ -925,8 +925,9 @@ export class TaskGraphStore {
 		}
 		if (removeGates.length) update.gatesRemove = removeGates;
 		if (item.gatesOpen.length) {
-			// The person resolves gates; the others open by themselves.
-			if (origin.by === "user") {
+			// The person resolves gates (the task panel's "user", the Board tab
+			// draft's "person"); the others open by themselves.
+			if (origin.by === "user" || origin.by === "person") {
 				const opening = item.gatesOpen.filter((spec) =>
 					gates.some((gate) => gate.spec === spec && !gate.open),
 				);

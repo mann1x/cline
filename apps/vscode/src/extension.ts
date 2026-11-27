@@ -276,6 +276,19 @@ export async function activate(context: vscode.ExtensionContext) {
 				return { ok: true, lines: ["The draft board is discarded."] }
 			},
 			runAction: (action) => webview.controller.pipelineRunAction(action),
+			boardIo: {
+				workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+				isDraft: () => !conversationOpen(),
+				events: () => (conversationOpen() ? webview.controller.exportTaskBoardEvents() : draftBoard.events()),
+				hasTasks: () => !draftBoard.isEmpty(),
+				plan: (tasks) =>
+					conversationOpen()
+						? webview.controller.taskGraphAction({ op: "plan", tasks })
+						: draftBoard.edit({ op: "plan", tasks }),
+				clearDraft: () => draftBoard.clear(),
+				savedBoards: () => webview.controller.savedTaskBoards(),
+				savedBoardEvents: (id, memory) => webview.controller.savedTaskBoardEvents(id, memory),
+			},
 		}
 		setBoardViewerOpener((focus) => openBoardViewerPanel(boardViewerDeps, focus))
 		context.subscriptions.push(

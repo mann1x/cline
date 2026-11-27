@@ -108,7 +108,10 @@ export interface CanvasProps {
 }
 
 export interface CanvasEdit {
-	onAdd: (type: string) => void
+	/** The cards it edits: a pipeline's nodes (the default), or a board's tasks. */
+	kind?: "node" | "task"
+	/** The palette's add; none on a board, whose tasks are added from the bar above. */
+	onAdd?: (type: string) => void
 	onConnect: (source: string, port: string | undefined, target: string) => void
 	onDeleteNode: (id: string) => void
 	onDeleteEdge: (id: string) => void
@@ -130,7 +133,7 @@ function Flow({ graph, selected, onSelect, fitKey, edit }: CanvasProps) {
 				height: node.height,
 				selected: node.id === selected,
 				draggable: false,
-				connectable: !!edit && node.data.kind === "node",
+				connectable: !!edit && node.data.kind === (edit.kind ?? "node"),
 			})),
 		[graph, positions, selected, edit],
 	)
@@ -172,12 +175,14 @@ function Flow({ graph, selected, onSelect, fitKey, edit }: CanvasProps) {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the shown graph changes
 	useEffect(() => setPicked(undefined), [fitKey])
 
+	const editableCard = (id: string) =>
+		!!edit && graph.nodes.some((node) => node.id === id && node.data.kind === (edit.kind ?? "node"))
 	const remove = () => {
 		if (!edit) return
 		if (picked) {
 			edit.onDeleteEdge(picked)
 			setPicked(undefined)
-		} else if (selected && graph.nodes.some((node) => node.id === selected && node.data.kind === "node")) {
+		} else if (selected && editableCard(selected)) {
 			edit.onDeleteNode(selected)
 			onSelect(undefined)
 		}
@@ -192,7 +197,7 @@ function Flow({ graph, selected, onSelect, fitKey, edit }: CanvasProps) {
 	}
 	const onDrop = (event: DragEvent) => {
 		const type = event.dataTransfer.getData(DRAG_TYPE)
-		if (!edit || !type) return
+		if (!edit?.onAdd || !type) return
 		event.preventDefault()
 		edit.onAdd(type)
 	}
@@ -236,13 +241,13 @@ function Flow({ graph, selected, onSelect, fitKey, edit }: CanvasProps) {
 				<MiniMap pannable position="bottom-right" zoomable />
 				{edit && (
 					<Panel className="bv-palette" position="top-left">
-						<span className="bv-palette-label">Add</span>
-						{PALETTE_TYPES.map((type) => (
+						{edit.onAdd && <span className="bv-palette-label">Add</span>}
+						{(edit.onAdd ? PALETTE_TYPES : []).map((type) => (
 							<button
 								className="bv-palette-item"
 								draggable
 								key={type}
-								onClick={() => edit.onAdd(type)}
+								onClick={() => edit.onAdd?.(type)}
 								onDragStart={(event) => {
 									event.dataTransfer.setData(DRAG_TYPE, type)
 									event.dataTransfer.effectAllowed = "copy"
@@ -252,8 +257,12 @@ function Flow({ graph, selected, onSelect, fitKey, edit }: CanvasProps) {
 								{type}
 							</button>
 						))}
-						{(picked ||
-							(selected && graph.nodes.some((node) => node.id === selected && node.data.kind === "node"))) && (
+						{!edit.onAdd && !picked && !(selected && editableCard(selected)) && (
+							<span className="bv-palette-label bv-palette-hint">
+								Drag from a task to another: the second waits on the first
+							</span>
+						)}
+						{(picked || (selected && editableCard(selected))) && (
 							<button className="bv-palette-item bv-palette-delete" onClick={remove} type="button">
 								{picked ? "Delete edge" : `Delete ${selected}`}
 							</button>

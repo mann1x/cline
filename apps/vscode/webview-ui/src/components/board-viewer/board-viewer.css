@@ -853,3 +853,40 @@
 .bv-event-kind[data-kind="wait"] {
 	color: var(--bv-waiting);
 }
+.bv-form-stacked {
+	align-items: stretch;
+	flex-direction: column;
+}
+.bv-textarea {
+	font-family: inherit;
+	min-height: 3.5em;
+	resize: vertical;
+}
+.bv-field-label {
+	align-items: center;
+	color: var(--bv-muted);
+	display: inline-flex;
+	gap: 6px;
+}
+.bv-subhead {
+	color: var(--bv-muted);
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	margin-top: 8px;
+	text-transform: uppercase;
+}
+.bv-chip-row,
+.bv-gate-actions {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.bv-gate-actions {
+	display: inline-flex;
+	margin-left: 6px;
+}
+.bv-palette-hint {
+	letter-spacing: 0;
+	text-transform: none;
+}

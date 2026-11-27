@@ -202,7 +202,12 @@ export type ViewerRequest =
 	/** A change to the conversation's board, as the task panel sends it (`task_update`'s fields). */
 	| { type: "boardViewer/editTask"; id: number; updates: Record<string, unknown>[] }
 	/** A new task on the board: the conversation's, or the draft when none is open. */
-	| { type: "boardViewer/addTask"; id: number; title: string }
+	| { type: "boardViewer/addTask"; id: number; title: string; parent?: string }
+	/** The person deletes a task, with its steps; the extension asks first. */
+	| { type: "boardViewer/deleteTask"; id: number; task: string }
+	/** Add tasks from a saved board, a saved plan or a file; write the board to a file. */
+	| { type: "boardViewer/loadBoard"; id: number }
+	| { type: "boardViewer/exportBoard"; id: number }
 	/** The draft board goes to the next new conversation. */
 	| { type: "boardViewer/startFromDraft"; id: number }
 	| { type: "boardViewer/discardDraft"; id: number }

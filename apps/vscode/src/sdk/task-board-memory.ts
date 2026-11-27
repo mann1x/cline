@@ -31,7 +31,7 @@ interface BoardLink {
 /** How long changes are gathered before a keep-updated board is written. */
 const KEEP_UPDATED_DEBOUNCE_MS = 1500
 
-type MemoryLike = Pick<ReturnType<typeof sharedMemory>, "saveBoard" | "readBoard" | "listMemories">
+type MemoryLike = Pick<ReturnType<typeof sharedMemory>, "saveBoard" | "readBoard" | "listMemories" | "list">
 
 /**
  * The task board and Memory (task graph phase 2, PLAN-task-graph.md section 11):
@@ -141,6 +141,28 @@ export class TaskBoardMemory {
 				events: exported.events,
 			},
 		})
+	}
+
+	/** The boards saved in Memory, newest first, for the Board tab's Load. Empty while Memory is off. */
+	savedBoards(): { id: string; memory: string; title?: string; tasks: number; open: number; savedAt: string }[] {
+		if (!readMemorySettings().enabled) return []
+		const memories = this.memory.listMemories().map((entry) => entry.name)
+		return this.memory
+			.list({ memories, boards: "only" })
+			.filter((item) => item.board)
+			.map((item) => ({
+				id: item.id,
+				memory: item.memory,
+				...(item.board?.title ? { title: item.board.title } : {}),
+				tasks: item.board?.tasks ?? 0,
+				open: item.board?.open ?? 0,
+				savedAt: item.createdAt,
+			}))
+	}
+
+	/** A saved board's events, by its id in a memory. */
+	savedBoardEvents(id: string, memory: string): unknown[] | undefined {
+		return this.memory.readBoard(id, { memories: [memory] })?.board.events
 	}
 
 	/** The memories a board can be saved into, and the one this workspace stores to. */

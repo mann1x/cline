@@ -47,6 +47,9 @@ export {
 export { exportTaskLog } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/saved-board"
 export { TaskGraphStore } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/store"
 export {
+	boardPlanFromEvents,
+	expandTaskTemplate,
+	findTaskTemplate,
 	loadTaskTemplates,
 	saveTaskTemplate,
 	TASK_TEMPLATE_DIR,

@@ -17,7 +17,7 @@ function memoryStorage(): DraftStorage & { saved: unknown[] | undefined } {
 const tasksOf = (board: DraftBoard) =>
 	(
 		JSON.parse(board.text() ?? '{"tasks":[]}') as {
-			tasks: { id: string; title: string; status: string; gates?: { spec: string }[] }[]
+			tasks: { id: string; title: string; status: string; depends: string[]; gates?: { spec: string; open?: boolean }[] }[]
 		}
 	).tasks
 
@@ -47,6 +47,23 @@ describe("the draft board", () => {
 		expect(reloaded.isEmpty()).toBe(true)
 		expect(storage.saved).toBeUndefined()
 		expect(new DraftBoard(storage).isEmpty()).toBe(true)
+	})
+
+	it("lets the person resolve a gate and delete a task, which survives a reload", () => {
+		const storage = memoryStorage()
+		const board = new DraftBoard(storage)
+		board.edit({
+			op: "plan",
+			tasks: [
+				{ title: "Decide", gate: ["human:Which host?"] },
+				{ title: "Build", depends: ["#1"] },
+			],
+		})
+		expect(board.edit({ op: "update", updates: [{ id: "T1", gate_open: ["human:Which host?"] }] }).ok).toBe(true)
+		expect(tasksOf(board)[0]?.gates?.[0]?.open).toBe(true)
+		expect(board.edit({ op: "remove", ids: ["T1"] }).ok).toBe(true)
+		const reloaded = new DraftBoard(storage)
+		expect(tasksOf(reloaded).map((task) => [task.id, task.depends])).toEqual([["T2", []]])
 	})
 
 	it("says why a change did not apply", () => {

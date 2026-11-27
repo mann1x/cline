@@ -23,7 +23,12 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Task, TaskGraphState } from "./model";
+import {
+	foldTaskEvents,
+	isTaskEvent,
+	type Task,
+	type TaskGraphState,
+} from "./model";
 
 export interface TaskTemplate {
 	name: string;
@@ -184,8 +189,9 @@ export function expandTaskTemplate(
 
 /**
  * A board as a template: every task in order, with its description,
- * acceptance, dependencies and parent as `#n`, and its `human:` gates (the
- * person's decisions recur; the run ids, timers and commits do not).
+ * acceptance, dependencies and parent as `#n`, its `human:` gates and the
+ * pipelines it is done by (the person's decisions and the recipe recur; the
+ * run ids, timers and commits do not).
  * Statuses, notes and outcomes are this conversation's, and are left out.
  */
 export function boardToTemplate(
@@ -212,7 +218,10 @@ export function boardToTemplate(
 			const parent = task.parent ? ref(task.parent) : undefined;
 			const gates = (task.gates ?? [])
 				.map((gate) => gate.spec)
-				.filter((spec) => spec.startsWith("human:"));
+				.filter(
+					(spec) =>
+						spec.startsWith("human:") || spec.startsWith("use-pipeline:"),
+				);
 			return {
 				title: task.title,
 				...(task.description ? { description: task.description } : {}),
@@ -241,4 +250,16 @@ export function saveTaskTemplate(
 	const path = join(dir, `${templateSlug(template.name)}.json`);
 	writeFileSync(path, `${JSON.stringify(template, null, "\t")}\n`);
 	return path;
+}
+
+/**
+ * A board's log as the tasks a plan creates: what loading a saved or exported
+ * board onto another board adds (the Board tab's Load). Fresh tasks: no
+ * status, notes or run gates carry over, as in a template.
+ */
+export function boardPlanFromEvents(
+	events: readonly unknown[],
+): Record<string, unknown>[] {
+	const state = foldTaskEvents(events.filter(isTaskEvent));
+	return boardToTemplate(state, "board").tasks;
 }

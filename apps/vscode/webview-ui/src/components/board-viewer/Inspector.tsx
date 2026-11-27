@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react"
+import { type ReactNode, useId, useState } from "react"
 import type { TaskGraphPanelTask } from "@/components/chat/task-header/TaskGraphPanel"
 import { nodeJson } from "./edit"
 import { taskStatus } from "./graph"
@@ -68,11 +68,35 @@ export type TaskEdit = (fields: Record<string, unknown>) => Promise<ViewerReply>
 /** Retry, Skip, Re-run from a node, or Stop, on the run shown. */
 export type RunAction = (op: ViewerRunOp, node?: string) => void
 
+/** What the person can do to a task beyond a field change: its steps, deleting it, the other tasks to pick from. */
+export interface TaskTools {
+	tasks: { id: string; title: string }[]
+	addStep: (parent: string, title: string) => Promise<boolean>
+	deleteTask: (id: string) => void
+}
+
+/**
+ * What a gate can wait on, offered as the person types one (owner,
+ * 2026-11-27: "everything that can be auto-completed in ui should have it").
+ */
+export const GATE_SUGGESTIONS: { value: string; label: string }[] = [
+	{ value: "human:", label: "Waits for your answer: Resolve opens it" },
+	{ value: "timer:+30m", label: "Waits a while (+10m, +2h, +1d)" },
+	{ value: "timer:2026-12-01T09:00", label: "Waits until a time" },
+	{ value: "commit:<sha>@main", label: "Waits until the branch has the commit" },
+	{ value: "gh-pr:owner/repo#1", label: "Waits until the pull request is merged" },
+	{ value: "gh-run:owner/repo/123", label: "Waits until the Actions run succeeds" },
+	{ value: "run:", label: "Waits until a teammate run or delegated agent ends" },
+	{ value: "command:", label: "Waits until a background command exits" },
+	{ value: "pipeline:", label: "Waits until a pipeline run ends" },
+]
+
 export function Inspector({
 	subject,
 	onOpenRun,
 	nodeEdit,
 	taskEdit,
+	taskTools,
 	runAction,
 	busy = false,
 	pipelines = [],
@@ -81,6 +105,7 @@ export function Inspector({
 	onOpenRun: (run: string) => void
 	nodeEdit?: NodeEdit
 	taskEdit?: TaskEdit
+	taskTools?: TaskTools
 	runAction?: RunAction
 	busy?: boolean
 	/** The workspace's pipelines a task can be done by (their names). */
@@ -105,6 +130,7 @@ export function Inspector({
 					onOpenRun={onOpenRun}
 					pipelines={pipelines}
 					task={subject.task}
+					tools={taskTools}
 				/>
 			)
 		case "gate":
@@ -372,13 +398,20 @@ function FieldForm({
 	initial = "",
 	action,
 	onSend,
+	options,
+	help,
 }: {
 	label: string
 	placeholder: string
 	initial?: string
 	action: string
 	onSend: (value: string) => Promise<boolean>
+	/** Completions offered as the person types: the value, and what it means. */
+	options?: { value: string; label: string }[]
+	/** Said on hover. */
+	help?: string
 }) {
+	const listId = useId()
 	const [value, setValue] = useState(initial)
 	const [busy, setBusy] = useState(false)
 	return (
@@ -395,10 +428,19 @@ function FieldForm({
 			<input
 				aria-label={label}
 				className="bv-input"
+				list={options ? listId : undefined}
 				onChange={(event) => setValue(event.target.value)}
 				placeholder={placeholder}
+				title={help}
 				value={value}
 			/>
+			{options && (
+				<datalist id={listId}>
+					{options.map((option) => (
+						<option key={option.value} label={option.label} value={option.value} />
+					))}
+				</datalist>
+			)}
 			<button className="bv-button" disabled={busy || !value.trim() || value.trim() === initial} type="submit">
 				{action}
 			</button>
@@ -441,35 +483,72 @@ function UsePipeline({ pipelines, onUse }: { pipelines: string[]; onUse: (name: 
 	)
 }
 
-function TaskControls({ task, edit, pipelines }: { task: TaskGraphPanelTask; edit: TaskEdit; pipelines: string[] }) {
+/** A task id from what was typed or picked: "T3", or "T3 · Build". */
+function taskIdOf(value: string): string {
+	return value.trim().split(/\s/)[0] ?? ""
+}
+
+function TaskControls({
+	task,
+	edit,
+	pipelines,
+	tools,
+}: {
+	task: TaskGraphPanelTask
+	edit: TaskEdit
+	pipelines: string[]
+	tools?: TaskTools
+}) {
 	const [answer, setAnswer] = useState<ViewerReply>()
+	const [description, setDescription] = useState(task.description ?? "")
 	const send = async (fields: Record<string, unknown>) => {
 		const reply = await edit({ id: task.id, ...fields })
 		setAnswer(reply)
 		return reply.ok
 	}
 	const held = task.claimedBy?.startsWith("pipeline:")
-	const statuses: { label: string; status: string }[] =
-		task.status === "done" || task.status === "cancelled"
-			? [{ label: "Reopen", status: "pending" }]
-			: [
-					...(task.status !== "active" ? [{ label: "Start", status: "active" }] : []),
-					{ label: "Done", status: "done" },
-					{ label: "Cancel", status: "cancelled" },
-				]
+	const closed = task.status === "done" || task.status === "cancelled"
+	const statuses: { label: string; status: string; help: string }[] = closed
+		? [{ label: "Reopen", status: "pending", help: "Back on the board as not started" }]
+		: [
+				...(task.status !== "active"
+					? [{ label: "Start", status: "active", help: "Mark it as being worked on now" }]
+					: []),
+				{ label: "Done", status: "done", help: "Close it as done" },
+				{ label: "Cancel", status: "cancelled", help: "Close it as not to be done; it stays on the board" },
+			]
+	// A task can come after any other but itself and its own steps.
+	const candidates = (tools?.tasks ?? []).filter(
+		(other) => other.id !== task.id && !other.id.startsWith(`${task.id}.`) && !task.depends.includes(other.id),
+	)
 	return (
 		<Section title="Change">
-			{held ? (
-				<div className="bv-note">A pipeline run holds this task: its status is the run's.</div>
-			) : (
-				<div className="bv-actions">
-					{statuses.map(({ label, status }) => (
-						<button className="bv-button" key={status} onClick={() => void send({ status })} type="button">
+			<div className="bv-actions">
+				{held ? (
+					<span className="bv-note">A pipeline run holds this task: its status is the run's.</span>
+				) : (
+					statuses.map(({ label, status, help }) => (
+						<button
+							className="bv-button"
+							key={status}
+							onClick={() => void send({ status })}
+							title={help}
+							type="button">
 							{label}
 						</button>
-					))}
-				</div>
-			)}
+					))
+				)}
+				<span className="bv-spacer" />
+				{tools && (
+					<button
+						className="bv-button bv-danger"
+						onClick={() => tools.deleteTask(task.id)}
+						title="Delete it for good, with its steps; the tasks after it stop waiting on it"
+						type="button">
+						Delete
+					</button>
+				)}
+			</div>
 			<FieldForm
 				action="Rename"
 				initial={task.title}
@@ -477,14 +556,109 @@ function TaskControls({ task, edit, pipelines }: { task: TaskGraphPanelTask; edi
 				onSend={(title) => send({ title })}
 				placeholder="Title"
 			/>
+			<form
+				className="bv-form bv-form-stacked"
+				onSubmit={(event) => {
+					event.preventDefault()
+					void send({ description })
+				}}>
+				<textarea
+					aria-label="Description"
+					className="bv-input bv-textarea"
+					onChange={(event) => setDescription(event.target.value)}
+					placeholder="What the task is, for whoever does it"
+					rows={3}
+					value={description}
+				/>
+				<button
+					className="bv-button"
+					disabled={description === (task.description ?? "")}
+					title="Save the description"
+					type="submit">
+					Save
+				</button>
+			</form>
+			<div className="bv-form">
+				<label className="bv-field-label" title="High goes first among the tasks that can start">
+					Priority
+					<select
+						aria-label="Priority"
+						className="bv-input"
+						onChange={(event) => void send({ priority: event.target.value })}
+						value={task.priority}>
+						<option value="H">High</option>
+						<option value="M">Medium</option>
+						<option value="L">Low</option>
+					</select>
+				</label>
+				<label className="bv-field-label" title="Later: kept on the board but not started until the rest is done">
+					<input
+						checked={!!task.later}
+						onChange={(event) => void send({ later: event.target.checked })}
+						type="checkbox"
+					/>
+					Later
+				</label>
+			</div>
+			<div className="bv-subhead" title="This task starts only once these are done">
+				After
+			</div>
+			{task.depends.length > 0 ? (
+				<ul className="bv-list">
+					{task.depends.map((dep) => (
+						<li className="bv-chip-row" key={dep}>
+							<span className="bv-mono">{dep}</span>{" "}
+							<span className="bv-muted">{tools?.tasks.find((other) => other.id === dep)?.title ?? ""}</span>
+							<button
+								aria-label={`${task.id} no longer waits on ${dep}`}
+								className="bv-row-button"
+								onClick={() => void send({ depends_remove: [dep] })}
+								title="Stop waiting on it"
+								type="button">
+								Remove
+							</button>
+						</li>
+					))}
+				</ul>
+			) : (
+				<div className="bv-note">
+					Nothing: it can start any time. Add a task it waits for, or drag from that task to this one on the canvas.
+				</div>
+			)}
+			{candidates.length > 0 && (
+				<FieldForm
+					action="Add"
+					help="Type a task's id or title and pick it"
+					label="Task it waits for"
+					onSend={(value) => send({ depends: [taskIdOf(value)] })}
+					options={candidates.map((other) => ({ value: `${other.id} · ${other.title}`, label: other.title }))}
+					placeholder="After… (T2)"
+				/>
+			)}
+			{tools && (
+				<FieldForm
+					action="Add step"
+					help={`A step of ${task.id}: ${task.id}.1, ${task.id}.2, …`}
+					label="New step"
+					onSend={(title) => tools.addStep(task.id, title)}
+					placeholder="A step of this task"
+				/>
+			)}
 			<FieldForm
 				action="Add"
 				label="New acceptance item"
 				onSend={(item) => send({ acceptance_add: [item] })}
 				placeholder="Done when…"
 			/>
-			<FieldForm action="Add" label="New gate" onSend={(gate) => send({ gate: [gate] })} placeholder="human:Ship it?" />
-			{pipelines.length > 0 && task.status !== "done" && task.status !== "cancelled" && (
+			<FieldForm
+				action="Add"
+				help="What the task waits on besides other tasks. Type or pick a kind: human:, timer:, commit:, gh-pr:, gh-run:, run:, command:, pipeline:"
+				label="New gate"
+				onSend={(gate) => send({ gate: [gate] })}
+				options={GATE_SUGGESTIONS}
+				placeholder="human:Ship it?"
+			/>
+			{pipelines.length > 0 && !closed && (
 				<>
 					<UsePipeline onUse={(name) => send({ gate: [`use-pipeline:${name}`] })} pipelines={pipelines} />
 					<div className="bv-note">
@@ -509,11 +683,13 @@ function TaskInspector({
 	onOpenRun,
 	edit,
 	pipelines,
+	tools,
 }: {
 	task: TaskGraphPanelTask
 	onOpenRun: (run: string) => void
 	edit?: TaskEdit
 	pipelines: string[]
+	tools?: TaskTools
 }) {
 	const run = task.claimedBy?.startsWith("pipeline:") ? task.claimedBy.slice("pipeline:".length) : undefined
 	const status = taskStatus(task)
@@ -557,7 +733,8 @@ function TaskInspector({
 					</Pair>
 				)}
 			</dl>
-			{task.description && (
+			{edit && <TaskControls edit={edit} pipelines={pipelines} task={task} tools={tools} />}
+			{task.description && !edit && (
 				<Section title="Description">
 					<div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{task.description}</div>
 				</Section>
@@ -608,6 +785,26 @@ function TaskInspector({
 										<span className="bv-mono">{gate.spec}</span>
 									)}
 									{gate.failed && <div className="bv-error">{gate.failed}</div>}
+									{edit && (
+										<span className="bv-gate-actions">
+											{!gate.open && !uses && (
+												<button
+													className="bv-row-button"
+													onClick={() => void edit({ id: task.id, gate_open: [gate.spec] })}
+													title="Open it now: the task stops waiting on it"
+													type="button">
+													Resolve
+												</button>
+											)}
+											<button
+												className="bv-row-button"
+												onClick={() => void edit({ id: task.id, gate_remove: [gate.spec] })}
+												title="Take it off the task"
+												type="button">
+												Remove
+											</button>
+										</span>
+									)}
 								</li>
 							)
 						})}
@@ -648,7 +845,6 @@ function TaskInspector({
 					</ul>
 				</Section>
 			)}
-			{edit && <TaskControls edit={edit} pipelines={pipelines} task={task} />}
 		</div>
 	)
 }

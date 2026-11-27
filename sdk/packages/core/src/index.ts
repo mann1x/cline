@@ -1663,6 +1663,9 @@ export { TaskGraphStore } from "./extensions/tools/task-graph/store";
 // Saved plans (task graph phase 3 templates), listed for the task panel even
 // when no session is running.
 export {
+	boardPlanFromEvents,
+	expandTaskTemplate,
+	findTaskTemplate,
 	loadTaskTemplates,
 	saveTaskTemplate,
 	TASK_TEMPLATE_DIR,

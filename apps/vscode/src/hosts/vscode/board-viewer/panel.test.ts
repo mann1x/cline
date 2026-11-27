@@ -66,6 +66,7 @@ vi.mock("vscode", () => {
 import { openBoardViewerPanel } from "./panel"
 
 let root: string
+let boardTextValue: string | undefined
 const boardEdit = vi.fn((_action: BoardEditAction) => ({ ok: true, lines: ["T1: renamed."] }))
 const draftStart = vi.fn(() => ({ ok: true, lines: ["Send your first message in the chat."] }))
 const draftDiscard = vi.fn(() => ({ ok: true, lines: ["The draft board is discarded."] }))
@@ -81,6 +82,7 @@ beforeEach(() => {
 	ui.info.length = 0
 	ui.warning = undefined
 	ui.input = undefined
+	boardTextValue = undefined
 	boardEdit.mockClear()
 	runAction.mockClear()
 	draftStart.mockClear()
@@ -88,7 +90,7 @@ beforeEach(() => {
 	openBoardViewerPanel({
 		extensionUri: {} as never,
 		workspaceRoot: () => root,
-		boardText: () => undefined,
+		boardText: () => boardTextValue,
 		boardEdit,
 		runAction,
 		draftStart,
@@ -259,6 +261,25 @@ describe("the board viewer's requests", () => {
 		ui.warning = "Discard"
 		expect(await request({ type: "boardViewer/discardDraft" })).toMatchObject({ ok: true })
 		expect(draftDiscard).toHaveBeenCalledTimes(1)
+	})
+
+	it("deletes a task only once the person confirms, naming its steps; adds a step under a task", async () => {
+		boardTextValue = JSON.stringify({
+			tasks: [
+				{ id: "T1", title: "Design" },
+				{ id: "T1.1", title: "Sketch" },
+				{ id: "T2", title: "Build" },
+			],
+		})
+		ui.warning = undefined
+		expect(await request({ type: "boardViewer/deleteTask", task: "T1" })).toMatchObject({ ok: false })
+		expect(boardEdit).not.toHaveBeenCalled()
+		ui.warning = "Delete"
+		expect(await request({ type: "boardViewer/deleteTask", task: "T1" })).toMatchObject({ ok: true })
+		expect(boardEdit).toHaveBeenCalledWith({ op: "remove", ids: ["T1"] })
+
+		await request({ type: "boardViewer/addTask", title: "Sketch again", parent: "T2" })
+		expect(boardEdit).toHaveBeenLastCalledWith({ op: "plan", tasks: [{ title: "Sketch again", parent: "T2" }] })
 	})
 
 	it("makes a new pipeline the person names, saved as theirs, and nothing when the name is cancelled", async () => {

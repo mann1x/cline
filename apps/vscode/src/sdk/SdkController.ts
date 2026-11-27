@@ -1043,6 +1043,20 @@ export class Controller {
 		return control && active && control.sessionId === active ? control : undefined
 	}
 
+	/** The Board tab's Export and Load: the open conversation's board as events, when its session is live. */
+	exportTaskBoardEvents(): unknown[] | undefined {
+		return this.liveTaskGraphControl()?.exportBoard({}).events
+	}
+
+	/** The Board tab's Load: boards saved in Memory. */
+	savedTaskBoards(): ReturnType<TaskBoardMemory["savedBoards"]> {
+		return this.taskBoardMemory.savedBoards()
+	}
+
+	savedTaskBoardEvents(id: string, memory: string): unknown[] | undefined {
+		return this.taskBoardMemory.savedBoardEvents(id, memory)
+	}
+
 	/** The task panel's "Save to memory": the memories to choose from. */
 	taskBoardMemories(): Promise<{ enabled: boolean; names: string[]; preferred: string }> {
 		return this.taskBoardMemory.memories()

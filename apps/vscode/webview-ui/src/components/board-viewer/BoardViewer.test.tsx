@@ -10,7 +10,12 @@ vi.mock("./Canvas", () => ({
 	}: {
 		graph: { nodes: { id: string }[] }
 		onSelect: (id: string) => void
-		edit?: { onAdd: (type: string) => void; onConnect: (source: string, port: string | undefined, target: string) => void }
+		edit?: {
+			kind?: string
+			onAdd?: (type: string) => void
+			onConnect: (source: string, port: string | undefined, target: string) => void
+			onDeleteEdge: (id: string) => void
+		}
 	}) => (
 		<div data-testid="canvas">
 			{graph.nodes.map((node) => (
@@ -18,10 +23,22 @@ vi.mock("./Canvas", () => ({
 					card {node.id}
 				</button>
 			))}
-			{edit && (
-				<button onClick={() => edit.onAdd("command")} type="button">
+			{edit?.onAdd && (
+				<button onClick={() => edit.onAdd?.("command")} type="button">
 					palette command
 				</button>
+			)}
+			{edit?.kind === "task" && (
+				<>
+					<button
+						onClick={() => edit.onConnect(graph.nodes[0]?.id ?? "", undefined, graph.nodes.at(-1)?.id ?? "")}
+						type="button">
+						connect first to last
+					</button>
+					<button onClick={() => edit.onDeleteEdge("t1->t2")} type="button">
+						delete edge t1-&gt;t2
+					</button>
+				</>
 			)}
 		</div>
 	),
@@ -350,6 +367,77 @@ describe("the board viewer", () => {
 			lines: ["Send your first message in the chat: the new conversation starts from this board."],
 		})
 		expect(await screen.findByText(/the new conversation starts from this board/)).toBeTruthy()
+	})
+
+	// The owner, 2026-11-27: "the model can do things that I can't on the board".
+	it("does on a task what the model can: status, priority, order, steps, gates, delete; and loads and exports the board", async () => {
+		const base = JSON.parse(data.boardText) as { tasks: Record<string, unknown>[] }
+		const free = { ...base.tasks[0], claimedBy: undefined, status: "pending" }
+		const after = {
+			...free,
+			id: "t2",
+			title: "Ship it",
+			priority: "M",
+			depends: ["t1"],
+			openDepends: ["t1"],
+			gates: [{ spec: "human:Go ahead?", open: false }],
+		}
+		const third = { ...free, id: "t3", title: "Tell people", depends: [], openDepends: [] }
+		render(<BoardViewer />)
+		send({ ...data, boardText: JSON.stringify({ ...base, tasks: [free, after, third] }) })
+		fireEvent.click(screen.getByText("card t2"))
+		const edits = () => sentOf("boardViewer/editTask").map((message) => (message as { updates: unknown[] }).updates[0])
+
+		fireEvent.click(screen.getByRole("button", { name: "Start" }))
+		fireEvent.change(screen.getByRole("combobox", { name: "Priority" }), { target: { value: "L" } })
+		fireEvent.click(screen.getByRole("button", { name: "t2 no longer waits on t1" }))
+		fireEvent.change(screen.getByRole("combobox", { name: "Task it waits for" }), { target: { value: "t3 · Tell people" } })
+		fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0] as HTMLElement)
+		fireEvent.click(screen.getByRole("button", { name: "Resolve" }))
+		expect(edits()).toEqual([
+			{ id: "t2", status: "active" },
+			{ id: "t2", priority: "L" },
+			{ id: "t2", depends_remove: ["t1"] },
+			{ id: "t2", depends: ["t3"] },
+			{ id: "t2", gate_open: ["human:Go ahead?"] },
+		])
+		// The gate field offers what a gate can wait on.
+		const gate = screen.getByRole("combobox", { name: "New gate" }) as HTMLInputElement
+		const offered = [...(document.getElementById(gate.getAttribute("list") ?? "")?.querySelectorAll("option") ?? [])]
+		expect(offered.map((option) => option.value)).toContain("human:")
+
+		fireEvent.change(screen.getByRole("textbox", { name: "New step" }), { target: { value: "Write the notes" } })
+		fireEvent.click(screen.getByRole("button", { name: "Add step" }))
+		expect(sentOf("boardViewer/addTask").at(-1)).toMatchObject({ title: "Write the notes", parent: "t2" })
+		fireEvent.click(screen.getByRole("button", { name: "Delete" }))
+		expect(sentOf("boardViewer/deleteTask").at(-1)).toMatchObject({ task: "t2" })
+
+		// On the canvas: a drag makes a dependency, a deleted edge drops one.
+		fireEvent.click(screen.getByText("connect first to last"))
+		fireEvent.click(screen.getByText("delete edge t1->t2"))
+		expect(edits().slice(-2)).toEqual([
+			{ id: "t3", depends: ["t1"] },
+			{ id: "t2", depends_remove: ["t1"] },
+		])
+
+		// The requests above are answered: the bar is free again.
+		for (const message of posted) {
+			const id = (message as { id?: number }).id
+			if (id === undefined) continue
+			act(() => {
+				window.dispatchEvent(
+					new MessageEvent("message", { data: { type: "boardViewer/reply", id, ok: true, lines: [] } }),
+				)
+			})
+		}
+		const load = () => screen.getByRole("button", { name: "Load…" }) as HTMLButtonElement
+		await waitFor(() => expect(load().disabled).toBe(false))
+		fireEvent.click(load())
+		answer("boardViewer/loadBoard", { ok: false })
+		await waitFor(() => expect(load().disabled).toBe(false))
+		fireEvent.click(screen.getByRole("button", { name: "Export…" }))
+		expect(sentOf("boardViewer/loadBoard")).toHaveLength(1)
+		expect(sentOf("boardViewer/exportBoard")).toHaveLength(1)
 	})
 
 	it("makes a new pipeline and opens it", async () => {

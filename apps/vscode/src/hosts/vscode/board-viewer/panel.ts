@@ -26,6 +26,7 @@ import {
 	type ViewerRequest,
 	type ViewerRunOp,
 } from "@/shared/board-viewer"
+import { type BoardIoDeps, exportBoard, loadBoard } from "./board-io"
 import { collectViewerData } from "./collect"
 import type { BoardEditAction } from "./draft"
 
@@ -65,6 +66,8 @@ export interface BoardViewerDeps {
 	/** The draft goes to the next new conversation, or is thrown away. */
 	draftStart?: () => { ok: boolean; lines: string[] }
 	draftDiscard?: () => { ok: boolean; lines: string[] }
+	/** Load onto and export the board shown. */
+	boardIo?: BoardIoDeps
 	/** The person's action on a run, through the conversation that started it. */
 	runAction?: (action: { op: ViewerRunOp; run: string; node?: string }) => { ok: boolean; lines: string[]; run?: string }
 }
@@ -234,9 +237,18 @@ class BoardViewer {
 				if (!this.deps.boardEdit) return { ok: false, errors: ["This editor cannot change the board."] }
 				const title = typeof request.title === "string" ? request.title.trim() : ""
 				if (!title) return { ok: false, errors: ["Give the task a title."] }
-				const outcome = this.deps.boardEdit({ op: "plan", tasks: [{ title }] })
+				const parent = typeof request.parent === "string" && request.parent ? request.parent : undefined
+				const outcome = this.deps.boardEdit({ op: "plan", tasks: [{ title, ...(parent ? { parent } : {}) }] })
 				return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
 			}
+			case "boardViewer/deleteTask":
+				return this.deleteTask(request.task)
+			case "boardViewer/loadBoard":
+				if (!this.deps.boardIo) return { ok: false, errors: ["This editor cannot load a board."] }
+				return loadBoard(this.deps.boardIo)
+			case "boardViewer/exportBoard":
+				if (!this.deps.boardIo) return { ok: false, errors: ["This editor cannot export the board."] }
+				return exportBoard(this.deps.boardIo)
 			case "boardViewer/startFromDraft": {
 				if (!this.deps.draftStart) return { ok: false, errors: ["This editor has no draft board."] }
 				const outcome = this.deps.draftStart()
@@ -270,6 +282,40 @@ class BoardViewer {
 				return this.newPipeline(root)
 			default:
 				return { ok: false, errors: ["Not a request this panel knows."] }
+		}
+	}
+
+	/**
+	 * Delete a task for good, with its steps, after asking: only the person
+	 * deletes (the model cancels), and the tasks after it stop waiting on it.
+	 */
+	private async deleteTask(task: unknown): Promise<{ ok: boolean; errors?: string[]; lines?: string[] }> {
+		if (!this.deps.boardEdit) return { ok: false, errors: ["This editor cannot change the board."] }
+		if (typeof task !== "string" || !task) return { ok: false, errors: ["Pick a task first."] }
+		const board = this.boardTasks()
+		const found = board.find((entry) => entry.id === task)
+		const steps = board.filter((entry) => entry.id.startsWith(`${task}.`)).length
+		const name = found ? `${task} "${found.title}"` : task
+		const answer = await vscode.window.showWarningMessage(
+			`Delete ${name}${steps ? ` and its ${steps} step${steps === 1 ? "" : "s"}` : ""}? It is gone from the board for good, and the tasks after it stop waiting on it.`,
+			{ modal: true },
+			"Delete",
+		)
+		if (answer !== "Delete") return { ok: false }
+		const outcome = this.deps.boardEdit({ op: "remove", ids: [task] })
+		return outcome.ok ? { ok: true, lines: outcome.lines } : { ok: false, errors: outcome.lines }
+	}
+
+	/** The board shown, as its tasks' ids and titles. */
+	private boardTasks(): { id: string; title: string }[] {
+		try {
+			const text = this.deps.boardText()
+			const parsed = text ? (JSON.parse(text) as { tasks?: { id?: unknown; title?: unknown }[] }) : undefined
+			return (parsed?.tasks ?? [])
+				.filter((entry) => typeof entry.id === "string")
+				.map((entry) => ({ id: entry.id as string, title: String(entry.title ?? "") }))
+		} catch {
+			return []
 		}
 	}
 

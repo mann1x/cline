@@ -320,6 +320,42 @@ export function BoardViewer() {
 
 	const taskEdit: TaskEdit | undefined =
 		source?.kind === "board" ? (fields) => ask(post, { type: "boardViewer/editTask", updates: [fields] }) : undefined
+	const deleteTask = (task: string) =>
+		void request(() => ask(post, { type: "boardViewer/deleteTask", task })).then((reply) => {
+			if (reply.ok) setSelected(undefined)
+		})
+	const addStep = async (parent: string, title: string) =>
+		(await request(() => ask(post, { type: "boardViewer/addTask", title, parent }))).ok
+	// The board's own canvas edits: a drag from a task to another makes the
+	// second wait on the first; deleting an edge drops that dependency (or the
+	// gate it comes from), and deleting a card deletes the task, after asking.
+	const boardCanvasEdit: CanvasEdit | undefined =
+		source?.kind === "board" && board && board.tasks.length > 0
+			? {
+					kind: "task",
+					onConnect: (from, _port, to) => {
+						if (from === to) return
+						void request(() => ask(post, { type: "boardViewer/editTask", updates: [{ id: to, depends: [from] }] }))
+					},
+					onDeleteNode: (id) => deleteTask(id),
+					onDeleteEdge: (id) => {
+						const gate = /^gate:(.+):(\d+)->/.exec(id)
+						if (gate) {
+							const spec = board.tasks.find((task) => task.id === gate[1])?.gates?.[Number(gate[2])]?.spec
+							if (spec)
+								void request(() =>
+									ask(post, { type: "boardViewer/editTask", updates: [{ id: gate[1], gate_remove: [spec] }] }),
+								)
+							return
+						}
+						const [from, to] = id.split("->")
+						if (from && to)
+							void request(() =>
+								ask(post, { type: "boardViewer/editTask", updates: [{ id: to, depends_remove: [from] }] }),
+							)
+					},
+				}
+			: undefined
 
 	const save = async () => {
 		if (!draft) return
@@ -441,6 +477,8 @@ export function BoardViewer() {
 					setNotice(undefined)
 				}}
 				onDiscardBoardDraft={() => void request(() => ask(post, { type: "boardViewer/discardDraft" }))}
+				onExportBoard={() => void request(() => ask(post, { type: "boardViewer/exportBoard" }))}
+				onLoadBoard={() => void request(() => ask(post, { type: "boardViewer/loadBoard" }))}
 				onReject={() =>
 					pipeline &&
 					void request(() => ask(post, { type: "boardViewer/reject", slug: pipeline.slug, hash: pipeline.hash }))
@@ -526,7 +564,7 @@ export function BoardViewer() {
 					<TabBody
 						board={board}
 						boardDraft={boardDraft}
-						canvasEdit={canvasEdit}
+						canvasEdit={canvasEdit ?? boardCanvasEdit}
 						definition={definition}
 						definitionEdit={definitionEdit}
 						// The inspector opening or closing resizes the canvas: fit it again then, not on every pick.
@@ -552,6 +590,15 @@ export function BoardViewer() {
 							runAction={runAction}
 							subject={subject}
 							taskEdit={taskEdit}
+							taskTools={
+								taskEdit && board
+									? {
+											tasks: board.tasks.map((task) => ({ id: task.id, title: task.title })),
+											addStep,
+											deleteTask,
+										}
+									: undefined
+							}
 						/>
 					</aside>
 				)}
@@ -712,6 +759,8 @@ function ActionBar({
 	onChanges,
 	onToTemplate,
 	onBoardToPipeline,
+	onLoadBoard,
+	onExportBoard,
 	boardDraft,
 	onAddTask,
 	onStartFromBoardDraft,
@@ -737,6 +786,9 @@ function ActionBar({
 	onChanges: () => void
 	onToTemplate: () => void
 	onBoardToPipeline: () => void
+	/** Add tasks from a saved board, a saved plan or a file; write the board to a file. */
+	onLoadBoard: () => void
+	onExportBoard: () => void
 }) {
 	let left: ReactNode = null
 	let right: ReactNode = null
@@ -834,7 +886,27 @@ function ActionBar({
 	} else if (source?.kind === "board") {
 		const tasks = board?.tasks.length ?? 0
 		left = <AddTask busy={busy} onAdd={onAddTask} />
-		right = boardDraft ? (
+		const io = (
+			<>
+				<button
+					className="bv-button"
+					disabled={busy}
+					onClick={onLoadBoard}
+					title="Add tasks from a board saved in Memory, a saved plan, or a file"
+					type="button">
+					Load…
+				</button>
+				<button
+					className="bv-button"
+					disabled={busy || tasks === 0}
+					onClick={onExportBoard}
+					title="Write this board to a file another board can load"
+					type="button">
+					Export…
+				</button>
+			</>
+		)
+		const actions = boardDraft ? (
 			<>
 				<button
 					className="bv-button bv-primary"
@@ -852,6 +924,12 @@ function ActionBar({
 				Save as a pipeline
 			</button>
 		) : null
+		right = (
+			<>
+				{io}
+				{actions}
+			</>
+		)
 	}
 	const errors = drafting && draftErrors && draftErrors.length > 0 ? draftErrors : []
 	if (!left && !right && !notice) return null
