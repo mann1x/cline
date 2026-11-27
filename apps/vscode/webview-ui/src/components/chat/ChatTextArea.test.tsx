@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { useState } from "react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { SlashServiceClient } from "@/services/grpc-client"
+import { NO_AGENTS_TEXT } from "@/utils/slash-commands"
 import ChatTextArea from "./ChatTextArea"
 
 const mocks = vi.hoisted(() => ({
@@ -326,5 +328,43 @@ describe("ChatTextArea /agent", () => {
 		typeEach(textarea, "/smo")
 		fireEvent.keyDown(textarea, { key: "Enter" })
 		expect(textarea.value).toBe("/agent qa /qa-smoke-tests ")
+	})
+
+	// The owner, 2026-11-27, again: pandorum had no agent file at all, and the
+	// menus showed nothing, which read as completion being broken.
+	describe("with no agent set up", () => {
+		beforeEach(() => {
+			vi.mocked(SlashServiceClient.listAgents).mockResolvedValue({ agents: [] } as never)
+		})
+		afterEach(() => {
+			vi.mocked(SlashServiceClient.listAgents).mockResolvedValue({
+				agents: [
+					{ name: "qa", description: "Runs the QA skill" },
+					{ name: "docs", description: "Writes the docs" },
+				],
+			} as never)
+		})
+
+		it("/delegate says there is none and where to make one", async () => {
+			render(<Typed onSend={vi.fn()} />)
+			const textarea = screen.getByPlaceholderText("Type a message") as HTMLTextAreaElement
+			typeEach(textarea, "/delegate rev")
+			expect(await screen.findByText(NO_AGENTS_TEXT)).toBeInTheDocument()
+			// Nothing to pick: Enter is not taken by the menu.
+			fireEvent.keyDown(textarea, { key: "Tab" })
+			expect(textarea.value).toBe("/delegate rev")
+		})
+
+		it("/agent says so above the skills it still offers, and after an unknown name", async () => {
+			render(<Typed onSend={vi.fn()} />)
+			const textarea = screen.getByPlaceholderText("Type a message") as HTMLTextAreaElement
+			typeEach(textarea, "/agent ")
+			expect(await screen.findByText(NO_AGENTS_TEXT)).toBeInTheDocument()
+			expect(screen.getByText("/docker-compose-deploy")).toBeInTheDocument()
+			typeEach(textarea, "reviewer /me")
+			expect(await screen.findByText(NO_AGENTS_TEXT)).toBeInTheDocument()
+			fireEvent.keyDown(textarea, { key: "Escape" })
+			expect(screen.queryByText(NO_AGENTS_TEXT)).not.toBeInTheDocument()
+		})
 	})
 })

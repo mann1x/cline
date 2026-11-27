@@ -26,6 +26,8 @@ interface SlashCommandMenuProps {
 	skills?: SlashCommand[]
 	/** What an empty list says. */
 	emptyText?: string
+	/** A line above the items, not one of them: why a section the person expects is missing. */
+	notice?: string
 }
 
 const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
@@ -42,6 +44,7 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 	agents,
 	skills = [],
 	emptyText = "No matching commands found",
+	notice,
 }) => {
 	const menuRef = useRef<HTMLDivElement>(null)
 
@@ -161,6 +164,11 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 				ref={menuRef}
 				role="listbox"
 				style={{ maxHeight: "min(200px, calc(50vh))", overscrollBehavior: "contain" }}>
+				{notice && filteredCommands.length > 0 && (
+					<div className="py-1.5 px-3 text-[0.85em] text-(--vscode-descriptionForeground) border-b border-(--vscode-editorGroup-border)">
+						{notice}
+					</div>
+				)}
 				{filteredCommands.length > 0 ? (
 					<>
 						{renderCommandSection(defaultCommands, "Default Commands", 0, true)}

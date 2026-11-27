@@ -353,6 +353,13 @@ export function getMatchingAgentCommandItems(
  * argument (`/agent reviewer /med`), or undefined when it is not one.
  * Silence read as a broken menu when the agent may only load some skills.
  */
+/**
+ * Said when no agent is set up: `/delegate` has nothing to complete, and an
+ * `/agent` name is never one. Silence there read as broken completion (owner,
+ * 2026-11-27, on a machine with no agent files).
+ */
+export const NO_AGENTS_TEXT = "No agents are set up yet. Create one under Customize → Agents, or ask the model to make one."
+
 export function agentCommandEmptyText(
 	slot: AgentCommandSlot | undefined,
 	agents: readonly AgentCommandAgent[],
@@ -363,7 +370,7 @@ export function agentCommandEmptyText(
 	}
 	const agent = agents.find((entry) => entry.name.toLowerCase() === slot.agentName.toLowerCase())
 	if (!agent) {
-		return agents.length === 0 ? undefined : `No agent “${slot.agentName}”`
+		return agents.length === 0 ? NO_AGENTS_TEXT : `No agent “${slot.agentName}”`
 	}
 	if (agent.skills?.length) {
 		return `${agent.name} loads only ${agent.skills.map((skill) => `/${skillCommandName(skill)}`).join(", ")}`

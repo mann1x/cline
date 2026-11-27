@@ -50,6 +50,7 @@ import {
 	insertDelegateAgent,
 	insertSkillCommand,
 	insertSlashCommand,
+	NO_AGENTS_TEXT,
 	removeSlashCommand,
 	shouldShowSlashCommandsMenu,
 	slashCommandDeleteRegex,
@@ -260,6 +261,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const [selectedSlashCommandsIndex, setSelectedSlashCommandsIndex] = useState(0)
 		const [slashCommandsQuery, setSlashCommandsQuery] = useState("")
 		const [delegateAgents, setDelegateAgents] = useState<AgentCommandAgent[]>([])
+		// The list came back: an empty one then means no agent is set up, not "not asked yet".
+		const [agentsLoaded, setAgentsLoaded] = useState(false)
 		// Also dismisses the `/skill` picker: both are closed by Escape or a
 		// click away, and reopen on the next keystroke.
 		const [delegateMenuDismissed, setDelegateMenuDismissed] = useState(false)
@@ -384,12 +387,14 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				.then((response) => {
 					if (!cancelled) {
 						setDelegateAgents(response.agents)
+						setAgentsLoaded(true)
 					}
 				})
 				.catch((error) => console.error("Failed to list agents:", error))
 			return () => {
 				cancelled = true
 				setDelegateAgents([])
+				setAgentsLoaded(false)
 			}
 		}, [needAgents])
 
@@ -410,7 +415,15 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		// is the task, and Enter sends it.
 		const agentCommandItems =
 			agentCommandSlot === undefined ? [] : getMatchingAgentCommandItems(agentCommandSlot, delegateAgents, skillCommands)
-		const agentCommandEmpty = agentCommandEmptyText(agentCommandSlot, delegateAgents, agentCommandItems)
+		const noAgents = agentsLoaded && delegateAgents.length === 0
+		const agentCommandEmpty = agentsLoaded
+			? (agentCommandEmptyText(agentCommandSlot, delegateAgents, agentCommandItems) ??
+				(agentCommandSlot?.position === "first" && noAgents && agentCommandItems.length === 0
+					? NO_AGENTS_TEXT
+					: undefined))
+			: undefined
+		// `/delegate` needs an agent's name: with none set up, say so instead of showing nothing.
+		const delegateNoAgents = choosingDelegateAgent && noAgents
 		const agentCommandQuery = agentCommandSlot ? `${agentCommandSlot.position}:${agentCommandSlot.query}` : undefined
 		useEffect(() => {
 			if (agentCommandQuery !== undefined) {
@@ -459,14 +472,20 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				}
 			}
 
-			if (showSlashCommandsMenu || delegateAgentItems.length > 0 || choosingSkill || agentCommandItems.length > 0) {
+			if (
+				showSlashCommandsMenu ||
+				delegateAgentItems.length > 0 ||
+				delegateNoAgents ||
+				choosingSkill ||
+				agentCommandItems.length > 0
+			) {
 				document.addEventListener("mousedown", handleClickOutsideSlashMenu)
 			}
 
 			return () => {
 				document.removeEventListener("mousedown", handleClickOutsideSlashMenu)
 			}
-		}, [showSlashCommandsMenu, delegateAgentItems.length, choosingSkill, agentCommandItems.length])
+		}, [showSlashCommandsMenu, delegateAgentItems.length, delegateNoAgents, choosingSkill, agentCommandItems.length])
 
 		const handleMentionSelect = useCallback(
 			(type: ContextMenuOptionType, value?: string) => {
@@ -668,6 +687,12 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					const textArea = event.currentTarget
 					textArea.setSelectionRange(0, textArea.value.length)
 					setCursorPosition(0)
+					return
+				}
+
+				// A menu that only says why it has nothing to offer closes on Escape too.
+				if ((agentCommandEmpty !== undefined || delegateNoAgents) && event.key === "Escape") {
+					setDelegateMenuDismissed(true)
 					return
 				}
 
@@ -961,6 +986,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				delegateAgentItems,
 				handleDelegateAgentSelect,
 				agentCommandItems,
+				agentCommandEmpty,
+				delegateNoAgents,
 				handleAgentCommandSelect,
 				choosingSkill,
 				skillItems,
@@ -1724,6 +1751,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					)}
 					{(showSlashCommandsMenu ||
 						delegateAgentItems.length > 0 ||
+						delegateNoAgents ||
 						choosingSkill ||
 						agentCommandItems.length > 0 ||
 						agentCommandEmpty !== undefined) && (
@@ -1732,7 +1760,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								agents={
 									agentCommandItems.length > 0 || agentCommandEmpty !== undefined
 										? agentCommandItems
-										: delegateAgentItems.length > 0
+										: delegateAgentItems.length > 0 || delegateNoAgents
 											? delegateAgentItems
 											: choosingSkill
 												? skillItems
@@ -1741,15 +1769,18 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								emptyText={
 									agentCommandEmpty !== undefined
 										? agentCommandEmpty
-										: choosingSkill
-											? skillCommands.length === 0
-												? "No skill is enabled"
-												: `No skill matches “${(skillQuery ?? "").trim()}”`
-											: undefined
+										: delegateNoAgents
+											? NO_AGENTS_TEXT
+											: choosingSkill
+												? skillCommands.length === 0
+													? "No skill is enabled"
+													: `No skill matches “${(skillQuery ?? "").trim()}”`
+												: undefined
 								}
 								globalWorkflowToggles={globalWorkflowToggles}
 								localWorkflowToggles={localWorkflowToggles}
 								mcpServers={mcpServers}
+								notice={agentCommandSlot?.position === "first" && noAgents ? NO_AGENTS_TEXT : undefined}
 								onMouseDown={handleMenuMouseDown}
 								onSelect={
 									agentCommandItems.length > 0
