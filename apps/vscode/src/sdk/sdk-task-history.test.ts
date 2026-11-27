@@ -282,7 +282,7 @@ describe("SdkTaskHistory", () => {
 			board("c", "Other repo")
 			board("open", "Open one")
 			// "empty" has no board log.
-			const { history } = makeHistory([
+			const { history, listHistory } = makeHistory([
 				record("a", "2026-11-20T00:00:00Z", "/repo"),
 				record("b", "2026-11-26T00:00:00Z", "/repo", "Fix the game"),
 				record("c", "2026-11-27T00:00:00Z", "/elsewhere"),
@@ -296,6 +296,9 @@ describe("SdkTaskHistory", () => {
 				["a", "a"],
 			])
 			expect(boards[0]?.events.length).toBeGreaterThan(0)
+			// Hydrating reads every transcript without a title or cost: on
+			// pandorum that held the Board tab for minutes.
+			expect(listHistory).toHaveBeenCalledWith(expect.objectContaining({ hydrate: false }))
 			expect((await history.recentTaskBoards("/repo", 1, "open")).map((entry) => entry.id)).toEqual(["b"])
 		} finally {
 			rmSync(dir, { recursive: true, force: true })

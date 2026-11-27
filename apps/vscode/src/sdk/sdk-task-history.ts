@@ -536,7 +536,10 @@ export class SdkTaskHistory {
 					.resolve(b)
 					.replace(/[\\/]+$/, "")
 					.toLowerCase()
-		const records = [...(await this.listHistory({ limit: 200 }))].sort((a, b) =>
+		// Without hydration: it reads every transcript that has no title or cost
+		// (all of them on a local model), which held the Board tab on "Reading
+		// the workspace…" for minutes on pandorum (owner, 2026-11-27).
+		const records = [...(await this.listHistory({ limit: 200, hydrate: false }))].sort((a, b) =>
 			String(b.updatedAt ?? b.startedAt ?? "").localeCompare(String(a.updatedAt ?? a.startedAt ?? "")),
 		)
 		const boards: { id: string; title?: string; at?: string; events: unknown[] }[] = []

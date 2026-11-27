@@ -118,6 +118,7 @@ const snapshotText = (events: readonly unknown[] | undefined): string | undefine
 
 export class BoardSlots {
 	private readonly drafts: DraftBoard[]
+	private recentRead: Promise<RecentBoard[]> | undefined
 	private recentCache: { at: number; root: string | undefined; exclude: string | undefined; boards: RecentBoard[] } | undefined
 
 	constructor(
@@ -147,20 +148,46 @@ export class BoardSlots {
 		return ref?.kind === "draft" ? this.drafts[ref.slot - 1] : undefined
 	}
 
-	private async recent(): Promise<RecentBoard[]> {
+	/** Whether the recent boards listed last are still current. */
+	recentIsFresh(): boolean {
+		const cached = this.recentCache
+		return (
+			!!cached &&
+			cached.root === this.deps.workspaceRoot() &&
+			cached.exclude === this.deps.conversation()?.id &&
+			this.now() - cached.at < RECENT_TTL_MS
+		)
+	}
+
+	private async recent(cachedOnly = false): Promise<RecentBoard[]> {
 		const root = this.deps.workspaceRoot()
 		const exclude = this.deps.conversation()?.id
 		const cached = this.recentCache
-		if (cached && cached.root === root && cached.exclude === exclude && this.now() - cached.at < RECENT_TTL_MS) {
-			return cached.boards
+		if (cachedOnly || this.recentIsFresh()) {
+			return cached && cached.root === root ? cached.boards.filter((board) => board.id !== exclude) : []
 		}
-		const boards = await this.deps.recent(root, RECENT_BOARDS, exclude).catch(() => [] as RecentBoard[])
-		this.recentCache = { at: this.now(), root, exclude, boards }
-		return boards
+		// One read at a time: posts that come while it runs share it.
+		if (!this.recentRead) {
+			this.recentRead = this.deps
+				.recent(root, RECENT_BOARDS, exclude)
+				.catch(() => [] as RecentBoard[])
+				.then((boards) => {
+					this.recentCache = { at: this.now(), root, exclude, boards }
+					return boards
+				})
+				.finally(() => {
+					this.recentRead = undefined
+				})
+		}
+		return this.recentRead
 	}
 
-	/** Every board the tab lists, this conversation's first. */
-	async list(): Promise<ViewerBoardEntry[]> {
+	/**
+	 * Every board the tab lists, this conversation's first. `cachedOnly` lists
+	 * the recent conversations as last read, without reading the history: the
+	 * tab draws at once and lists them again when they are read.
+	 */
+	async list(options: { cachedOnly?: boolean } = {}): Promise<ViewerBoardEntry[]> {
 		const entries: ViewerBoardEntry[] = []
 		const conversation = this.deps.conversation()
 		if (conversation) {
@@ -189,7 +216,7 @@ export class BoardSlots {
 				editable: true,
 			})
 		})
-		for (const board of await this.recent()) {
+		for (const board of await this.recent(options.cachedOnly)) {
 			const text = snapshotText(board.events)
 			entries.push({
 				key: recentKey(board.id),

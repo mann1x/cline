@@ -21,13 +21,16 @@ import { getNonce } from "@/core/webview/getNonce"
 import {
 	BOARD_VIEWER_DATA,
 	BOARD_VIEWER_REPLY,
+	type ViewerBoardEntry,
 	type ViewerBoardTask,
 	type ViewerCatalog,
+	type ViewerData,
 	type ViewerFocus,
 	type ViewerReplyMessage,
 	type ViewerRequest,
 	type ViewerRunOp,
 } from "@/shared/board-viewer"
+import { Logger } from "@/shared/services/Logger"
 import { exportBoard, loadBoard } from "./board-io"
 import type { BoardSlots } from "./board-slots"
 import { collectViewerData } from "./collect"
@@ -103,6 +106,8 @@ class BoardViewer {
 	private ready = false
 	private timer: ReturnType<typeof setTimeout> | undefined
 	private stale = true
+	/** Counts the posts, so a slow one does not draw over a newer one. */
+	private generation = 0
 
 	constructor(
 		private readonly deps: BoardViewerDeps,
@@ -167,6 +172,7 @@ class BoardViewer {
 	}
 
 	private async postData(): Promise<void> {
+		const generation = ++this.generation
 		const workspace = this.deps.workspaceRoot()
 		const focus = this.focus
 		// A focus is for the post that follows the open; later refreshes keep
@@ -174,20 +180,43 @@ class BoardViewer {
 		this.focus = undefined
 		this.stale = false
 		const boards = this.deps.boards
-		const home = boards?.home()
-		const entries = boards ? await boards.list().catch(() => undefined) : undefined
-		const data = workspace
-			? collectViewerData({
-					workspace,
-					boardText: home ? boards?.text(home) : undefined,
-					...(home && home !== "live" ? { boardDraft: true } : {}),
-					...(entries ? { boards: entries } : {}),
-					...(boards?.turnRunning() ? { turnRunning: true } : {}),
-					...(this.deps.catalog ? { catalog: this.deps.catalog() } : {}),
-					...(focus ? { focus } : {}),
-				})
-			: { workspace: "", pipelines: [], runs: [], ...(focus ? { focus } : {}) }
-		void this.panel.webview.postMessage({ type: BOARD_VIEWER_DATA, data })
+		// The tab draws first, with the recent conversations as last read;
+		// reading them again can take a while (owner, 2026-11-27: the tab sat
+		// on "Reading the workspace…" while the history was read).
+		await this.send(workspace, focus, boards ? await boards.list({ cachedOnly: true }).catch(() => undefined) : undefined)
+		if (!boards || !workspace || boards.recentIsFresh()) return
+		const entries = await boards.list().catch(() => undefined)
+		// A later post has drawn the tab since: it has the newer state.
+		if (generation !== this.generation || !entries) return
+		await this.send(workspace, undefined, entries)
+	}
+
+	private async send(
+		workspace: string | undefined,
+		focus: ViewerFocus | undefined,
+		entries: ViewerBoardEntry[] | undefined,
+	): Promise<void> {
+		let data: ViewerData
+		try {
+			const boards = this.deps.boards
+			const home = boards?.home()
+			data = workspace
+				? collectViewerData({
+						workspace,
+						boardText: home ? boards?.text(home) : undefined,
+						...(home && home !== "live" ? { boardDraft: true } : {}),
+						...(entries ? { boards: entries } : {}),
+						...(boards?.turnRunning() ? { turnRunning: true } : {}),
+						...(this.deps.catalog ? { catalog: this.deps.catalog() } : {}),
+						...(focus ? { focus } : {}),
+					})
+				: { workspace: "", pipelines: [], runs: [], ...(focus ? { focus } : {}) }
+		} catch (error) {
+			// The tab must leave "Reading the workspace…" even when a part fails.
+			Logger.error("[board-viewer] collecting the tab's data failed", error)
+			data = { workspace: workspace ?? "", pipelines: [], runs: [], ...(focus ? { focus } : {}) }
+		}
+		await this.panel.webview.postMessage({ type: BOARD_VIEWER_DATA, data })
 	}
 
 	private receive(message: unknown): void {

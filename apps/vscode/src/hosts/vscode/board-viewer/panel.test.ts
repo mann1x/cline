@@ -80,6 +80,8 @@ let conversationValue: { id: string; live: boolean } | undefined
 let running = false
 let clock = 0
 let recentBoards: RecentBoard[] = []
+/** A test's history read; the default answers at once. */
+let readRecent: () => Promise<RecentBoard[]> = async () => recentBoards
 let savedList: SavedBoardEntry[] = []
 const savedEventsById = new Map<string, unknown[]>()
 const draftStore = new Map<number, unknown[] | undefined>()
@@ -108,7 +110,7 @@ const boards = new BoardSlots(
 		liveEdit: boardEdit,
 		turnRunning: () => running,
 		draftStorage: (slot) => ({ get: () => draftStore.get(slot), set: (events) => draftStore.set(slot, events) }),
-		recent: async () => recentBoards,
+		recent: () => readRecent(),
 		saved: () => savedList,
 		savedEvents: (id) => savedEventsById.get(id),
 		saveConversation,
@@ -132,6 +134,7 @@ beforeEach(() => {
 	running = false
 	clock += 60_000
 	recentBoards = []
+	readRecent = async () => recentBoards
 	savedList = []
 	savedEventsById.clear()
 	for (const slot of [1, 2, 3]) boards.clear(draftKey(slot))
@@ -328,14 +331,16 @@ describe("the board viewer's requests", () => {
 		await request({ type: "boardViewer/addTask", title: "Draft task", board: "draft:3" })
 		ui.posted.length = 0
 		ui.receive?.({ type: "boardViewer/ready" })
+		type Posted = { type?: string; data?: { boards?: { key: string; label: string; tasks: number; editable: boolean }[] } }
+		const withRecent = () =>
+			(ui.posted as Posted[]).find(
+				(posted) =>
+					posted.type === "boardViewer/data" && posted.data?.boards?.some((entry) => entry.key === "recent:s-old"),
+			)
 		await vi.waitFor(() => {
-			if (!ui.posted.some((posted) => (posted as { type?: string }).type === "boardViewer/data")) throw new Error("no data")
+			if (!withRecent()) throw new Error("no data with the recent boards")
 		})
-		const data = (
-			ui.posted.find((posted) => (posted as { type?: string }).type === "boardViewer/data") as {
-				data: { boards: { key: string; kind: string; label: string; tasks: number; editable: boolean }[] }
-			}
-		).data
+		const data = withRecent()?.data as { boards: { key: string; label: string; tasks: number; editable: boolean }[] }
 		expect(data.boards.map((entry) => [entry.key, entry.label, entry.tasks, entry.editable])).toEqual([
 			["live", "This conversation", 1, true],
 			["draft:1", "Draft 1", 0, true],
@@ -344,6 +349,29 @@ describe("the board viewer's requests", () => {
 			["recent:s-old", "Fix the game", 2, false],
 			["saved:main/m1", "Release", 1, false],
 		])
+	})
+
+	it("draws the tab while the history is still being read, then adds the recent conversations", async () => {
+		// pandorum, 2026-11-27: the tab sat on "Reading the workspace…" while
+		// the history read every transcript.
+		let answer: (boards: RecentBoard[]) => void = () => {}
+		readRecent = () =>
+			new Promise((resolve) => {
+				answer = resolve
+			})
+		ui.posted.length = 0
+		ui.receive?.({ type: "boardViewer/ready" })
+		type Posted = { type?: string; data?: { boards?: { key: string }[] } }
+		const dataPosts = () => (ui.posted as Posted[]).filter((posted) => posted.type === "boardViewer/data")
+		await vi.waitFor(() => {
+			if (dataPosts().length === 0) throw new Error("no data")
+		})
+		expect(dataPosts()[0]?.data?.boards?.map((entry) => entry.key)).toEqual(["live", "draft:1", "draft:2", "draft:3"])
+		answer([{ id: "s-old", title: "Earlier", events: eventsOf("Old one") }])
+		await vi.waitFor(() => {
+			if (dataPosts().length < 2) throw new Error("no second post")
+		})
+		expect(dataPosts()[1]?.data?.boards?.map((entry) => entry.key)).toContain("recent:s-old")
 	})
 
 	it("copies a board to this conversation or a draft, Add or Replace, and Replace waits while the model works", async () => {
