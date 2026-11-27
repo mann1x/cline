@@ -411,6 +411,21 @@ export class TaskGraphStore {
 		this.now = options.now ?? Date.now;
 	}
 
+	/**
+	 * The board a conversation's log holds, read and never written: what a
+	 * reopened conversation shows before its session starts, when only the
+	 * transcript is read back and the task panel's rows are not in it.
+	 * Undefined for no log or an empty one.
+	 */
+	static readSnapshot(logPath: string): TaskGraphSnapshot | undefined {
+		const store = new TaskGraphStore({ logPath });
+		const events = store.readLog();
+		if (events.length === 0) return undefined;
+		store.events = events;
+		store.state = foldTaskEvents(events);
+		return store.isEmpty() ? undefined : store.snapshot();
+	}
+
 	getState(): TaskGraphState {
 		return this.state;
 	}
@@ -501,11 +516,13 @@ export class TaskGraphStore {
 			}
 			this.events = logged.slice(0, keep);
 			this.state = foldTaskEvents(this.events);
-			if (keep < logged.length) {
-				this.rewriteLog();
-				return "rewound";
-			}
-			return "resumed";
+			if (keep < logged.length) this.rewriteLog();
+			// Said, as any change is: the task panel and the Board tab show the
+			// board from this. Without it a resumed conversation's board reached
+			// the model (task_view) and not the person, until a task changed
+			// (owner, 2026-11-27).
+			this.changed();
+			return keep < logged.length ? "rewound" : "resumed";
 		}
 		// A working call's \`task_done\` is replayed too. Whether that call
 		// succeeded is not in the call, so it is taken as sent: a refused edit

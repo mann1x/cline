@@ -231,6 +231,36 @@ describe("SdkTaskHistory", () => {
 		})
 	})
 
+	it("shows a reopened conversation's task board, read from the log beside its transcript", async () => {
+		// The panel reads the board from a task_graph row the transcript does not
+		// hold: a reopened conversation showed none (owner, 2026-11-27).
+		const dir = mkdtempSync(path.join(tmpdir(), "history-board-"))
+		try {
+			const { TaskGraphStore } = await import("@cline/core")
+			const store = new TaskGraphStore({ logPath: path.join(dir, "task-1.tasks.jsonl") })
+			store.plan({ tasks: [{ title: "Fix the game" }, { title: "Run the check", depends: ["#1"] }] })
+			const { history, readMessages } = makeHistory([
+				makeSessionRecord("task-1", { messagesPath: path.join(dir, "task-1.messages.json") }),
+			])
+			readMessages.mockResolvedValueOnce([
+				{ role: "user", content: "fix it" },
+				{ role: "assistant", content: [{ type: "text", text: "Fixed." }] },
+			] as never)
+
+			const result = await history.getClineMessages("task-1")
+
+			const board = result.at(-1)
+			expect(board).toMatchObject({ type: "say", say: "task_graph", partial: false })
+			expect(JSON.parse(board?.text ?? "{}").tasks.map((task: { title: string }) => task.title)).toEqual([
+				"Fix the game",
+				"Run the check",
+			])
+			expect(result.filter((message) => message.say === "task_graph")).toHaveLength(1)
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
 	it("retags only the final turn's text, styled by the mode recovered from user_input wrappers", async () => {
 		const { history, readMessages } = makeHistory([makeSessionRecord("task-1")])
 		readMessages.mockResolvedValueOnce([

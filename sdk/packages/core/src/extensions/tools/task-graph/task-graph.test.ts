@@ -316,6 +316,42 @@ describe("the log and the conversation", () => {
 		expect(task(resumed, "T1")?.status).toBe("done");
 	});
 
+	it("says a resumed board, so the person's panel shows it before any task changes", () => {
+		// Owner, 2026-11-27: the model saw the resumed board (task_view) and the
+		// task panel and the Board tab showed none.
+		const logPath = join(dir, "s.tasks.jsonl");
+		build(logPath);
+		const seen: string[][] = [];
+		const resumed = new TaskGraphStore({
+			logPath,
+			onChange: (store) => seen.push(store.snapshot().tasks.map((t) => t.id)),
+		});
+		resumed.reconcile(history([planCall, doneCall, moreCall]));
+		expect(seen).toEqual([["T1", "T2", "T3"]]);
+		const rewound = new TaskGraphStore({
+			logPath,
+			onChange: (store) => seen.push(store.snapshot().tasks.map((t) => t.id)),
+		});
+		rewound.reconcile(history([planCall]));
+		expect(seen.at(-1)).toEqual(["T1", "T2"]);
+	});
+
+	it("reads a log's board without writing it, for a conversation reopened before its session starts", () => {
+		const logPath = join(dir, "s.tasks.jsonl");
+		build(logPath);
+		const before = readFileSync(logPath, "utf8");
+		const snapshot = TaskGraphStore.readSnapshot(logPath);
+		expect(snapshot?.tasks.map((t) => [t.id, t.status])).toEqual([
+			["T1", "done"],
+			["T2", "active"],
+			["T3", "pending"],
+		]);
+		expect(readFileSync(logPath, "utf8")).toBe(before);
+		expect(
+			TaskGraphStore.readSnapshot(join(dir, "none.tasks.jsonl")),
+		).toBeUndefined();
+	});
+
 	it("rewinds to the cut: events from removed calls go, and the file follows", () => {
 		const logPath = join(dir, "s.tasks.jsonl");
 		build(logPath);

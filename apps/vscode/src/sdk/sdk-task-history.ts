@@ -6,6 +6,7 @@ import {
 	readRoundRecords,
 	readSessionCheckpointHistory,
 	type SessionHistoryRecord,
+	TaskGraphStore,
 } from "@cline/core"
 import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
 import { formatDisplayUserInput, parseUserInputMode } from "@cline/shared"
@@ -490,6 +491,24 @@ export class SdkTaskHistory {
 		}
 	}
 
+	/**
+	 * The conversation's task board, as the task panel's row. The panel reads
+	 * the board from a `task_graph` row, which the extension writes and the
+	 * transcript does not hold, so a reopened conversation showed no board
+	 * until its session changed a task (owner, 2026-11-27). Read from the log
+	 * beside the transcript, as the rounds are.
+	 */
+	private readTaskBoardRow(taskId: string, sdkRecord: SessionHistoryRecord | undefined, ts: number): ClineMessage[] {
+		try {
+			const messagesPath = typeof sdkRecord?.messagesPath === "string" ? sdkRecord.messagesPath.trim() : ""
+			const sessionDir = messagesPath ? path.dirname(messagesPath) : path.join(resolveSessionDataDir(), taskId)
+			const snapshot = TaskGraphStore.readSnapshot(path.join(sessionDir, `${taskId}.tasks.jsonl`))
+			return snapshot ? [{ ts, type: "say", say: "task_graph", text: JSON.stringify(snapshot), partial: false }] : []
+		} catch {
+			return []
+		}
+	}
+
 	async getClineMessages(
 		taskId: string,
 		options?: {
@@ -527,10 +546,14 @@ export class SdkTaskHistory {
 				...(options?.onSpawnRows ? { onSpawnRows: options.onSpawnRows } : {}),
 			},
 		)
+		const board = this.readTaskBoardRow(taskId, sdkRecord, clineMessages.at(-1)?.ts ?? Date.now())
 		if (sdkRecord && legacyTask) {
-			return mergeLegacyUiMessagesWithResumedSdkMessages(readUiMessages(taskId, legacyTask.dataDir), clineMessages)
+			return [
+				...mergeLegacyUiMessagesWithResumedSdkMessages(readUiMessages(taskId, legacyTask.dataDir), clineMessages),
+				...board,
+			]
 		}
-		return clineMessages
+		return [...clineMessages, ...board]
 	}
 
 	/**
