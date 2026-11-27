@@ -42,6 +42,7 @@ import {
 } from "./core/storage/state-migrations"
 import { boardChanged, setBoardViewerOpener } from "./core/webview/board-viewer-hooks"
 import { workspaceResolver } from "./core/workspace"
+import { viewerCatalog } from "./hosts/vscode/board-viewer/catalog"
 import { focusForFile } from "./hosts/vscode/board-viewer/collect"
 import { DraftBoard } from "./hosts/vscode/board-viewer/draft"
 import { type BoardViewerDeps, openBoardViewerPanel } from "./hosts/vscode/board-viewer/panel"
@@ -276,6 +277,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				return { ok: true, lines: ["The draft board is discarded."] }
 			},
 			runAction: (action) => webview.controller.pipelineRunAction(action),
+			catalog: () => viewerCatalog(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath),
 			boardIo: {
 				workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
 				isDraft: () => !conversationOpen(),

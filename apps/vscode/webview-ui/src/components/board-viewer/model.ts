@@ -37,6 +37,10 @@ export type {
 const isObject = (value: unknown): value is Record<string, unknown> =>
 	!!value && typeof value === "object" && !Array.isArray(value)
 
+function strings(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : []
+}
+
 /** The data from a message, or undefined when it is not one of ours. */
 export function readViewerMessage(message: unknown): ViewerData | undefined {
 	if (!isObject(message) || message.type !== BOARD_VIEWER_DATA || !isObject(message.data)) {
@@ -47,6 +51,15 @@ export function readViewerMessage(message: unknown): ViewerData | undefined {
 		workspace: typeof data.workspace === "string" ? data.workspace : "",
 		...(typeof data.boardText === "string" ? { boardText: data.boardText } : {}),
 		...(data.boardDraft === true ? { boardDraft: true } : {}),
+		...(isObject(data.catalog)
+			? {
+					catalog: {
+						tools: strings(data.catalog.tools),
+						agents: strings(data.catalog.agents),
+						functions: strings(data.catalog.functions),
+					},
+				}
+			: {}),
 		pipelines: Array.isArray(data.pipelines)
 			? (data.pipelines.filter((entry) => isObject(entry) && typeof entry.slug === "string") as ViewerPipeline[]).map(
 					(pipeline) => ({ ...pipeline, errors: Array.isArray(pipeline.errors) ? pipeline.errors : [] }),

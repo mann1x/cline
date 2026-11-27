@@ -30,6 +30,7 @@ import {
 	RunsPane,
 	VersionsPane,
 } from "./Panes"
+import { FUNCTION_HELP } from "./step-form"
 
 /**
  * The board viewer (pipelines plan phases 3 and 4): the conversation's board,
@@ -275,6 +276,17 @@ export function BoardViewer() {
 					onDelete: () => {
 						change((current) => removeNodes(current, [subject.id]))
 						setSelected(undefined)
+					},
+					context: {
+						steps: definition.nodes,
+						nodes: definition.nodes,
+						inputs: Object.keys(definition.inputs ?? {}),
+						functions: data?.catalog?.functions ?? Object.keys(FUNCTION_HELP),
+						tools: data?.catalog?.tools ?? [],
+						agents: data?.catalog?.agents ?? [],
+						pipelines: (data?.pipelines ?? [])
+							.filter((candidate) => candidate.slug !== pipeline?.slug)
+							.map((candidate) => candidate.name),
 					},
 				}
 			: undefined

@@ -199,6 +199,8 @@ describe("the board viewer", () => {
 		expect(await screen.findByText('node "command" runs after nothing it can reach')).toBeTruthy()
 		expect(save().disabled).toBe(true)
 		// The new node is picked: its JSON is in the inspector, and a change goes to the draft.
+		// It opens as a form; the JSON is one tab away.
+		fireEvent.click(await screen.findByRole("tab", { name: "JSON" }))
 		await waitFor(() => expect(screen.getByRole("textbox", { name: "command as JSON" })).toBeTruthy())
 		fireEvent.change(screen.getByRole("textbox", { name: "command as JSON" }), {
 			target: { value: JSON.stringify({ id: "notify", type: "command", command: "echo done", after: ["ship"] }) },

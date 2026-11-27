@@ -890,3 +890,140 @@
 	letter-spacing: 0;
 	text-transform: none;
 }
+/* The pipeline step form (owner, 2026-11-27): a label per setting that
+   explains itself on hover or focus, completions as you type. */
+.bv-step-form {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.bv-field {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.bv-field-inline {
+	align-items: center;
+	flex-direction: row-reverse;
+	justify-content: flex-end;
+	gap: 6px;
+}
+.bv-input-short {
+	max-width: 8em;
+}
+.bv-help {
+	color: var(--bv-muted);
+	cursor: help;
+	font-size: 11px;
+	position: relative;
+	text-decoration: underline dotted;
+	text-underline-offset: 3px;
+	width: fit-content;
+}
+.bv-help:hover::after,
+.bv-help:focus-within::after {
+	background: var(--vscode-editorHoverWidget-background, var(--bv-surface));
+	border: 1px solid var(--vscode-editorHoverWidget-border, var(--bv-border));
+	border-radius: 3px;
+	box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
+	color: var(--vscode-editorHoverWidget-foreground, var(--bv-fg));
+	content: attr(data-help);
+	font-size: 12px;
+	left: 0;
+	line-height: 1.4;
+	max-width: 280px;
+	padding: 6px 8px;
+	pointer-events: none;
+	position: absolute;
+	text-decoration: none;
+	top: calc(100% + 4px);
+	white-space: normal;
+	width: max-content;
+	z-index: 20;
+}
+.bv-complete {
+	position: relative;
+}
+.bv-complete > .bv-input {
+	box-sizing: border-box;
+	width: 100%;
+}
+.bv-complete-list {
+	background: var(--vscode-editorSuggestWidget-background, var(--bv-surface));
+	border: 1px solid var(--vscode-editorSuggestWidget-border, var(--bv-border));
+	border-radius: 3px;
+	box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
+	left: 0;
+	list-style: none;
+	margin: 2px 0 0;
+	max-height: 220px;
+	overflow-y: auto;
+	padding: 2px 0;
+	position: absolute;
+	right: 0;
+	top: 100%;
+	z-index: 30;
+}
+.bv-complete-list li {
+	cursor: pointer;
+	display: flex;
+	gap: 8px;
+	justify-content: space-between;
+	padding: 3px 8px;
+}
+.bv-complete-list li .bv-muted {
+	overflow: hidden;
+	text-align: right;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.bv-complete-list li[aria-selected="true"] {
+	background: var(--vscode-editorSuggestWidget-selectedBackground, var(--bv-selected));
+	color: var(--vscode-editorSuggestWidget-selectedForeground, var(--bv-selected-fg));
+}
+.bv-segmented {
+	display: inline-flex;
+	gap: 0;
+	margin-bottom: 8px;
+}
+.bv-segment {
+	appearance: none;
+	background: none;
+	border: 1px solid var(--bv-border);
+	color: var(--bv-muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: 11px;
+	padding: 2px 10px;
+}
+.bv-segment + .bv-segment {
+	border-left: 0;
+}
+.bv-segment[aria-selected="true"] {
+	background: var(--bv-selected);
+	color: var(--bv-selected-fg);
+}
+.bv-after {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.bv-chip-ref {
+	align-items: center;
+	display: inline-flex;
+	gap: 4px;
+	width: fit-content;
+}
+.bv-chip-remove {
+	appearance: none;
+	background: none;
+	border: 0;
+	color: var(--bv-muted);
+	cursor: pointer;
+	font: inherit;
+	padding: 0 2px;
+}
+.bv-chip-remove:hover,
+.bv-chip-remove:focus-visible {
+	color: var(--bv-failed);
+}

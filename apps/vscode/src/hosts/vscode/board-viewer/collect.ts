@@ -9,6 +9,7 @@ import {
 	readPipelineVersion,
 } from "@cline/core"
 import type {
+	ViewerCatalog,
 	ViewerData,
 	ViewerEvent,
 	ViewerFocus,
@@ -30,6 +31,7 @@ export interface CollectInput {
 	boardText?: string
 	/** The board is the draft for the next new conversation. */
 	boardDraft?: boolean
+	catalog?: ViewerCatalog
 	focus?: ViewerFocus
 	maxRuns?: number
 	maxEvents?: number
@@ -49,6 +51,7 @@ export function collectViewerData(input: CollectInput): ViewerData {
 		...(input.boardDraft ? { boardDraft: true } : {}),
 		pipelines: readPipelines(workspace),
 		runs: readRuns(workspace, input.maxRuns ?? VIEWER_MAX_RUNS, input.maxEvents ?? VIEWER_MAX_EVENTS),
+		...(input.catalog ? { catalog: input.catalog } : {}),
 		...(input.focus ? { focus: input.focus } : {}),
 	}
 }

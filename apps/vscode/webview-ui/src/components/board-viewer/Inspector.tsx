@@ -11,6 +11,8 @@ import {
 	type ViewerRunOp,
 } from "./model"
 import { eventSummary } from "./report"
+import { type StepContext, StepForm } from "./StepForm"
+import { GATE_SUGGESTIONS } from "./step-form"
 
 /** What the inspector shows: the selected card, and how it is edited when it can be (phase 4). */
 export type InspectorSubject =
@@ -60,6 +62,8 @@ const Pair = ({ label, children }: { label: string; children: ReactNode }) => (
 export interface NodeEdit {
 	onApply: (json: string) => string | undefined
 	onDelete: () => void
+	/** What the step form completes from; the JSON editor alone without it. */
+	context?: StepContext
 }
 
 /** A change to a task, as the task panel sends it. */
@@ -74,22 +78,6 @@ export interface TaskTools {
 	addStep: (parent: string, title: string) => Promise<boolean>
 	deleteTask: (id: string) => void
 }
-
-/**
- * What a gate can wait on, offered as the person types one (owner,
- * 2026-11-27: "everything that can be auto-completed in ui should have it").
- */
-export const GATE_SUGGESTIONS: { value: string; label: string }[] = [
-	{ value: "human:", label: "Waits for your answer: Resolve opens it" },
-	{ value: "timer:+30m", label: "Waits a while (+10m, +2h, +1d)" },
-	{ value: "timer:2026-12-01T09:00", label: "Waits until a time" },
-	{ value: "commit:<sha>@main", label: "Waits until the branch has the commit" },
-	{ value: "gh-pr:owner/repo#1", label: "Waits until the pull request is merged" },
-	{ value: "gh-run:owner/repo/123", label: "Waits until the Actions run succeeds" },
-	{ value: "run:", label: "Waits until a teammate run or delegated agent ends" },
-	{ value: "command:", label: "Waits until a background command exits" },
-	{ value: "pipeline:", label: "Waits until a pipeline run ends" },
-]
 
 export function Inspector({
 	subject,
@@ -153,11 +141,47 @@ export function Inspector({
 }
 
 function NodeEditor({ node, edit }: { node: ViewerPipelineNode; edit: NodeEdit }) {
+	const [view, setView] = useState<"form" | "json">(edit.context ? "form" : "json")
+	const switcher = edit.context && (
+		<div aria-label="Edit as" className="bv-segmented" role="tablist">
+			{(["form", "json"] as const).map((name) => (
+				<button
+					aria-selected={view === name}
+					className="bv-segment"
+					key={name}
+					onClick={() => setView(name)}
+					role="tab"
+					title={name === "form" ? "Each setting with what it does" : "The step as JSON"}
+					type="button">
+					{name === "form" ? "Form" : "JSON"}
+				</button>
+			))}
+		</div>
+	)
+	if (view === "form" && edit.context) {
+		return (
+			<Section title="Edit">
+				{switcher}
+				<StepForm context={edit.context} node={node} onApply={edit.onApply} />
+				<div className="bv-actions">
+					<span className="bv-spacer" />
+					<button className="bv-button bv-danger" onClick={edit.onDelete} type="button">
+						Delete node
+					</button>
+				</div>
+			</Section>
+		)
+	}
+	return <NodeJsonEditor edit={edit} node={node} switcher={switcher} />
+}
+
+function NodeJsonEditor({ node, edit, switcher }: { node: ViewerPipelineNode; edit: NodeEdit; switcher: ReactNode }) {
 	const [text, setText] = useState(() => nodeJson(node))
 	const [error, setError] = useState<string>()
 	const changed = text !== nodeJson(node)
 	return (
 		<Section title="Edit">
+			{switcher}
 			<textarea
 				aria-label={`${node.id} as JSON`}
 				className="bv-editor"

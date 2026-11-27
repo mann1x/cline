@@ -21,6 +21,7 @@ import {
 	BOARD_VIEWER_DATA,
 	BOARD_VIEWER_REPLY,
 	type ViewerBoardTask,
+	type ViewerCatalog,
 	type ViewerFocus,
 	type ViewerReplyMessage,
 	type ViewerRequest,
@@ -66,6 +67,8 @@ export interface BoardViewerDeps {
 	/** The draft goes to the next new conversation, or is thrown away. */
 	draftStart?: () => { ok: boolean; lines: string[] }
 	draftDiscard?: () => { ok: boolean; lines: string[] }
+	/** What the step form completes from. */
+	catalog?: () => ViewerCatalog
 	/** Load onto and export the board shown. */
 	boardIo?: BoardIoDeps
 	/** The person's action on a run, through the conversation that started it. */
@@ -179,6 +182,7 @@ class BoardViewer {
 					workspace,
 					boardText: this.deps.boardText(),
 					...(this.deps.boardIsDraft?.() ? { boardDraft: true } : {}),
+					...(this.deps.catalog ? { catalog: this.deps.catalog() } : {}),
 					...(focus ? { focus } : {}),
 				})
 			: { workspace: "", pipelines: [], runs: [], ...(focus ? { focus } : {}) }

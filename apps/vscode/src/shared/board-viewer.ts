@@ -129,6 +129,13 @@ export interface ViewerFocus {
 	board?: boolean
 }
 
+/** What a pipeline step can name: the conversation's tools, the configured agents, the expression functions. */
+export interface ViewerCatalog {
+	tools: string[]
+	agents: string[]
+	functions: string[]
+}
+
 export interface ViewerData {
 	workspace: string
 	/**
@@ -144,6 +151,8 @@ export interface ViewerData {
 	pipelines: ViewerPipeline[]
 	/** Newest first. */
 	runs: ViewerRun[]
+	/** What the step form completes from. */
+	catalog?: ViewerCatalog
 	focus?: ViewerFocus
 }
 

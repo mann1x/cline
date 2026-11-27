@@ -1238,6 +1238,7 @@ export {
 	type BoardTaskLike,
 	boardToPipeline,
 	createPipelineTool,
+	EXPRESSION_FUNCTIONS,
 	findPipeline,
 	foldJournal,
 	listPipelines,

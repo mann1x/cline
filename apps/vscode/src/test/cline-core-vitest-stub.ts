@@ -23,6 +23,7 @@ export {
 } from "../../../../sdk/packages/core/src/extensions/browser/browser-launch"
 export { startBrowserProcess, wasAdopted } from "../../../../sdk/packages/core/src/extensions/browser/browser-process"
 export { boardToPipeline, pipelineToTemplate } from "../../../../sdk/packages/core/src/extensions/pipelines/convert"
+export { EXPRESSION_FUNCTIONS } from "../../../../sdk/packages/core/src/extensions/pipelines/expr"
 export {
 	foldJournal,
 	PIPELINE_RUNS_DIR,
@@ -882,4 +883,5 @@ export { normalizeRuntimeCommandName } from "../../../../sdk/packages/core/src/e
 // The real planner, from source: the chat and the CLI must plan `/agent` the
 // same way, and a stub would only agree with itself.
 export { isAgentCommand, planAgentCommand } from "../../../../sdk/packages/core/src/extensions/tools/team/agent-command"
+export { loadConfiguredAgentConfigs } from "../../../../sdk/packages/core/src/extensions/tools/team/configured-agent-config"
 export { resolveMessageDisplayRole } from "../../../../sdk/packages/core/src/session/user-run-messages"
