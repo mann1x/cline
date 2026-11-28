@@ -133,6 +133,14 @@ Until the URL, the key and at least one machine are there, the Model tab shows a
 
 The tools are `remote_run` (commands), `remote_read` (read, list, grep, glob), `remote_write` (write, replace) and `remote_copy` (files and folders between your workspace and a machine). Each one asks for approval under the same auto-approve setting as its local counterpart: **Execute commands**, **Read files**, and **Edit files** for both `remote_write` and `remote_copy`. In Plan mode, `remote_write` and `remote_copy` are refused and `remote_run` refuses commands that write files, as on this machine.
 
+### What the model can do there
+
+- **Run commands** (`remote_run`), including long ones: a command still running when the wait ends keeps running, and the model can wait for it again, **type into it** (answer a `Continue? [y/N]` prompt) or stop it. Stopping works after a VS Code reload too.
+- **Look** (`remote_read`): read text files or **images** (a plot, a chart, a screenshot, shown to models that can see images), list folders, search, list **this conversation's running commands**, the machine's **cores, memory and free disk**, the **ports** its programs listen on, and **fetch** a page from one of them, for example to check a web app the model just started there.
+- **Write** files (`remote_write`) and **copy** files and folders both ways (`remote_copy`).
+
+The first time a conversation uses a machine, the model is also told its cores, memory and free disk.
+
 ### Watching what the model does
 
 The first time the model uses a machine, a read-only tab for it opens in VS Code's Terminal panel, next to your own terminals: **bench-app (remote)**, for example. It does not take focus; pick it from the panel's terminal list. Each command appears with its folder and the conversation it came from, then its output as it runs and how it ended; reads, writes and copies show as one line each. Typing there does nothing. Close it any time: it opens again with the model's next step on that machine.

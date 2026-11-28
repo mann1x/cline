@@ -282,6 +282,60 @@ interface ExecResponse {
 
 class RemoteTerminalError extends Error {}
 
+/** What a remote tool returns: text, or text and an image the model can see. */
+type RemoteToolOutput =
+	| string
+	| Array<
+			| { type: "text"; text: string }
+			| { type: "image"; data: string; mediaType: string }
+	  >;
+
+/** Images up to this size go to the model as they are. */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/** A one-line summary of `/system/info`. */
+export function summarizeSystemInfo(info: unknown): string {
+	const data = (info ?? {}) as {
+		os?: string;
+		arch?: string;
+		environment?: string;
+		cpu?: { cores?: number };
+		memory?: { total?: number; used?: number };
+		disk?: { free?: number; total?: number };
+	};
+	const gb = (bytes?: number) =>
+		typeof bytes === "number" ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : "?";
+	const parts = [
+		typeof data.cpu?.cores === "number" ? `${data.cpu.cores} cores` : undefined,
+		data.memory?.total
+			? `${gb(data.memory.total)} memory (${gb(data.memory.used)} used)`
+			: undefined,
+		data.disk?.free !== undefined
+			? `${gb(data.disk.free)} disk free of ${gb(data.disk.total)}`
+			: undefined,
+		[data.os, data.arch].filter(Boolean).join(" ") || undefined,
+		data.environment,
+	].filter(Boolean);
+	return parts.join(", ");
+}
+
+/**
+ * Open Terminal's port proxy puts a script of its own into every HTML page,
+ * for its in-browser preview (it rewrites links and reports navigation).
+ * It is not the page, so it is taken out before the model reads it.
+ */
+export function withoutProxyScript(html: string): string {
+	return html.replace(
+		/<script>(?:(?!<\/script>)[\s\S])*terminal-browser-state(?:(?!<\/script>)[\s\S])*<\/script>/,
+		"",
+	);
+}
+
+/** Process ids become file names in the run records: only these characters. */
+function safeProcessId(id: string): boolean {
+	return /^[A-Za-z0-9_-]{1,80}$/.test(id);
+}
+
 /** One machine, through Open WebUI's proxy. */
 class OpenTerminalClient {
 	constructor(
@@ -304,6 +358,8 @@ class OpenTerminalClient {
 			body?: RequestInit["body"];
 			contentType?: string;
 			signal?: AbortSignal;
+			/** Hand back any HTTP status instead of turning a non-2xx into an error. */
+			anyStatus?: boolean;
 		},
 	): Promise<Response> {
 		const url = new URL(`${this.base}${path}`);
@@ -331,12 +387,27 @@ class OpenTerminalClient {
 				`Open WebUI at ${this.config.openWebUiUrl} did not answer: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
-		if (!response.ok) {
+		if (!response.ok && !options.anyStatus) {
 			throw new RemoteTerminalError(
 				this.describeFailure(response.status, await response.text()),
 			);
 		}
 		return response;
+	}
+
+	/** A GET whose answer may be JSON or bytes (an image, a web page). */
+	async getRaw(
+		path: string,
+		query: Record<string, string | number | boolean | undefined>,
+		signal?: AbortSignal,
+		anyStatus = false,
+	): Promise<{ status: number; contentType: string; bytes: Uint8Array }> {
+		const response = await this.send("GET", path, { query, signal, anyStatus });
+		return {
+			status: response.status,
+			contentType: response.headers.get("content-type") ?? "",
+			bytes: new Uint8Array(await response.arrayBuffer()),
+		};
 	}
 
 	async request<T>(
@@ -445,6 +516,56 @@ export function createRemoteTerminalTools(
 	// How far each still-running command's output has been read, so waiting
 	// for it again continues instead of repeating what was already returned.
 	const readOffsets = new Map<string, number>();
+	// The machine summary, said once per machine and session on first use.
+	const machineNotes = new Map<string, string>();
+
+	/** Where a session keeps its run records on the machine. */
+	const runsFolder = (workspace: string) => `${workspace}/.cerebriline/runs`;
+
+	/**
+	 * A long-running command's marker, kept in the session's folder on the
+	 * machine as well as here: after a reload this process has forgotten it,
+	 * and without it the command cannot be stopped under multi-user sudo.
+	 * The same records tell `processes` which commands are this session's.
+	 */
+	const rememberRun = async (
+		client: OpenTerminalClient,
+		workspace: string,
+		processId: string,
+		marker: string,
+	) => {
+		if (!safeProcessId(processId)) return;
+		await client
+			.request("POST", "/files/write", {
+				body: {
+					path: `${runsFolder(workspace)}/${processId}`,
+					content: marker,
+				},
+			})
+			.catch((error) =>
+				options.onError?.(`Could not record process ${processId}`, error),
+			);
+	};
+	const recallMarker = async (
+		client: OpenTerminalClient,
+		workspace: string,
+		processId: string,
+	) => {
+		if (!safeProcessId(processId)) return undefined;
+		try {
+			const file = await client.request<{ content?: string }>(
+				"GET",
+				"/files/read",
+				{
+					query: { path: `${runsFolder(workspace)}/${processId}` },
+				},
+			);
+			const marker = file.content?.trim();
+			return marker && /^[A-Za-z0-9]+$/.test(marker) ? marker : undefined;
+		} catch {
+			return undefined;
+		}
+	};
 
 	const emit = (event: RemoteActivity) => {
 		try {
@@ -490,8 +611,14 @@ export function createRemoteTerminalTools(
 		client: OpenTerminalClient,
 		processId: string,
 		knownMarker?: string,
+		workspace?: string,
 	): Promise<void> => {
-		const marker = knownMarker ?? runMarkers.get(processId);
+		const marker =
+			knownMarker ??
+			runMarkers.get(processId) ??
+			(workspace
+				? await recallMarker(client, workspace, processId)
+				: undefined);
 		if (!marker) {
 			// Started before this session's tools existed: all that is left is
 			// Open Terminal's own stop, which may be refused.
@@ -571,6 +698,16 @@ export function createRemoteTerminalTools(
 					workspaceId,
 					path,
 				});
+				try {
+					const info = await client.request<unknown>("GET", "/system/info", {
+						signal: context.signal,
+					});
+					const summary = summarizeSystemInfo(info);
+					if (summary)
+						machineNotes.set(key, `(${terminal.name.trim()}: ${summary})`);
+				} catch {
+					// Older Open Terminal, or the system feature is off: no summary.
+				}
 				return path;
 			})();
 			workspaces.set(key, pending);
@@ -578,6 +715,34 @@ export function createRemoteTerminalTools(
 			pending.catch(() => workspaces.delete(key));
 		}
 		return pending;
+	};
+
+	const sessionKey = (terminal: RemoteTerminal, context: AgentToolContext) =>
+		`${terminal.machineId.trim()}\u0000${terminal.name.trim().toLowerCase()}\u0000${remoteWorkspaceId(context)}`;
+	/** The machine summary for this session's first call on it, then nothing. */
+	const firstUseNote = (
+		terminal: RemoteTerminal,
+		context: AgentToolContext,
+	): string => {
+		const key = sessionKey(terminal, context);
+		const text = machineNotes.get(key);
+		if (!text) return "";
+		machineNotes.delete(key);
+		return `\n${text}`;
+	};
+	const withNote = (
+		output: RemoteToolOutput,
+		terminal: RemoteTerminal,
+		context: AgentToolContext,
+	): RemoteToolOutput => {
+		const extra = firstUseNote(terminal, context);
+		if (!extra) return output;
+		if (typeof output === "string") return output + extra;
+		return output.map((part, index) =>
+			index === 0 && part.type === "text"
+				? { ...part, text: part.text + extra }
+				: part,
+		);
 	};
 
 	const inside = (workspace: string, path: unknown): string => {
@@ -608,8 +773,9 @@ export function createRemoteTerminalTools(
 			timeout_seconds?: number;
 			process_id?: string;
 			kill?: boolean;
+			input?: string;
 		},
-		string
+		RemoteToolOutput
 	>({
 		name: REMOTE_TERMINAL_TOOL_NAMES.RUN,
 		description: [
@@ -617,7 +783,7 @@ export function createRemoteTerminalTools(
 			"Remote terminals:",
 			terminalList,
 			workspaceNote,
-			"A `cd` does not carry over to the next call: pass `cwd` instead. A command still running when `timeout_seconds` is reached keeps running; call again with its `process_id` to wait for it, or with `process_id` and `kill: true` to stop it.",
+			"A `cd` does not carry over to the next call: pass `cwd` instead. A command still running when `timeout_seconds` is reached keeps running; call again with its `process_id` to wait for it, with `process_id` and `input` to type into it (answer a prompt; end lines with \\n), or with `process_id` and `kill: true` to stop it. `remote_read` with action `processes` lists this conversation's commands.",
 		].join("\n"),
 		inputSchema: {
 			type: "object",
@@ -645,6 +811,11 @@ export function createRemoteTerminalTools(
 					type: "boolean",
 					description: "With process_id: stop that command.",
 				},
+				input: {
+					type: "string",
+					description:
+						'With process_id: text to send to the command\'s standard input, e.g. "y\\n". Then waits for more output as usual.',
+				},
 			},
 			required: ["terminal"],
 		},
@@ -661,12 +832,28 @@ export function createRemoteTerminalTools(
 			if (input.process_id?.trim()) {
 				const id = input.process_id.trim();
 				if (input.kill) {
-					await stopRun(client, id);
+					await stopRun(client, id, undefined, workspace);
 					readOffsets.delete(id);
 					note(terminal, context, `stopped process ${id}`);
 					return `[${terminal.name}] stopped process ${id}.`;
 				}
-				note(terminal, context, `waiting again for process ${id}`);
+				if (typeof input.input === "string" && input.input !== "") {
+					await client.request(
+						"POST",
+						`/execute/${encodeURIComponent(id)}/input`,
+						{
+							body: { input: input.input },
+							signal: context.signal,
+						},
+					);
+					note(
+						terminal,
+						context,
+						`typed into process ${id}: ${JSON.stringify(input.input)}`,
+					);
+				} else {
+					note(terminal, context, `waiting again for process ${id}`);
+				}
 				response = await client.request<ExecResponse>(
 					"GET",
 					`/execute/${encodeURIComponent(id)}/status`,
@@ -716,7 +903,10 @@ export function createRemoteTerminalTools(
 					}
 					throw error;
 				}
-				if (response.status === "running") runMarkers.set(response.id, marker);
+				if (response.status === "running") {
+					runMarkers.set(response.id, marker);
+					await rememberRun(client, workspace, response.id, marker);
+				}
 			}
 			collected += outputText(response);
 			shown(terminal, context, outputText(response));
@@ -743,11 +933,12 @@ export function createRemoteTerminalTools(
 			} catch (error) {
 				if (context.signal?.aborted && response.status === "running") {
 					// The user stopped the run: stop the command too, not just the wait.
-					await stopRun(client, response.id).catch((stopError) =>
-						options.onError?.(
-							`Could not stop process ${response.id} on "${terminal.name}"`,
-							stopError,
-						),
+					await stopRun(client, response.id, undefined, workspace).catch(
+						(stopError) =>
+							options.onError?.(
+								`Could not stop process ${response.id} on "${terminal.name}"`,
+								stopError,
+							),
 					);
 				}
 				throw error;
@@ -778,29 +969,46 @@ export function createRemoteTerminalTools(
 						},
 			);
 			if (response.status === "running") {
-				return `[${terminal.name}] still running after ${seconds} s as process ${response.id}. Call ${REMOTE_TERMINAL_TOOL_NAMES.RUN} with process_id "${response.id}" to keep waiting, or with kill: true to stop it.\n${output}`;
+				return withNote(
+					`[${terminal.name}] still running after ${seconds} s as process ${response.id}. Call ${REMOTE_TERMINAL_TOOL_NAMES.RUN} with process_id "${response.id}" to keep waiting, with input to type into it, or with kill: true to stop it.\n${output}`,
+					terminal,
+					context,
+				);
 			}
-			return `[${terminal.name}] exit ${response.exit_code ?? "?"} after ${seconds} s\n${output || "(no output)"}`;
+			return withNote(
+				`[${terminal.name}] exit ${response.exit_code ?? "?"} after ${seconds} s\n${output || "(no output)"}`,
+				terminal,
+				context,
+			);
 		},
 	});
 
 	const read = createTool<
 		{
 			terminal: string;
-			action: "read" | "list" | "grep" | "glob";
+			action:
+				| "read"
+				| "list"
+				| "grep"
+				| "glob"
+				| "processes"
+				| "info"
+				| "ports"
+				| "fetch";
 			path?: string;
 			start_line?: number;
 			end_line?: number;
 			query?: string;
 			pattern?: string;
 			max_results?: number;
+			port?: number;
 		},
-		string
+		RemoteToolOutput
 	>({
 		name: REMOTE_TERMINAL_TOOL_NAMES.READ,
 		readOnly: true,
 		description: [
-			"Read files on a remote terminal: read a file (optionally a line range), list a directory, search file contents (grep) or find files by name (glob).",
+			"Look at a remote terminal without changing it: read a file (a line range of text, or an image, which you see), list a directory, search file contents (grep), find files by name (glob), list this conversation's commands and whether they still run (processes), the machine's cores, memory and disk (info), the ports programs listen on (ports), or GET a page from one of them (fetch: `port` and `path`).",
 			"Remote terminals:",
 			terminalList,
 			workspaceNote,
@@ -809,11 +1017,27 @@ export function createRemoteTerminalTools(
 			type: "object",
 			properties: {
 				terminal: terminalProperty,
-				action: { type: "string", enum: ["read", "list", "grep", "glob"] },
+				action: {
+					type: "string",
+					enum: [
+						"read",
+						"list",
+						"grep",
+						"glob",
+						"processes",
+						"info",
+						"ports",
+						"fetch",
+					],
+				},
+				port: {
+					type: "number",
+					description: "fetch: the port a program on the terminal listens on.",
+				},
 				path: {
 					type: "string",
 					description:
-						"File or directory, relative to the workspace or absolute. Default: the workspace.",
+						"File or directory, relative to the workspace or absolute. Default: the workspace. fetch: the URL path, e.g. /api/health.",
 				},
 				start_line: {
 					type: "number",
@@ -842,23 +1066,185 @@ export function createRemoteTerminalTools(
 			const common = { signal: context.signal };
 			switch (input.action) {
 				case "read": {
-					const file = await client.request<{
-						path: string;
-						content: string;
-						total_lines?: number;
-					}>("GET", "/files/read", {
-						...common,
-						query: {
-							path,
-							start_line: input.start_line,
-							end_line: input.end_line,
-						},
-					});
+					const raw = await client.getRaw(
+						"/files/read",
+						{ path, start_line: input.start_line, end_line: input.end_line },
+						context.signal,
+					);
+					if (raw.contentType.startsWith("image/")) {
+						const kind = raw.contentType.split(";")[0].trim();
+						const label = `[${terminal.name}] ${path}: ${kind} image, ${(raw.bytes.length / 1024).toFixed(1)} KB`;
+						if (context.metadata?.modelSupportsImages !== true) {
+							return withNote(
+								`${label}. This model cannot see images; copy it with remote_copy to look at it locally.`,
+								terminal,
+								context,
+							);
+						}
+						if (raw.bytes.length > MAX_IMAGE_BYTES) {
+							return withNote(
+								`${label}: larger than ${MAX_IMAGE_BYTES / 1024 / 1024} MB, not shown. Scale it down on the terminal first.`,
+								terminal,
+								context,
+							);
+						}
+						return withNote(
+							[
+								{ type: "text", text: label },
+								{
+									type: "image",
+									data: Buffer.from(raw.bytes).toString("base64"),
+									mediaType: kind,
+								},
+							],
+							terminal,
+							context,
+						);
+					}
+					let file: { path: string; content: string; total_lines?: number };
+					try {
+						file = JSON.parse(new TextDecoder().decode(raw.bytes));
+					} catch {
+						return withNote(
+							`[${terminal.name}] ${path} is a ${raw.contentType || "binary"} file that cannot be shown as text; copy it with remote_copy.`,
+							terminal,
+							context,
+						);
+					}
 					const range =
 						input.start_line || input.end_line
 							? ` lines ${input.start_line ?? 1}-${input.end_line ?? file.total_lines ?? "end"}`
 							: "";
-					return `[${terminal.name}] ${file.path}${range} (${file.total_lines ?? "?"} lines)\n${trimRemoteOutput(file.content)}`;
+					return withNote(
+						`[${terminal.name}] ${file.path}${range} (${file.total_lines ?? "?"} lines)\n${trimRemoteOutput(file.content)}`,
+						terminal,
+						context,
+					);
+				}
+				case "processes": {
+					const records = await client
+						.request<{ entries: Array<{ name: string; type: string }> }>(
+							"GET",
+							"/files/list",
+							{
+								...common,
+								query: { directory: runsFolder(workspace) },
+							},
+						)
+						.catch(() => ({
+							entries: [] as Array<{ name: string; type: string }>,
+						}));
+					const mine = records.entries
+						.filter((entry) => entry.type !== "directory")
+						.map((entry) => entry.name);
+					if (mine.length === 0) {
+						return withNote(
+							`[${terminal.name}] no long-running commands from this conversation.`,
+							terminal,
+							context,
+						);
+					}
+					const tracked = await client.request<
+						Array<{
+							id: string;
+							command: string;
+							status: string;
+							exit_code?: number | null;
+						}>
+					>("GET", "/execute", common);
+					const byId = new Map(tracked.map((entry) => [entry.id, entry]));
+					const lines = mine.map((id) => {
+						const entry = byId.get(id);
+						if (!entry) return `${id}  finished (no longer tracked)`;
+						const state =
+							entry.status === "running"
+								? "running"
+								: `${entry.status}${entry.exit_code !== undefined && entry.exit_code !== null ? `, exit ${entry.exit_code}` : ""}`;
+						return `${id}  ${state}  ${entry.command.length > 120 ? `${entry.command.slice(0, 117)}...` : entry.command}`;
+					});
+					return withNote(
+						`[${terminal.name}] this conversation's long-running commands:\n${lines.join("\n")}`,
+						terminal,
+						context,
+					);
+				}
+				case "info": {
+					const info = await client.request<unknown>(
+						"GET",
+						"/system/info",
+						common,
+					);
+					machineNotes.delete(sessionKey(terminal, context));
+					return `[${terminal.name}] ${summarizeSystemInfo(info) || "no system information"}`;
+				}
+				case "ports": {
+					const listed = await client.request<{
+						ports?: Array<Record<string, unknown>>;
+					}>("GET", "/ports", common);
+					const ports = listed.ports ?? [];
+					const lines = ports.map((entry) =>
+						Object.entries(entry)
+							.map(
+								([key, value]) =>
+									`${key}=${typeof value === "string" ? value : JSON.stringify(value)}`,
+							)
+							.join("  "),
+					);
+					return withNote(
+						`[${terminal.name}] ${ports.length} listening port${ports.length === 1 ? "" : "s"}${lines.length ? `\n${lines.join("\n")}` : ""}`,
+						terminal,
+						context,
+					);
+				}
+				case "fetch": {
+					const port = Number(input.port);
+					if (!Number.isInteger(port) || port < 1 || port > 65535) {
+						throw new RemoteTerminalError("fetch needs a `port` (1-65535).");
+					}
+					const target = (
+						typeof input.path === "string" ? input.path.trim() : ""
+					).replace(/^\/+/, "");
+					const [route, search] = target.split("?", 2);
+					const query = Object.fromEntries(new URLSearchParams(search ?? ""));
+					const raw = await client.getRaw(
+						`/proxy/${port}/${route.split("/").map(encodeURIComponent).join("/")}`,
+						query,
+						context.signal,
+						true,
+					);
+					const kind = raw.contentType.split(";")[0].trim();
+					const head = `[${terminal.name}] GET :${port}/${target} -> HTTP ${raw.status}${kind ? ` (${kind})` : ""}`;
+					if (
+						raw.status === 404 &&
+						/Port not found/.test(new TextDecoder().decode(raw.bytes))
+					) {
+						throw new RemoteTerminalError(
+							`Nothing of this account listens on port ${port} on "${terminal.name}"; see action ports.`,
+						);
+					}
+					if (
+						kind.startsWith("image/") &&
+						context.metadata?.modelSupportsImages === true &&
+						raw.bytes.length <= MAX_IMAGE_BYTES
+					) {
+						return [
+							{ type: "text", text: head },
+							{
+								type: "image",
+								data: Buffer.from(raw.bytes).toString("base64"),
+								mediaType: kind,
+							},
+						];
+					}
+					const textual =
+						!kind || /^text\/|json|xml|javascript|html/.test(kind);
+					return withNote(
+						textual
+							? `${head}\n${trimRemoteOutput(withoutProxyScript(new TextDecoder().decode(raw.bytes)))}`
+							: `${head}, ${raw.bytes.length} bytes of ${kind}`,
+						terminal,
+						context,
+					);
 				}
 				case "list": {
 					const listing = await client.request<{
@@ -913,7 +1299,7 @@ export function createRemoteTerminalTools(
 				}
 				default:
 					throw new RemoteTerminalError(
-						`Unknown action "${String(input.action)}": use read, list, grep or glob.`,
+						`Unknown action "${String(input.action)}": use read, list, grep, glob, processes, info, ports or fetch.`,
 					);
 			}
 		},
@@ -1243,7 +1629,12 @@ export function createRemoteTerminalTools(
 			const name = (input as { terminal?: unknown } | undefined)?.terminal;
 			try {
 				const result = await tool.execute(input, context);
-				const line = String(result).split("\n")[0] ?? "";
+				const text = Array.isArray(result)
+					? ((result as Array<{ type?: string; text?: string }>).find(
+							(part) => part.type === "text",
+						)?.text ?? "")
+					: String(result);
+				const line = text.split("\n")[0] ?? "";
 				const match = /^\[([^\]]+)\] (.*)$/.exec(line);
 				if (match) {
 					emit({

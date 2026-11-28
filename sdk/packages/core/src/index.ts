@@ -1662,6 +1662,7 @@ export {
 	remoteWorkspaceId,
 	removeRemoteWorkspace,
 	stopCommand,
+	summarizeSystemInfo,
 	trimRemoteOutput,
 } from "./extensions/tools/remote-terminals";
 export {

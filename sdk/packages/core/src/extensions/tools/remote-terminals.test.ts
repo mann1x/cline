@@ -60,6 +60,7 @@ function fakeOpenWebUi(
 		json?: unknown;
 		text?: string;
 		bytes?: Uint8Array;
+		contentType?: string;
 	},
 ) {
 	const calls: Call[] = [];
@@ -79,14 +80,23 @@ function fakeOpenWebUi(
 		if (answer.bytes)
 			return new Response(new Uint8Array(answer.bytes), {
 				status: answer.status ?? 200,
+				headers: answer.contentType
+					? { "content-type": answer.contentType }
+					: {},
 			});
 		const text = answer.text ?? JSON.stringify(answer.json ?? {});
-		return new Response(text, { status: answer.status ?? 200 });
+		return new Response(text, {
+			status: answer.status ?? 200,
+			headers: answer.contentType ? { "content-type": answer.contentType } : {},
+		});
 	}) as typeof fetch;
 	return { calls, fetchImpl };
 }
 
 const WORKSPACE = "/home/u76b162c1/cerebriline/1790_task";
+
+/** What the fake answers for /system/info; empty unless a test sets it. */
+let machineInfo: unknown;
 
 /** Answers the workspace mkdir, then hands everything else to `rest`. */
 function withWorkspace(
@@ -95,10 +105,17 @@ function withWorkspace(
 		json?: unknown;
 		text?: string;
 		bytes?: Uint8Array;
+		contentType?: string;
 	},
 ) {
 	return (call: Call) => {
 		const command = call.body?.command;
+		// The machine summary asked for when a workspace is made: none here,
+		// so results carry no first-use note unless a test answers it itself.
+		if (call.url.pathname.endsWith("/system/info") && !machineInfo)
+			return { json: {} };
+		if (call.url.pathname.endsWith("/system/info"))
+			return { json: machineInfo };
 		if (
 			call.url.pathname.endsWith("/execute") &&
 			typeof command === "string" &&
@@ -203,7 +220,10 @@ describe("remote_run", () => {
 		);
 
 		expect(result).toMatch(/^\[bench-app\] exit 0 after [\d.]+ s\nhello$/);
-		const [mkdir, run] = calls;
+		const mkdir = calls[0];
+		const run = calls.find(
+			(call) => call.body?.command === "echo hello",
+		) as Call;
 		expect(mkdir.url.pathname).toBe(
 			"/api/v1/machines/solidpc-bench-app/execute",
 		);
@@ -1064,5 +1084,266 @@ describe("activity for the host's display", () => {
 				context(),
 			),
 		).toContain("exit 0");
+	});
+});
+
+describe("images, input, run records, processes, info, ports", () => {
+	const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+
+	it("shows an image to a model that can see, and explains to one that cannot", async () => {
+		const { fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) =>
+				call.url.pathname.endsWith("/files/read")
+					? { bytes: png, contentType: "image/png" }
+					: done(),
+			),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+		});
+		const seen = (await tool(tools, "remote_read").execute(
+			{ terminal: "bench-app", action: "read", path: "plot.png" },
+			context({
+				metadata: { modelSupportsImages: true },
+			} as Partial<AgentToolContext>),
+		)) as unknown as Array<{
+			type: string;
+			data?: string;
+			mediaType?: string;
+			text?: string;
+		}>;
+		expect(seen[0].text).toContain("plot.png: image/png image");
+		expect(seen[1]).toEqual({
+			type: "image",
+			data: Buffer.from(png).toString("base64"),
+			mediaType: "image/png",
+		});
+		const blind = await tool(tools, "remote_read").execute(
+			{ terminal: "bench-app", action: "read", path: "plot.png" },
+			context(),
+		);
+		expect(blind).toContain("cannot see images; copy it with remote_copy");
+	});
+
+	it("types into a running command, then waits for its answer", async () => {
+		const { calls, fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) => {
+				if (call.url.pathname.endsWith("/input"))
+					return { json: { status: "ok" } };
+				return {
+					json: {
+						id: "p9",
+						status: "done",
+						exit_code: 0,
+						next_offset: 2,
+						output: [{ data: "installed\n" }],
+					},
+				};
+			}),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+		});
+		const result = await tool(tools, "remote_run").execute(
+			{ terminal: "bench-app", process_id: "p9", input: "y\n" },
+			context(),
+		);
+		const typed = calls.find((call) =>
+			call.url.pathname.endsWith("/execute/p9/input"),
+		);
+		expect(typed?.body).toEqual({ input: "y\n" });
+		expect(result).toContain("installed");
+	});
+
+	it("records a long-running command in the session folder, and stops it after a reload", async () => {
+		const files = new Map<string, string>();
+		const handler = withWorkspace((call) => {
+			if (call.url.pathname.endsWith("/files/write")) {
+				files.set(String(call.body?.path), String(call.body?.content));
+				return { json: { path: call.body?.path, size: 1 } };
+			}
+			if (call.url.pathname.endsWith("/files/read")) {
+				const content = files.get(String(call.url.searchParams.get("path")));
+				return content
+					? { json: { path: "x", content, total_lines: 1 } }
+					: { status: 404, json: { detail: "File not found" } };
+			}
+			const command = String(call.body?.command ?? "");
+			if (command.startsWith("m='CEREBRILINE_RUN=")) return done("stopped");
+			return {
+				json: {
+					id: "20261128-1-abc",
+					status: "running",
+					next_offset: 0,
+					output: [],
+				},
+			};
+		});
+		const first = fakeOpenWebUi(handler);
+		const before = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl: first.fetchImpl,
+		});
+		await tool(before, "remote_run").execute(
+			{ terminal: "bench-app", command: "serve", timeout_seconds: 1 },
+			context(),
+		);
+		const recordPath = `${WORKSPACE}/.cerebriline/runs/20261128-1-abc`;
+		const marker = files.get(recordPath);
+		expect(marker).toMatch(/^[a-f0-9]{32}$/);
+		// A new set of tools is what a reload gives: nothing in memory.
+		const second = fakeOpenWebUi(handler);
+		const after = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl: second.fetchImpl,
+		});
+		await tool(after, "remote_run").execute(
+			{ terminal: "bench-app", process_id: "20261128-1-abc", kill: true },
+			context(),
+		);
+		expect(second.calls.at(-1)?.body?.command).toBe(
+			stopCommand(marker as string),
+		);
+		expect(second.calls.some((call) => call.method === "DELETE")).toBe(false);
+	});
+
+	it("lists this conversation's commands from its run records, not the whole account's", async () => {
+		const { fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) => {
+				if (call.url.pathname.endsWith("/files/list")) {
+					return {
+						json: {
+							dir: "x",
+							entries: [
+								{ name: "p-mine", type: "file" },
+								{ name: "p-gone", type: "file" },
+							],
+						},
+					};
+				}
+				if (call.method === "GET" && call.url.pathname.endsWith("/execute")) {
+					return {
+						json: [
+							{
+								id: "p-mine",
+								command: "make bench",
+								status: "running",
+								exit_code: null,
+							},
+							{
+								id: "p-other-conversation",
+								command: "secret",
+								status: "running",
+							},
+						],
+					};
+				}
+				return done();
+			}),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+		});
+		const listed = await tool(tools, "remote_read").execute(
+			{ terminal: "bench-app", action: "processes" },
+			context(),
+		);
+		expect(listed).toContain("p-mine  running  make bench");
+		expect(listed).toContain("p-gone  finished (no longer tracked)");
+		expect(listed).not.toContain("secret");
+	});
+
+	it("says once what the machine is, and on demand", async () => {
+		machineInfo = {
+			os: "Linux 6.2",
+			arch: "x86_64",
+			environment: "container",
+			cpu: { cores: 4 },
+			memory: { total: 8 * 1024 ** 3, used: 1024 ** 3 },
+			disk: { free: 100 * 1024 ** 3, total: 900 * 1024 ** 3 },
+		};
+		try {
+			const { fetchImpl } = fakeOpenWebUi(withWorkspace(() => done("ok")));
+			const tools = createRemoteTerminalTools({
+				getConfig: () => CONFIG,
+				fetchImpl,
+			});
+			const first = await tool(tools, "remote_run").execute(
+				{ terminal: "bench-app", command: "true" },
+				context(),
+			);
+			expect(first).toContain(
+				"(bench-app: 4 cores, 8.0 GB memory (1.0 GB used), 100.0 GB disk free of 900.0 GB, Linux 6.2 x86_64, container)",
+			);
+			const second = await tool(tools, "remote_run").execute(
+				{ terminal: "bench-app", command: "true" },
+				context(),
+			);
+			expect(second).not.toContain("cores");
+			expect(
+				await tool(tools, "remote_read").execute(
+					{ terminal: "bench-app", action: "info" },
+					context(),
+				),
+			).toContain("4 cores");
+		} finally {
+			machineInfo = undefined;
+		}
+	});
+
+	it("lists ports and fetches a page through the proxy", async () => {
+		const { calls, fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) => {
+				if (call.url.pathname.endsWith("/ports"))
+					return { json: { ports: [{ port: 8080, process: "python3" }] } };
+				if (call.url.pathname.includes("/proxy/8080/"))
+					return {
+						text: "<script>\n(() => { parent.postMessage({type: 'terminal-browser-state'}, '*'); })();\n</script><h1>ok</h1><script>app()</script>",
+						contentType: "text/html",
+					};
+				if (call.url.pathname.includes("/proxy/9999/"))
+					return { status: 404, json: { detail: "Port not found" } };
+				return done();
+			}),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+		});
+		expect(
+			await tool(tools, "remote_read").execute(
+				{ terminal: "bench-app", action: "ports" },
+				context(),
+			),
+		).toContain("port=8080  process=python3");
+		const page = await tool(tools, "remote_read").execute(
+			{
+				terminal: "bench-app",
+				action: "fetch",
+				port: 8080,
+				path: "/api/health?full=1",
+			},
+			context(),
+		);
+		// Open Terminal's own preview script is gone; the page's script stays.
+		expect(page).toContain(
+			"GET :8080/api/health?full=1 -> HTTP 200 (text/html)\n<h1>ok</h1><script>app()</script>",
+		);
+		const proxied = calls.find((call) =>
+			call.url.pathname.includes("/proxy/8080/"),
+		);
+		expect(proxied?.url.pathname).toBe(
+			"/api/v1/machines/solidpc-bench-app/proxy/8080/api/health",
+		);
+		expect(proxied?.url.searchParams.get("full")).toBe("1");
+		await expect(
+			tool(tools, "remote_read").execute(
+				{ terminal: "bench-app", action: "fetch", port: 9999, path: "/" },
+				context(),
+			),
+		).rejects.toThrow(/Nothing of this account listens on port 9999/);
 	});
 });
