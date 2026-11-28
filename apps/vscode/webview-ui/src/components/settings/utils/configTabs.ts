@@ -6,7 +6,17 @@ import type { Mode } from "@shared/storage/types"
  * `plan` and `act` are the session's own model. The rest are scoped tabs, each
  * configuring a model or endpoint used for one particular job.
  */
-export type ConfigTab = Mode | "vision" | "agents" | "escalation" | "imagegen" | "audio" | "video" | "embedding" | "jev"
+export type ConfigTab =
+	| Mode
+	| "vision"
+	| "agents"
+	| "escalation"
+	| "imagegen"
+	| "audio"
+	| "video"
+	| "remote"
+	| "embedding"
+	| "jev"
 
 /** The tabs that are not the session's model. */
 export const SCOPED_TABS = ["vision", "agents", "escalation", "imagegen", "audio", "video", "embedding", "jev"] as const

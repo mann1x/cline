@@ -126,6 +126,7 @@ message Secrets {
   optional string reranking_api_key = 59;
   optional string scrape_api_key = 60;
   optional string audio_sfx_api_key = 61;
+  optional string open_web_ui_api_key = 62;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -377,6 +378,8 @@ message Settings {
   optional bool show_cloud_usage_in_task_header = 255;
   optional int32 max_terminals = 256;
   optional bool pipelines_enabled = 257;
+  optional bool remote_terminals_enabled = 258;
+  optional string remote_terminals = 259;
 }
 
 message State {
@@ -585,6 +588,11 @@ message UpdateSettingsRequest {
   optional bool video_enabled = 96;
   optional string video_endpoint = 97;
   optional string video_api_key = 98;
+  // The Remote terminals tab: the switch, its settings as one JSON record, and
+  // the Open WebUI API key, write-only like the image key.
+  optional bool remote_terminals_enabled = 123;
+  optional string remote_terminals = 124;
+  optional string open_web_ui_api_key = 125;
   // The Embedding tab: the switch, the two endpoints as one JSON record, and
   // the two keys, write-only like the image key.
   optional bool embedding_enabled = 101;

@@ -28,6 +28,7 @@ import {
 } from "./command-guard";
 import { DefaultToolNames } from "./constants";
 import { normalizeRunCommandsInput } from "./helpers";
+import { REMOTE_TERMINAL_TOOL_NAMES } from "./remote-terminals";
 
 export const PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME =
 	"core.plan-mode-command-guard";
@@ -91,6 +92,51 @@ export function createPlanModeCommandGuardExtension(
 					skip: true,
 					reason:
 						"In plan mode, extract_document writes only to its default folder, .cline/extracted/. Call it again without output_dir; the text and pictures can go elsewhere once the user switches to Act mode.",
+				};
+			}
+			return undefined;
+		}
+
+		// Remote terminals: a file write on the remote machine waits for Act
+		// mode like a local one, and a remote command is held to the same
+		// file-editing blacklist as `run_commands`.
+		if (context.tool.name === REMOTE_TERMINAL_TOOL_NAMES.WRITE) {
+			capturePlanModeCommandBlocked(options.telemetry, {
+				tool_name: REMOTE_TERMINAL_TOOL_NAMES.WRITE,
+				blocked_construct: "remote_write",
+				command_count: 1,
+				agent_id: context.snapshot.agentId,
+				conversation_id: context.snapshot.conversationId,
+				run_id: context.snapshot.runId,
+				iteration: context.snapshot.iteration,
+				tool_call_id: context.toolCall.toolCallId,
+			});
+			return {
+				skip: true,
+				reason: formatPlanModeBlockedCommandError("`remote_write`"),
+			};
+		}
+		if (context.tool.name === REMOTE_TERMINAL_TOOL_NAMES.RUN) {
+			const command = (context.input as { command?: unknown } | undefined)
+				?.command;
+			const blocked =
+				typeof command === "string"
+					? findFileEditingCommand(command)
+					: undefined;
+			if (blocked) {
+				capturePlanModeCommandBlocked(options.telemetry, {
+					tool_name: REMOTE_TERMINAL_TOOL_NAMES.RUN,
+					blocked_construct: blocked,
+					command_count: 1,
+					agent_id: context.snapshot.agentId,
+					conversation_id: context.snapshot.conversationId,
+					run_id: context.snapshot.runId,
+					iteration: context.snapshot.iteration,
+					tool_call_id: context.toolCall.toolCallId,
+				});
+				return {
+					skip: true,
+					reason: formatPlanModeBlockedCommandError(blocked),
 				};
 			}
 			return undefined;

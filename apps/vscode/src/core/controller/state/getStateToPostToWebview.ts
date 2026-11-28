@@ -119,11 +119,20 @@ export async function getStateToPostToWebview(controller: {
 	const audioEndpoints = stateManager.getGlobalSettingsKey("audioEndpoints")
 	const videoEnabled = stateManager.getGlobalSettingsKey("videoEnabled")
 	const videoEndpoint = stateManager.getGlobalSettingsKey("videoEndpoint")
+	const remoteTerminalsEnabled = stateManager.getGlobalSettingsKey("remoteTerminalsEnabled")
+	const remoteTerminals = stateManager.getGlobalSettingsKey("remoteTerminals")
 	const embeddingEnabled = stateManager.getGlobalSettingsKey("embeddingEnabled")
 	const retrievalEndpoints = stateManager.getGlobalSettingsKey("retrievalEndpoints")
 	const libraryEnabled = stateManager.getGlobalSettingsKey("libraryEnabled")
 	const secretSet = (
-		key: "audioSttApiKey" | "audioTtsApiKey" | "audioSfxApiKey" | "videoApiKey" | "embeddingApiKey" | "rerankingApiKey",
+		key:
+			| "audioSttApiKey"
+			| "audioTtsApiKey"
+			| "audioSfxApiKey"
+			| "videoApiKey"
+			| "embeddingApiKey"
+			| "rerankingApiKey"
+			| "openWebUiApiKey",
 	) => Boolean(stateManager.getSecretKey(key)?.trim())
 	const jevEnabled = stateManager.getGlobalSettingsKey("jevEnabled")
 	const jevSettings = stateManager.getGlobalSettingsKey("jevSettings")
@@ -293,6 +302,9 @@ export async function getStateToPostToWebview(controller: {
 		videoEnabled,
 		videoEndpoint,
 		videoApiKeySet: secretSet("videoApiKey"),
+		remoteTerminalsEnabled,
+		remoteTerminals,
+		openWebUiApiKeySet: secretSet("openWebUiApiKey"),
 		embeddingEnabled,
 		retrievalEndpoints,
 		embeddingApiKeySet: secretSet("embeddingApiKey"),

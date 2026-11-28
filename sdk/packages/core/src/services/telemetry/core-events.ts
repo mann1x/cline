@@ -659,7 +659,12 @@ export function captureRunCommandsTimeout(
 export interface PlanModeCommandBlockedTelemetryProperties {
 	// `sed` joined `run_commands` here: it is the other tool plan mode lets
 	// through for read-only work and has to stop short of a write.
-	tool_name: "run_commands" | "sed" | "extract_document";
+	tool_name:
+		| "run_commands"
+		| "sed"
+		| "extract_document"
+		| "remote_run"
+		| "remote_write";
 	/**
 	 * Short description of the blocked construct (e.g. "`rm`", "`sed -i`
 	 * (in-place edit)"). Never contains raw command content.

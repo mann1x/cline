@@ -31,6 +31,8 @@ export function buildToolPolicies(
 	set(["read_files", "read_file", "list_files", "list_code_definition_names", "search_codebase", "search_files", "grep", "awk"])
 	set(["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file", "sed"])
 	set(["run_commands", "execute_command"])
+	// Remote terminals: the same three questions, asked about another machine.
+	set(["remote_read", "remote_write", "remote_run"])
 	set(["fetch_web_content", "web_fetch", "web_search"])
 	set(["browser", "browser_action", "render_image"])
 	// `pipeline` is deliberately unlisted. A run needs the person's approval of
@@ -122,6 +124,8 @@ function isReadTool(toolName: string): boolean {
 		"search_files",
 		"grep",
 		"awk",
+		// Reads on a remote terminal: the same box as reading locally.
+		"remote_read",
 	].includes(toolName)
 }
 
@@ -129,11 +133,13 @@ export function isEditTool(toolName: string): boolean {
 	// `sed` writes when `in_place` is true, so it is governed by the edit
 	// toggle -- and by this predicate's denial text, which says the file was
 	// not modified. `awk` is not here: see `isReadTool`.
-	return ["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file", "sed"].includes(toolName)
+	// `remote_write` writes on a remote terminal: the same box as a local edit.
+	return ["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file", "sed", "remote_write"].includes(toolName)
 }
 
 function isCommandTool(toolName: string): boolean {
-	return toolName === "run_commands" || toolName === "execute_command"
+	// `remote_run` runs on a remote terminal: the same box as a local command.
+	return toolName === "run_commands" || toolName === "execute_command" || toolName === "remote_run"
 }
 
 function isWebFetchTool(toolName: string): boolean {

@@ -75,6 +75,9 @@ const REMOTE_CONFIG_EXTRA_FIELDS = {
 } satisfies FieldDefinitions
 
 const GLOBAL_STATE_FIELDS = {
+	// JSON list of the remote workspaces sessions have used, for the retention
+	// sweep: `[{terminal, machineId, workspaceId, path, firstUsed, deletedAt?}]`.
+	remoteWorkspaces: { default: "" as string },
 	clineVersion: { default: undefined as string | undefined },
 	"cline.generatedMachineId": { default: undefined as string | undefined }, // Note, distinctId reads/writes this directly from/to StorageContext before StateManager is initialized.
 	lastShownAnnouncementId: { default: undefined as string | undefined },
@@ -314,6 +317,10 @@ const USER_SETTINGS_FIELDS = {
 	audioEnabled: { default: false as boolean },
 	// Offer `generate_video`, pointed at an OpenAI-compatible videos endpoint.
 	videoEnabled: { default: false as boolean },
+	// Offer `remote_run`, `remote_read` and `remote_write` on the Open Terminal
+	// machines listed in `remoteTerminals`, reached through Open WebUI. Off by
+	// default: there is no machine until someone registers one.
+	remoteTerminalsEnabled: { default: false as boolean },
 	// "Use an embedding model": the Library (and later Memory) searches by
 	// meaning as well as by keyword, with the endpoints on the Embedding tab.
 	// Off by default: nothing embeds on a machine until a model is pulled.
@@ -362,6 +369,10 @@ const USER_SETTINGS_FIELDS = {
 	audioEndpoints: { default: "" as string },
 	// JSON `{useProvider, baseUrl, model, size, seconds}` for the Video tab.
 	videoEndpoint: { default: "" as string },
+	// JSON `{openWebUiUrl, retentionDays, terminals: [{name, machineId,
+	// description, enabled}]}` for the Remote terminals tab, round-tripped
+	// whole. The Open WebUI API key is a secret (`openWebUiApiKey`).
+	remoteTerminals: { default: "" as string },
 	// JSON `{useProvider, embedding: {baseUrl, model}, reranking: {baseUrl,
 	// model, enabled}}` for the Embedding tab, round-tripped whole. The two keys
 	// are secrets.
@@ -639,6 +650,8 @@ const SECRETS_KEYS = [
 	"scrapeApiKey",
 	// The Jev key, a secret for the same reason.
 	"jevApiKey",
+	// The Open WebUI API key the remote terminals sign in with.
+	"openWebUiApiKey",
 	// The key for a custom Jev endpoint (Ollama, xollama, a third party). One
 	// for every custom URL, and never TypeSafe's: that one goes only to TypeSafe.
 	"jevCustomApiKey",
@@ -697,6 +710,7 @@ export const NonApiHandlerSecretKeys = new Set<string>([
 	"scrapeApiKey",
 	"jevApiKey",
 	"jevCustomApiKey",
+	"openWebUiApiKey",
 ])
 
 export type Secrets = { [K in (typeof SecretKeys)[number]]: string | undefined }

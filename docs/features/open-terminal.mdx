@@ -1,0 +1,212 @@
+---
+title: "Open Terminal"
+sidebarTitle: "Open Terminal"
+description: "Run commands and work with files on Open Terminal machines from Cerebriline: how Cerebriline reaches them through Open WebUI, how each conversation gets its own workspace, and how to set up one machine or several."
+---
+
+[Open Terminal](https://github.com/open-webui/open-terminal) is a Linux machine in a Docker container, with a shell, files, Python, Node.js and build tools, behind a REST API. Cerebriline can use one or more of them as **remote terminals**: the model runs commands and reads and writes files there instead of on your computer.
+
+Use it for work you want off your own machine: building and benchmarking an app in a clean environment, trying a dependency upgrade, running something that needs Linux.
+
+<Warning>
+  This page describes a feature that is being built. The Open Terminal and Open WebUI setup below works today; the Cerebriline settings and tools arrive in an upcoming release.
+</Warning>
+
+## How it works
+
+- **Your model does the work.** Cerebriline's own model decides what to run, through two tools: one runs commands, the other reads, writes and searches files. Open WebUI and Open Terminal run no model of their own for this.
+- **Cerebriline talks to Open WebUI, not to the terminal.** Open WebUI forwards each request to the terminal and adds the terminal's API key. The terminal never has to be reachable from your network, only from the Open WebUI server, and Cerebriline never holds the terminal's key. Cerebriline signs in to Open WebUI with your own Open WebUI API key.
+- **Every machine has a name.** Each terminal you add gets a name and a description, for example `bench-app`: "builds and benchmarks the app". The model sees the list, so you can say which machine to use: *"run the app benchmark on bench-app"*.
+- **Commands ask for approval** the same way local commands do, following your auto-approve settings.
+
+### Each conversation gets its own workspace
+
+When a conversation first uses a terminal, Cerebriline creates a folder for it on that machine:
+
+```
+~/cerebriline/<conversation id>/
+```
+
+Every command the conversation runs starts in that folder, with `HOME` set to it, so tools that write to your home directory (pip, npm, git config, caches) write into the conversation's folder. Two conversations can use the same machine at the same time without seeing each other's files. Subagents in a conversation share its folder.
+
+Cerebriline keeps track of the working directory itself: a `cd` inside one command does not carry over to the next, so the model gives the directory it wants with each command.
+
+**When you delete a conversation**, its folder is kept for **7 days** and then removed, so you can still copy something out of it. Folders of conversations you keep are never removed.
+
+<Note>
+  Workspaces keep conversations from getting in each other's way. They are not a security boundary: every conversation runs as the same account on the machine, and on a machine with sudo it can read anything there. Give a machine to work you trust at the same level.
+</Note>
+
+## What you need
+
+- **Open WebUI** 0.13 or later, which you are an admin of, with **tool servers enabled** (on by default).
+- **Docker** on the machine that will run Open Terminal. The full image is about 5 GB.
+- Cerebriline with the remote terminals feature.
+
+## Set up one machine
+
+### 1. Run Open Terminal
+
+Save this as `docker-compose.yml` in a folder of its own, for example `/srv/open-terminal`:
+
+```yaml
+name: open-terminal
+services:
+  open-terminal:
+    image: ghcr.io/open-webui/open-terminal:latest
+    container_name: open-terminal
+    restart: unless-stopped
+    ports:
+      # Reachable from the Open WebUI server only. Never publish it on 0.0.0.0:
+      # the API key gives shell access.
+      - "127.0.0.1:8010:8000"
+    env_file:
+      - ./api-key.env
+    environment:
+      OPEN_TERMINAL_ENABLE_AGENTS: "false"
+    volumes:
+      - ./home:/home/user
+    mem_limit: 8g
+    cpus: 4
+    pids_limit: 4096
+    shm_size: 1g
+```
+
+Create the key and start it:
+
+```bash
+cd /srv/open-terminal
+umask 077
+printf 'OPEN_TERMINAL_API_KEY=%s\n' "$(openssl rand -hex 32)" > api-key.env
+docker compose up -d
+```
+
+Which address to publish on depends on how Open WebUI runs:
+
+| Open WebUI runs | Publish on | URL Open WebUI uses |
+|---|---|---|
+| On the same host, not in Docker | `127.0.0.1:8010:8000` | `http://127.0.0.1:8010` |
+| In Docker on the default bridge | the docker0 address, e.g. `172.17.0.1:8010:8000` | `http://host.docker.internal:8010` (add `extra_hosts: ["host.docker.internal:host-gateway"]` to Open WebUI if it does not resolve) |
+| In Docker on a shared network | nothing: no `ports:`, join the same network | `http://open-terminal:8000` |
+
+### 2. Add it to Open WebUI
+
+In Open WebUI, open **Admin Settings → Integrations → Open Terminal** and add a connection:
+
+- **URL**: the one from the table above.
+- **Key**: the value of `OPEN_TERMINAL_API_KEY` from `api-key.env`.
+- **ID**: a short id, for example `general`. Cerebriline uses it to address the machine.
+
+Add it under **Open Terminal**, not as a tool server.
+
+### 3. Create an Open WebUI API key for Cerebriline
+
+1. As an admin: **Admin Settings → General → Enable API Keys**.
+2. As yourself: **Settings → Account → API Keys → Create new key**. Copy the key (`sk-…`).
+
+The key acts as you in Open WebUI. Cerebriline stores it with your other API keys, never in a profile.
+
+### 4. Add the terminal in Cerebriline
+
+1. Open Cerebriline's **Settings → API Configuration**. On the **Model** tab, tick **Use remote terminals (Open Terminal through Open WebUI)**. A **Remote terminals** tab appears.
+2. On the **Remote terminals** tab, fill in what applies to every terminal:
+
+| Field | Example | Meaning |
+|---|---|---|
+| Open WebUI URL | `http://192.168.1.10:3000` | The address you open Open WebUI at. |
+| Open WebUI API key | `sk-…` | The key from step 3. Kept in the editor's secret storage; the field stays empty after saving. |
+| Keep a deleted conversation's folders (days) | `7` | How long a deleted conversation's workspace stays on the machines. |
+
+3. Click **Add terminal** and fill in the row:
+
+| Field | Example | Meaning |
+|---|---|---|
+| Name | `general` | What you and the model call it. Unique. |
+| Machine ID in Open WebUI | `general` | The connection ID from step 2. |
+| What it is for | "General Linux machine with Python, Node.js and build tools" | Shown to the model so it can pick the right machine. |
+| Offer to the model | ticked | Untick to keep the row without offering it. |
+
+Until the URL, the key and one terminal are all set, the Model tab shows a red note and the tools are not offered. To check the setup, start a new task and ask: *"Run whoami on general."*
+
+The tools are `remote_run` (commands), `remote_read` (read, list, grep, glob) and `remote_write` (write, replace). Each one asks for approval under the same auto-approve setting as its local counterpart: **Execute commands**, **Read files** and **Edit files**. In Plan mode, `remote_write` is refused and `remote_run` refuses commands that write files, as on this machine.
+
+## Set up several machines
+
+Run one Open Terminal container per environment when they need different tools, different resource limits, or to be kept apart: a general machine, a `bench-app` machine for builds and benchmarks, a machine with a GPU. Each one is a container of its own with its own port, key, workspace folder and limits, added to Open WebUI and to Cerebriline under its own name.
+
+Copy the folder and change the name, the port and the paths:
+
+```yaml
+name: open-terminal-bench
+services:
+  open-terminal-bench:
+    image: ghcr.io/open-webui/open-terminal:latest
+    container_name: open-terminal-bench
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8011:8000"
+    env_file:
+      - ./api-key.env
+    environment:
+      OPEN_TERMINAL_ENABLE_AGENTS: "false"
+      # One Linux account per Open WebUI user, each with its own /home/<name>.
+      OPEN_TERMINAL_MULTI_USER: "true"
+    volumes:
+      # Multi-user mode keeps every account's home under /home.
+      - ./home:/home
+      # Optional: passwordless sudo for every account (see below).
+      - ./sudoers-all-users:/etc/sudoers.d/90-all-users:ro
+    mem_limit: 8g
+    cpus: 4
+    pids_limit: 4096
+    shm_size: 1g
+```
+
+### One account per Open WebUI user
+
+With `OPEN_TERMINAL_MULTI_USER: "true"`, each Open WebUI user gets a Linux account and home of their own on the machine, created the first time they use it. Use it when several people share a machine. Inside each account, every conversation still gets its own workspace folder.
+
+### Sudo for every account
+
+In multi-user mode the accounts have no sudo, so a conversation cannot install system packages with `apt`. To allow it, create `sudoers-all-users` next to the compose file, owned by root with mode `0440`:
+
+```bash
+printf '%s\n' 'ALL ALL=(ALL:ALL) NOPASSWD: ALL' > sudoers-all-users
+sudo chown root:root sudoers-all-users && sudo chmod 0440 sudoers-all-users
+```
+
+and mount it as in the example. With it, any conversation can read every account's files on that machine: use it on machines where that is fine, such as a test or benchmark machine.
+
+### Packages every conversation needs
+
+Install them in the image rather than in each conversation: set `OPEN_TERMINAL_PACKAGES` (apt), `OPEN_TERMINAL_PIP_PACKAGES` or `OPEN_TERMINAL_NPM_PACKAGES`, which are installed each time the container starts, or build your own image `FROM ghcr.io/open-webui/open-terminal:latest`.
+
+## Asking the model
+
+The model knows the names and descriptions of your terminals. Name the machine in your request:
+
+- *"Run the app benchmark on bench-app and compare it with the last run."*
+- *"Clone the repo on general, install the dependencies and run the tests."*
+- *"On bench-app, build the release binary and tell me its size."*
+
+A long command runs in the background on the machine. Cerebriline checks on it until it finishes (5 minutes by default, up to an hour if the model asks), then gives the model its output, keeping the start and the end when it is long. A command still running at the limit keeps running; the model can wait for it again or stop it. Stopping the task stops the command too.
+
+A `cd` does not carry over between commands; the model passes a working directory instead.
+
+## Security
+
+- **The terminal's API key is shell access** to that container. Keep it in Open WebUI and in `api-key.env` (mode `0600`) only; publish the port where only Open WebUI can reach it.
+- **Your Open WebUI API key reaches every terminal you can use in Open WebUI.** Revoke it in **Settings → Account → API Keys** if it leaks.
+- **Do not mount the Docker socket** into Open Terminal: it gives everything in the container root on the host.
+- **Network access**: the container can reach the internet and your network. To limit it, set `OPEN_TERMINAL_ALLOWED_DOMAINS` to a comma-separated list of domains, or `""` to block all outbound connections.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `401` from Open WebUI | The Open WebUI API key is wrong or revoked, or API keys are disabled (Admin Settings → General). |
+| `403 Tool servers are disabled` | Turn tool servers back on in Open WebUI. |
+| `404 Machine '<id>' not found` | The Machine ID in Cerebriline does not match the connection ID in Open WebUI, or the connection is disabled, or your Open WebUI user has no access to it. |
+| `502` or a timeout | Open WebUI cannot reach the terminal: check the URL in the connection and that the container is running (`docker ps`). |
+| `400` mentioning `X-User-Id` | The terminal runs in multi-user mode and the request did not come through Open WebUI. Connect through Open WebUI. |
+| A command stops after 5 minutes | Open WebUI ends a single request after 300 seconds. Cerebriline runs long commands in the background and polls them; if you see this, report it. |

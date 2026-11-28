@@ -8,6 +8,7 @@ import {
 	createMcpTools,
 	createMediaTools,
 	createMemoryTools,
+	createRemoteTerminalTools,
 	createRenderImageTool,
 	createSddTools,
 	createTransformImageTool,
@@ -30,6 +31,7 @@ import { readLibraryImageDescriber, readLibraryToolsConfig, readMemoryToolsConfi
 import { probeMediaServer, readLeadMediaProvider } from "./media-endpoint-config"
 import { readMediaToolsConfig } from "./media-tools-config"
 import { readQaCredentials } from "./qa-credentials-store"
+import { readRemoteTerminalsConfig, recordRemoteWorkspace, sweepRemoteWorkspaces } from "./remote-terminals-config"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
@@ -252,6 +254,22 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
 		})),
 	)
+
+	// Remote terminals: Open Terminal machines registered in Open WebUI, when
+	// the Remote terminals tab is on and names at least one. Commands, reads and
+	// writes there answer to the same approval toggles as their local
+	// counterparts (`sdk-tool-policies.ts`). Each session works in a folder of
+	// its own on each machine; a deleted conversation's folders are removed by
+	// the sweep after the tab's retention period.
+	tools.push(
+		...createRemoteTerminalTools({
+			getConfig: readRemoteTerminalsConfig,
+			onWorkspace: recordRemoteWorkspace,
+			onError: (message, error) => Logger.error(`${message}:`, error),
+			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
+		}),
+	)
+	void sweepRemoteWorkspaces().catch((error) => Logger.error("[RemoteTerminals] sweep failed:", error))
 
 	// `sdd`, the spec-driven engine, when any of the spec-driven skills is
 	// turned on: the skills say how to work that way, the tool keeps the plan

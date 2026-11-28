@@ -1647,6 +1647,19 @@ export {
 	resolveCredentialEnv,
 } from "./extensions/tools/qa-credentials";
 export {
+	type CreateRemoteTerminalToolsOptions,
+	createRemoteTerminalTools,
+	REMOTE_TERMINAL_TOOL_NAMES,
+	REMOTE_WORKSPACE_ROOT,
+	type RemoteTerminal,
+	type RemoteTerminalsConfig,
+	type RemoteWorkspaceRecord,
+	remoteTerminalsUnavailable,
+	remoteWorkspaceId,
+	removeRemoteWorkspace,
+	trimRemoteOutput,
+} from "./extensions/tools/remote-terminals";
+export {
 	buildRenderDocument,
 	createRenderImageTool,
 	detectRenderKind,

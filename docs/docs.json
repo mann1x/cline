@@ -169,7 +169,8 @@
 							"features/code-search",
 							"features/web-scraping",
 							"features/memory",
-							"features/media-endpoints"
+							"features/media-endpoints",
+							"features/open-terminal"
 						]
 					},
 					{

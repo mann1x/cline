@@ -115,3 +115,32 @@ describe("buildToolPolicies", () => {
 		expect(policies["firecrawl__scrape"]).toEqual({ autoApprove: false })
 	})
 })
+
+describe("remote terminal tools", () => {
+	const withActions = (actions: Partial<typeof DEFAULT_AUTO_APPROVAL_SETTINGS.actions>) => ({
+		...DEFAULT_AUTO_APPROVAL_SETTINGS,
+		actions: {
+			...DEFAULT_AUTO_APPROVAL_SETTINGS.actions,
+			readFiles: false,
+			editFiles: false,
+			executeSafeCommands: false,
+			...actions,
+		},
+	})
+
+	it("are always routed through the approval callback", () => {
+		const policies = buildToolPolicies(DEFAULT_AUTO_APPROVAL_SETTINGS)
+		for (const name of ["remote_run", "remote_read", "remote_write"]) {
+			expect(policies[name]).toEqual({ autoApprove: false })
+		}
+	})
+
+	it("answer to the same boxes as their local counterparts", () => {
+		expect(isToolAutoApproved("remote_run", withActions({}))).toBe(false)
+		expect(isToolAutoApproved("remote_run", withActions({ executeSafeCommands: true }))).toBe(true)
+		expect(isToolAutoApproved("remote_read", withActions({ readFiles: true }))).toBe(true)
+		expect(isToolAutoApproved("remote_read", withActions({ editFiles: true }))).toBe(false)
+		expect(isToolAutoApproved("remote_write", withActions({ editFiles: true }))).toBe(true)
+		expect(isToolAutoApproved("remote_write", withActions({ readFiles: true }))).toBe(false)
+	})
+})

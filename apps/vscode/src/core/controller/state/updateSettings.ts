@@ -172,6 +172,15 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.videoApiKey !== undefined) {
 			controller.stateManager.setSecret("videoApiKey", request.videoApiKey.trim() || undefined)
 		}
+		if (request.remoteTerminalsEnabled !== undefined) {
+			controller.stateManager.setGlobalState("remoteTerminalsEnabled", request.remoteTerminalsEnabled)
+		}
+		if (request.remoteTerminals !== undefined) {
+			controller.stateManager.setGlobalState("remoteTerminals", request.remoteTerminals)
+		}
+		if (request.openWebUiApiKey !== undefined) {
+			controller.stateManager.setSecret("openWebUiApiKey", request.openWebUiApiKey.trim() || undefined)
+		}
 		if (request.jevEnabled !== undefined) {
 			controller.stateManager.setGlobalState("jevEnabled", request.jevEnabled)
 		}

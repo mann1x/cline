@@ -139,6 +139,12 @@ export interface ExtensionState {
 	videoEndpoint: string
 	/** Whether a key is stored for the video endpoint. Never the key. */
 	videoApiKeySet: boolean
+	/** Whether `remote_run`, `remote_read` and `remote_write` are offered. */
+	remoteTerminalsEnabled: boolean
+	/** JSON for the Remote terminals tab: Open WebUI's URL, retention, the terminals. */
+	remoteTerminals: string
+	/** Whether an Open WebUI API key is stored. Never the key. */
+	openWebUiApiKeySet: boolean
 	/** Whether `jev` is offered and the harness's Jev hooks run. */
 	jevEnabled: boolean
 	/** JSON `JevSettings` (model, floors, timeout, hook switches). */

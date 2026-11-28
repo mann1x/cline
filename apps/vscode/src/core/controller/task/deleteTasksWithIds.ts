@@ -1,5 +1,6 @@
 import { Empty, StringArrayRequest } from "@shared/proto/cline/common"
 import { HostProvider } from "@/hosts/host-provider"
+import { markRemoteWorkspacesDeletedFor } from "@/sdk/remote-terminals-config"
 import { ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
@@ -54,6 +55,10 @@ async function deleteTaskWithId(controller: Controller, id: string): Promise<voi
 	// Remove task from state FIRST — this updates the in-memory cache
 	// immediately so the next postStateToWebview() sends the updated list.
 	await controller.deleteTaskFromState(id)
+
+	// Its workspaces on remote terminals are kept for the retention period
+	// (Remote terminals tab), then removed by the sweep.
+	markRemoteWorkspacesDeletedFor([id])
 
 	// Always update webview state so the history list and recents refresh
 	await controller.postStateToWebview()

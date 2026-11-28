@@ -3,6 +3,7 @@ import { audioEndpointsConfigured, parseAudioEndpoints } from "@shared/audio-end
 import { parseJevSettings } from "@shared/jev-settings"
 import { resolveScopedModelStatus } from "@shared/model-scope-config"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
+import { isUsableRemoteTerminal, parseRemoteTerminals } from "@shared/remote-terminals"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints } from "@shared/retrieval-endpoints"
 import { parseVideoEndpoint, videoEndpointConfigured } from "@shared/video-endpoint"
 import { useState } from "react"
@@ -18,6 +19,7 @@ import EmbeddingTab from "../EmbeddingTab"
 import EscalationModelTab from "../EscalationModelTab"
 import ImageGenModelTab from "../ImageGenModelTab"
 import JevTab from "../JevTab"
+import RemoteTerminalsTab from "../RemoteTerminalsTab"
 import Section from "../Section"
 import { type ConfigTab, isModelTab } from "../utils/configTabs"
 import { flushPendingEdits } from "../utils/pendingEdits"
@@ -77,6 +79,9 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		audioEndpoints,
 		videoEnabled,
 		videoEndpoint,
+		remoteTerminalsEnabled,
+		remoteTerminals,
+		openWebUiApiKeySet,
 		embeddingEnabled,
 		retrievalEndpoints,
 		jevEnabled,
@@ -111,6 +116,12 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// nowhere to send either.
 	const audioUnconfigured = audioEnabled && !audioEndpointsConfigured(parseAudioEndpoints(audioEndpoints))
 	const videoUnconfigured = videoEnabled && !videoEndpointConfigured(parseVideoEndpoint(videoEndpoint))
+	// And of the remote terminals: no tool until Open WebUI, its key and one
+	// terminal are all there.
+	const remoteStored = parseRemoteTerminals(remoteTerminals)
+	const remoteUnconfigured =
+		remoteTerminalsEnabled &&
+		(!remoteStored.openWebUiUrl || !openWebUiApiKeySet || !remoteStored.terminals.some(isUsableRemoteTerminal))
 	// And of the embedding model: nothing is embedded, and every search stays
 	// on keywords, while the tab names no model or nowhere to ask for it.
 	const embeddingUnconfigured = embeddingEnabled && !embeddingEndpointConfigured(parseRetrievalEndpoints(retrievalEndpoints))
@@ -144,6 +155,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		(currentTab === "imagegen" && !imageGenEnabled) ||
 		(currentTab === "audio" && !audioEnabled) ||
 		(currentTab === "video" && !videoEnabled) ||
+		(currentTab === "remote" && !remoteTerminalsEnabled) ||
 		(currentTab === "embedding" && !embeddingEnabled) ||
 		(currentTab === "jev" && !jevEnabled)
 	const activeTab: ConfigTab = scopedTabOff ? mode : currentTab
@@ -164,6 +176,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		imageGenEnabled ||
 		audioEnabled ||
 		videoEnabled ||
+		remoteTerminalsEnabled ||
 		embeddingEnabled ||
 		jevEnabled
 	// One profile list for every tab; only the target changes with the tab. The
@@ -301,6 +314,18 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									Video
 								</TabButton>
 							) : null}
+							{remoteTerminalsEnabled ? (
+								<TabButton
+									disabled={activeTab === "remote"}
+									isActive={activeTab === "remote"}
+									onClick={() => switchPanel("remote")}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Remote terminals
+								</TabButton>
+							) : null}
 							{embeddingEnabled ? (
 								<TabButton
 									disabled={activeTab === "embedding"}
@@ -341,6 +366,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<AudioTab />
 							) : activeTab === "video" ? (
 								<VideoTab />
+							) : activeTab === "remote" ? (
+								<RemoteTerminalsTab />
 							) : activeTab === "embedding" ? (
 								<EmbeddingTab />
 							) : activeTab === "jev" ? (
@@ -624,6 +651,36 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
 									The Video tab names neither the session's provider nor an endpoint with a model, so the tool
 									is not offered. Set one on the Video tab.
+								</p>
+							) : null}
+						</div>
+
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={remoteTerminalsEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ remoteTerminalsEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update the remote terminals setting:", error)
+										throw error
+									}
+								}}>
+								Use remote terminals (Open Terminal through Open WebUI)
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Offers <code>remote_run</code>, <code>remote_read</code> and <code>remote_write</code>: the model
+								runs commands and works with files on Open Terminal machines registered in your Open WebUI, for
+								example to build or benchmark something away from this computer. They ask for approval like their
+								local counterparts. Each conversation gets its own folder on each machine.
+							</p>
+							{remoteUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									The Remote terminals tab needs the Open WebUI URL, an Open WebUI API key and at least one
+									terminal before the tools are offered.
 								</p>
 							) : null}
 						</div>
