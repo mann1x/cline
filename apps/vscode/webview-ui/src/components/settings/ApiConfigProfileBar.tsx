@@ -8,6 +8,24 @@ import { DROPDOWN_Z_INDEX, DropdownContainer, SETTINGS_MODAL_Z_INDEX } from "./A
 import { hasPendingEdits } from "./utils/pendingEdits"
 import { type ApiConfigurationProfileScope, useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
 
+/** One side of a server change, as one line: `xollama · http://host:port · model`. */
+function describeSide(side: { provider: string; baseUrl: string; model: string }): string {
+	return [side.provider, side.baseUrl, side.model].filter((part) => part).join(" · ") || "nothing"
+}
+
+/** When a profile version was saved, short enough for a menu item. */
+function formatSavedAt(epochMillis: number): string {
+	if (!epochMillis) {
+		return "an earlier save"
+	}
+	return new Date(epochMillis).toLocaleString(undefined, {
+		day: "numeric",
+		month: "short",
+		hour: "2-digit",
+		minute: "2-digit",
+	})
+}
+
 /** Where a right-click landed, and on which profile. */
 interface ProfileMenu {
 	name: string
@@ -33,8 +51,21 @@ interface ApiConfigProfileBarProps {
  * and Act are holding.
  */
 const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) => {
-	const { profiles, activeName, isDirty, suggestedName, loadProfile, saveProfile, deleteProfile, renameProfile } =
-		useApiConfigurationProfiles(scope)
+	const {
+		profiles,
+		activeName,
+		isDirty,
+		suggestedName,
+		loadProfile,
+		saveProfile,
+		deleteProfile,
+		renameProfile,
+		serverChange,
+		restorePrevious,
+	} = useApiConfigurationProfiles(scope)
+	// An Update that would store another server or model, after a provider
+	// switch, waits here for a yes.
+	const [pendingUpdate, setPendingUpdate] = useState(false)
 	const [isNaming, setIsNaming] = useState(false)
 	const [draftName, setDraftName] = useState("")
 	// The profile a confirmed switch would load, while the question is open.
@@ -190,7 +221,7 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 	// A modal that can only be left with the mouse traps a keyboard user, and
 	// the backdrop it would otherwise hang off is not focusable.
 	useEffect(() => {
-		if (!pendingSwitch && !pendingDelete && !menu) {
+		if (!pendingSwitch && !pendingDelete && !pendingUpdate && !menu) {
 			return
 		}
 		const onKey = (event: KeyboardEvent) => {
@@ -199,12 +230,26 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 					restoreSelection()
 				}
 				setPendingDelete(null)
+				setPendingUpdate(false)
 				setMenu(null)
 			}
 		}
 		document.addEventListener("keydown", onKey)
 		return () => document.removeEventListener("keydown", onKey)
-	}, [pendingSwitch, pendingDelete, menu, restoreSelection])
+	}, [pendingSwitch, pendingDelete, pendingUpdate, menu, restoreSelection])
+
+	/**
+	 * Update, asking first when it would store another server or model: after a
+	 * provider switch the panel can be showing what the new provider last held,
+	 * not what this profile pointed at.
+	 */
+	const requestUpdate = () => {
+		if (serverChange) {
+			setPendingUpdate(true)
+			return
+		}
+		return saveProfile(activeName)
+	}
 
 	/**
 	 * Copy on the profile picker copies the selected profile's name.
@@ -311,6 +356,27 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 	const copyName = (name: string) => {
 		setMenu(null)
 		void navigator.clipboard?.writeText(name).catch(() => undefined)
+	}
+
+	/**
+	 * "Restore version of <date>", for a profile an Update has overwritten. The
+	 * version it replaces is kept, so choosing it again goes back.
+	 */
+	const previousVersionItem = (name: string) => {
+		const previous = profiles.find((profile) => profile.name === name)?.previous
+		if (!previous) {
+			return []
+		}
+		return [
+			{
+				label: `Restore version of ${formatSavedAt(previous.updatedAt)}`,
+				act: () => {
+					setMenu(null)
+					closeList()
+					void restorePrevious(name)
+				},
+			},
+		]
 	}
 
 	/** The menu at the pointer, or under the field when it came from the keyboard. */
@@ -465,7 +531,7 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 				</DropdownContainer>
 
 				{activeName && isDirty ? (
-					<VSCodeButton appearance="secondary" onClick={() => saveProfile(activeName)} style={unsavedStyle}>
+					<VSCodeButton appearance="secondary" onClick={requestUpdate} style={unsavedStyle}>
 						Update
 					</VSCodeButton>
 				) : null}
@@ -526,6 +592,9 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 							{activeName
 								? `The changes you have made since loading “${activeName}” will be lost.`
 								: "The changes you have made here are not saved to any profile and will be lost."}
+							{serverChange
+								? ` Updating it first would also change where it points: ${describeSide(serverChange.from)} becomes ${describeSide(serverChange.to)}.`
+								: ""}
 						</p>
 						<div className="flex justify-end gap-2 flex-wrap">
 							<VSCodeButton appearance="secondary" onClick={restoreSelection}>
@@ -545,6 +614,70 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 							) : null}
 							<VSCodeButton appearance="primary" onClick={() => switchTo(pendingSwitch)}>
 								Discard and load
+							</VSCodeButton>
+						</div>
+					</div>
+				</div>
+			) : null}
+
+			{pendingUpdate && serverChange ? (
+				// biome-ignore lint/a11y/noStaticElementInteractions: the backdrop is a click-away shortcut for Cancel; the same action is on the Cancel button and on Escape.
+				<div
+					className="fixed inset-0 bg-black/50 flex items-center justify-center"
+					onClick={(event) => {
+						if (event.target === event.currentTarget) {
+							setPendingUpdate(false)
+						}
+					}}
+					role="presentation"
+					style={{ zIndex: SETTINGS_MODAL_Z_INDEX }}>
+					<div
+						aria-labelledby="profile-update-dialog-title"
+						aria-modal="true"
+						className="bg-(--vscode-editor-background) border border-solid border-(--vscode-panel-border) rounded-lg p-5 w-[440px] max-w-[90vw]"
+						role="dialog">
+						<div className="flex items-center gap-2 mb-3">
+							<AlertTriangle className="w-5 h-5 text-(--vscode-errorForeground)" />
+							<h4 className="m-0" id="profile-update-dialog-title">
+								Change where “{activeName}” points?
+							</h4>
+						</div>
+						<p className="text-sm text-(--vscode-descriptionForeground) mt-0 mb-2">
+							The provider was switched, and the server or model changed with it. Updating stores the new ones under
+							this name:
+						</p>
+						<table className="text-sm mb-4 border-collapse w-full">
+							<tbody>
+								{(
+									[
+										["Provider", serverChange.from.provider, serverChange.to.provider],
+										["URL", serverChange.from.baseUrl, serverChange.to.baseUrl],
+										["Model", serverChange.from.model, serverChange.to.model],
+									] as const
+								).map(([label, from, to]) => (
+									<tr key={label}>
+										<td className="pr-2 py-0.5 align-top text-(--vscode-descriptionForeground)">{label}</td>
+										<td className="pr-2 py-0.5 align-top break-all">{from || "—"}</td>
+										<td className="pr-2 py-0.5 align-top">→</td>
+										<td
+											className={`py-0.5 align-top break-all ${from === to ? "" : "text-(--vscode-errorForeground)"}`}>
+											{to || "—"}
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+						<div className="flex justify-end gap-2 flex-wrap">
+							<VSCodeButton appearance="secondary" onClick={() => setPendingUpdate(false)}>
+								Cancel
+							</VSCodeButton>
+							<VSCodeButton
+								appearance="primary"
+								onClick={async () => {
+									setPendingUpdate(false)
+									await saveProfile(activeName)
+								}}>
+								Update “{activeName}”
 							</VSCodeButton>
 						</div>
 					</div>
@@ -607,6 +740,7 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 					{[
 						{ label: "Rename…", act: () => startRename(menu.name) },
 						{ label: "Copy name", act: () => copyName(menu.name) },
+						...previousVersionItem(menu.name),
 						{
 							label: "Delete…",
 							act: () => {

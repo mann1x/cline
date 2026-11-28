@@ -1,5 +1,5 @@
 import type { ApiProvider } from "./api"
-import type { ApiConfigurationSnapshot } from "./api-config-snapshot"
+import { type ApiConfigurationSnapshot, apiConfigurationSnapshotsEqual } from "./api-config-snapshot"
 
 /**
  * Named API-configuration profiles.
@@ -17,6 +17,21 @@ export interface ApiConfigurationProfile {
 	/** Unique, and what the user sees. Trimmed, never empty. */
 	name: string
 	/** Epoch millis of the last save, for ordering the list. */
+	updatedAt: number
+	snapshot: ApiConfigurationSnapshot
+	/**
+	 * What the profile held before its last Update, so one overwrite can be
+	 * undone. One level only: restoring swaps the two, which makes the restore
+	 * itself undoable. Absent on a profile that has never been overwritten.
+	 *
+	 * Added after a provider switch put another profile's server and model in
+	 * the panel and Update saved them under this one's name (pandorum,
+	 * 2026-11-28); the version it replaced was gone for good.
+	 */
+	previous?: ApiConfigurationProfileVersion
+}
+
+export interface ApiConfigurationProfileVersion {
 	updatedAt: number
 	snapshot: ApiConfigurationSnapshot
 }
@@ -71,18 +86,72 @@ function toProfile(entry: unknown): ApiConfigurationProfile | null {
 	if (!snapshot || typeof snapshot !== "object") {
 		return null
 	}
+	const previous = toVersion(candidate.previous)
 	return {
 		name: name.slice(0, MAX_PROFILE_NAME_LENGTH),
 		updatedAt: typeof candidate.updatedAt === "number" ? candidate.updatedAt : 0,
-		snapshot: {
-			global: isRecord(snapshot.global) ? snapshot.global : {},
-			mode: isRecord(snapshot.mode) ? snapshot.mode : {},
-			// Same drop as in `parseApiConfigurationSnapshot`: a saved profile
-			// stored its provider settings and got a profile back without them,
-			// so loading one restored the provider and model but not the context
-			// size, sampling or thinking budget saved alongside them.
-			...(isRecord(snapshot.providerConfig) ? { providerConfig: snapshot.providerConfig } : {}),
-		},
+		snapshot: toSnapshot(snapshot),
+		...(previous ? { previous } : {}),
+	}
+}
+
+function toSnapshot(snapshot: Partial<ApiConfigurationSnapshot>): ApiConfigurationSnapshot {
+	return {
+		global: isRecord(snapshot.global) ? snapshot.global : {},
+		mode: isRecord(snapshot.mode) ? snapshot.mode : {},
+		// Same drop as in `parseApiConfigurationSnapshot`: a saved profile
+		// stored its provider settings and got a profile back without them,
+		// so loading one restored the provider and model but not the context
+		// size, sampling or thinking budget saved alongside them.
+		...(isRecord(snapshot.providerConfig) ? { providerConfig: snapshot.providerConfig } : {}),
+	}
+}
+
+function toVersion(entry: unknown): ApiConfigurationProfileVersion | undefined {
+	if (!isRecord(entry) || !isRecord(entry.snapshot)) {
+		return undefined
+	}
+	return {
+		updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : 0,
+		snapshot: toSnapshot(entry.snapshot as Partial<ApiConfigurationSnapshot>),
+	}
+}
+
+/**
+ * The profile an Update stores, keeping what it replaces as `previous`.
+ *
+ * Saving the same settings again keeps the older `previous` rather than
+ * replacing it with an identical copy, which would leave nothing to go back to.
+ * A new name (Save as… to a name not taken) has no previous version.
+ */
+export function withPreviousVersion(
+	existing: ApiConfigurationProfile | undefined,
+	next: ApiConfigurationProfile,
+): ApiConfigurationProfile {
+	if (!existing) {
+		const { previous: _ignored, ...fresh } = next
+		return fresh
+	}
+	if (apiConfigurationSnapshotsEqual(existing.snapshot, next.snapshot)) {
+		return existing.previous ? { ...next, previous: existing.previous } : next
+	}
+	return { ...next, previous: { updatedAt: existing.updatedAt, snapshot: existing.snapshot } }
+}
+
+/**
+ * The profile with its previous version restored, and the version it replaces
+ * kept as the new `previous`, so a restore can itself be undone.
+ * `undefined` when the profile has no previous version.
+ */
+export function restorePreviousVersion(profile: ApiConfigurationProfile): ApiConfigurationProfile | undefined {
+	if (!profile.previous) {
+		return undefined
+	}
+	return {
+		name: profile.name,
+		updatedAt: profile.previous.updatedAt,
+		snapshot: profile.previous.snapshot,
+		previous: { updatedAt: profile.updatedAt, snapshot: profile.snapshot },
 	}
 }
 

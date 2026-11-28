@@ -10,8 +10,10 @@ import {
 	removeApiConfigurationProfile,
 	renameApiConfigurationProfile,
 	renameProfileReference,
+	restorePreviousVersion,
 	serializeApiConfigurationProfiles,
 	upsertApiConfigurationProfile,
+	withPreviousVersion,
 } from "./api-config-profiles"
 
 function profile(name: string, updatedAt = 1): ApiConfigurationProfile {
@@ -277,5 +279,54 @@ describe("renaming a profile", () => {
 		expect(renameProfileReference(raw, "hydeProfile", "vision", "zeta")).toBeUndefined()
 		expect(renameProfileReference(undefined, "hydeProfile", "local-qwen", "zeta")).toBeUndefined()
 		expect(renameProfileReference("not json", "hydeProfile", "local-qwen", "zeta")).toBeUndefined()
+	})
+})
+
+describe("previous version", () => {
+	const older: ApiConfigurationProfile = {
+		name: "solidpc / v6",
+		updatedAt: 100,
+		snapshot: { global: {}, mode: { apiProvider: "ollama" }, providerConfig: { baseUrl: "http://192.168.178.2:11434" } },
+	}
+	const overwritten: ApiConfigurationProfile = {
+		name: "solidpc / v6",
+		updatedAt: 200,
+		snapshot: { global: {}, mode: { apiProvider: "xollama" }, providerConfig: { baseUrl: "http://127.0.0.1:22434" } },
+	}
+
+	it("keeps what an Update replaces", () => {
+		const saved = withPreviousVersion(older, overwritten)
+		expect(saved.snapshot).toEqual(overwritten.snapshot)
+		expect(saved.previous).toEqual({ updatedAt: 100, snapshot: older.snapshot })
+	})
+
+	it("keeps the older previous version when the same settings are saved again", () => {
+		const saved = withPreviousVersion(older, overwritten)
+		const again = withPreviousVersion(saved, { ...overwritten, updatedAt: 300 })
+		expect(again.previous).toEqual({ updatedAt: 100, snapshot: older.snapshot })
+	})
+
+	it("has no previous version for a new name", () => {
+		expect(
+			withPreviousVersion(undefined, { ...overwritten, previous: { updatedAt: 1, snapshot: older.snapshot } }).previous,
+		).toBeUndefined()
+	})
+
+	it("restores it, keeping the replaced version so the restore can be undone", () => {
+		const saved = withPreviousVersion(older, overwritten)
+		const restored = restorePreviousVersion(saved)
+		expect(restored?.snapshot).toEqual(older.snapshot)
+		expect(restored?.updatedAt).toBe(100)
+		expect(restored?.previous).toEqual({ updatedAt: 200, snapshot: overwritten.snapshot })
+		expect(restorePreviousVersion(restored as ApiConfigurationProfile)?.snapshot).toEqual(overwritten.snapshot)
+		expect(restorePreviousVersion(older)).toBeUndefined()
+	})
+
+	it("survives a save and a read of the profile list", () => {
+		const saved = withPreviousVersion(older, overwritten)
+		const [read] = parseApiConfigurationProfiles(serializeApiConfigurationProfiles([saved]))
+		expect(read.previous).toEqual(saved.previous)
+		const [plain] = parseApiConfigurationProfiles(JSON.stringify([{ ...older, previous: "junk" }]))
+		expect(plain).not.toHaveProperty("previous")
 	})
 })

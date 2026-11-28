@@ -60,6 +60,7 @@ import { VSCodeLmProvider } from "./providers/VSCodeLmProvider"
 import { XaiProvider } from "./providers/XaiProvider"
 import { ZAiProvider } from "./providers/ZAiProvider"
 import { useApiConfigurationScope } from "./utils/ApiConfigurationScopeContext"
+import { carryProviderSwitch } from "./utils/carryProviderSwitch"
 import { useApiConfigurationHandlers } from "./utils/useApiConfigurationHandlers"
 
 interface ApiOptionsProps {
@@ -115,7 +116,7 @@ const ApiOptions = ({
 	initialModelTab,
 }: ApiOptionsProps) => {
 	// Use full context state for immediate save payload
-	const { apiConfiguration, remoteConfigSettings } = useExtensionState()
+	const { apiConfiguration, remoteConfigSettings, planActSeparateModelsSetting } = useExtensionState()
 
 	const selectedProvider =
 		(currentMode === "plan" ? apiConfiguration?.planModeApiProvider : apiConfiguration?.actModeApiProvider) || "anthropic"
@@ -237,9 +238,28 @@ const ApiOptions = ({
 		// is the legacy hardcoded union and carries none of the catalog-only
 		// ids, opencoti among them. Narrowing it here keeps the other end of
 		// the call type-checked.
-		handleModeFieldChange({ plan: "planModeApiProvider", act: "actModeApiProvider" }, newProvider as ApiProvider, currentMode)
 		setIsDropdownVisible(false)
 		setSelectedIndex(-1)
+		void switchProvider(newProvider)
+	}
+
+	const switchProvider = async (newProvider: string) => {
+		// Ollama <-> xOllama and opencoti <-> llama.cpp: the panel moves with the
+		// switch (base URL, model, window, sampler...), written onto the target's
+		// providers.json entry before the id changes. Without it the panel came
+		// up on the target's old entry -- another profile's server and model --
+		// and Update saved that under this profile's name. A tab that keeps its
+		// own settings (Vision, Agents, Escalation) holds one set for whatever
+		// provider it is on, so it already carries them and is left alone.
+		if (!scope?.ownsProviderSettings) {
+			const modes: Mode[] = planActSeparateModelsSetting && !scope ? [currentMode] : ["plan", "act"]
+			await carryProviderSwitch(selectedProvider, newProvider, modes, providerEntry)
+		}
+		await handleModeFieldChange(
+			{ plan: "planModeApiProvider", act: "actModeApiProvider" },
+			newProvider as ApiProvider,
+			currentMode,
+		)
 	}
 
 	const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {

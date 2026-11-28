@@ -9,8 +9,10 @@ import {
 	removeApiConfigurationProfile,
 	renameApiConfigurationProfile,
 	renameProfileReference,
+	restorePreviousVersion,
 	serializeApiConfigurationProfiles,
 	upsertApiConfigurationProfile,
+	withPreviousVersion,
 } from "@shared/api-config-profiles"
 import {
 	type ApiConfigurationSnapshot,
@@ -39,6 +41,7 @@ import {
 } from "@/hooks/useProviderConfig"
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
 import { discardPendingEdits, flushPendingEdits } from "./pendingEdits"
+import { type ProfileServerChange, profileServerChange } from "./profileServerChange"
 import { SCOPED_MODEL_SETTINGS, scopedSettingsPatch } from "./scopedSettingsPatch"
 import { useApiConfigurationHandlers } from "./useApiConfigurationHandlers"
 
@@ -89,6 +92,17 @@ export interface ApiConfigurationProfilesState {
 	 * empty or another profile already has it.
 	 */
 	renameProfile: (from: string, to: string) => Promise<boolean>
+	/**
+	 * Set when Update would store a different server or model under the loaded
+	 * profile's name because the provider was switched; the bar asks first.
+	 */
+	serverChange: ProfileServerChange | undefined
+	/**
+	 * Puts back what profile `name` held before its last Update (the version it
+	 * replaced is kept, so this can be undone the same way), and applies it to
+	 * this tab when the profile is the one loaded here.
+	 */
+	restorePrevious: (name: string) => Promise<void>
 }
 
 /**
@@ -187,6 +201,11 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	const isDirty = useMemo(
 		() => !!activeProfile && !apiConfigurationSnapshotsEqual(activeProfile.snapshot, currentSnapshot),
 		[activeProfile, currentSnapshot],
+	)
+
+	const serverChange = useMemo(
+		() => (activeProfile && isDirty ? profileServerChange(activeProfile.snapshot, currentSnapshot) : undefined),
+		[activeProfile, isDirty, currentSnapshot],
 	)
 
 	const suggestedName = useMemo(() => {
@@ -437,7 +456,13 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				return
 			}
 			const snapshot = await captureSettledSnapshot()
-			const profile: ApiConfigurationProfile = { name: trimmed, updatedAt: Date.now(), snapshot }
+			// What this replaces is kept as the profile's previous version, so
+			// one overwrite can be undone from the profile's menu.
+			const profile = withPreviousVersion(findApiConfigurationProfile(profiles, trimmed), {
+				name: trimmed,
+				updatedAt: Date.now(),
+				snapshot,
+			})
 			// The same scopes a load writes: saving from the Act tab while Plan
 			// shares its model has named the profile for both, and leaving Plan
 			// on the previous name would make the next Plan session resolve from
@@ -497,6 +522,23 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		[profiles, activeNames, memorySettings, librarySettings],
 	)
 
+	const restorePrevious = useCallback(
+		async (name: string) => {
+			const profile = findApiConfigurationProfile(profiles, name)
+			const restored = profile ? restorePreviousVersion(profile) : undefined
+			if (!restored) {
+				return
+			}
+			const loadedHere = activeProfile?.name.toLowerCase() === restored.name.toLowerCase()
+			await writeActiveNames(activeNames, upsertApiConfigurationProfile(profiles, restored))
+			if (loadedHere) {
+				discardPendingEdits()
+				await applySnapshot(restored.snapshot)
+			}
+		},
+		[profiles, activeProfile, activeNames, writeActiveNames, applySnapshot],
+	)
+
 	return {
 		profiles,
 		activeName: activeProfile?.name ?? "",
@@ -506,6 +548,8 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		saveProfile,
 		deleteProfile,
 		renameProfile,
+		serverChange,
+		restorePrevious,
 	}
 }
 
