@@ -5,25 +5,72 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.314] — 2026-11-27
+## [4.100.315] — 2026-11-28
 
-### Board tab
+### Fixes
 
-- **The Board tab is now built from the published packages.** Its screen
-  comes from `@cerebriline/ui` and its answers from `@cerebriline/taskboard`,
-  the same code another application embeds. It should look and behave as
-  before; the lock on a gate and the tick on an acceptance check are now
-  drawn as icons rather than with the editor's icon font.
+- **Profiles: switching between Ollama and xOllama, or opencoti and
+  llama.cpp, keeps what the panel shows.** Each provider keeps its own
+  settings, and switching provider only changed the provider: the panel then
+  showed whatever the new provider last held, usually another profile's
+  server, model and context window, and **Update** saved that under the
+  profile you were editing. Within these two pairs the switch now carries the
+  base URL, model, context window, sampler, reasoning and the rest across.
+  Settings only one side has stay where they are (PolyKV, notices, parallel
+  sessions). Switching to any other provider works as before.
+- **Profiles: Update asks before it changes where a profile points.** After a
+  provider switch, if the server or model is no longer the one the profile
+  had, **Update** shows the provider, URL and model before and after, and
+  saves only when you confirm.
+- **Profiles: undo the last Update.** A profile keeps the version its last
+  Update replaced. Right-click it in the profile list and choose **Restore
+  version of _date_**. The version being replaced is kept too, so restoring
+  can be undone the same way.
 
 ### SDK
 
-- **`@cerebriline/ui` and `@cerebriline/taskboard` on npm.** The task board,
-  pipelines and the Board tab can go into another application:
-  `attachTaskBoard()` gives any agent loop the board, `createBoardBackend()`
-  and `sessionBoardSlots()` answer the Board tab, and
-  `@cerebriline/ui/components/board-viewer` draws it over a transport you
-  give it. The guide is *Embedding the task board* in the SDK docs, and
-  `apps/examples/taskboard-web` is a whole example in a web page.
+- **`@cerebriline/ui` on npm, with each release.** The React theme and agent
+  UI components the extension's webview is built from (upstream's
+  `@cline/ui`) are packed and published beside `@cerebriline/sdk` at the
+  release's version, with upstream's adoption guide. Its tool-activity
+  summaries now load under Node's own module loader as well as in bundlers.
+- **`@cerebriline/taskboard`: the task board and pipelines on their own.**
+  The task graph (`task_plan`, `task_update`, `task_view`, gates, saved
+  plans, team boards) and pipelines (the engine, the `pipeline` tool, files,
+  approvals and runs) are now a package of their own that depends only on
+  `@cerebriline/shared`, with `attachTaskBoard()` to give any agent loop the
+  board: its rules, tools, per-turn notes, completion guard and the panel's
+  controls. `@cerebriline/core` uses it and re-exports everything it exported
+  before, so nothing changes for code written against core.
+- **The Board tab's backend is in `@cerebriline/taskboard` too.**
+  `createBoardBackend()` answers everything the Board tab asks (pipelines:
+  validate, save, approve, reject, new, from a board, as a plan; boards:
+  edit, add, delete, load, export, drafts, copy, Memory; run actions) and
+  collects what it draws, asking the person through the host's own pickers
+  and dialogs. The tab's messages are `@cerebriline/taskboard/protocol`, with
+  no Node code, for a browser UI. The VS Code Board tab now runs on it.
+- **The Board tab itself is in `@cerebriline/ui`.**
+  `@cerebriline/ui/components/board-viewer` is the whole tab (the canvas,
+  inspector, step form, plan, versions, runs, run monitor, activity and
+  report) as a React component that talks to its host over a transport you
+  give it; `windowMessageTransport()` covers a host that answers with
+  `window.postMessage`. Inside VS Code it keeps the editor theme's colours;
+  elsewhere it takes `@cerebriline/ui`'s theme tokens, and every colour can
+  be set through a `--bv-*` variable. The VS Code Board tab renders this
+  component. The task-graph snapshot and its parser are in the protocol too
+  (`readBoardSnapshot()`), so the chat's task panel and the tab read a board
+  the same way.
+- **`sessionBoardSlots()` and a guide for embedding the board.** One call in
+  `@cerebriline/taskboard` gives the Board tab every board it lists from your
+  conversations' attached boards: the open conversation's (the person's edits
+  reach the model), three drafts and saved boards kept as files in the
+  workspace, and the past conversations' boards from their logs. The new
+  guide, [Embedding the task board](https://github.com/mann1x/cline/blob/main/docs/sdk/guides/embedding-the-task-board.mdx),
+  walks through giving your own agent loop the board, the Board tab's server
+  side, and its React side. A whole example is in
+  `apps/examples/taskboard-web`: an agent on `@cerebriline/agents` with the
+  board, pipelines and the Board tab in a web page over one WebSocket,
+  including the backend's questions asked in the page.
 
 ## [4.100.313] — 2026-11-27
 
