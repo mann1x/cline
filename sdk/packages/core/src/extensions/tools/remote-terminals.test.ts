@@ -937,3 +937,132 @@ describe("remote_copy", () => {
 		await rm(target, { recursive: true, force: true });
 	});
 });
+
+describe("activity for the host's display", () => {
+	it("reports a command, its output as it arrives, how it ended, and one line per write", async () => {
+		let polls = 0;
+		const { fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) => {
+				if (call.url.pathname.endsWith("/files/write"))
+					return { json: { path: `${WORKSPACE}/a`, size: 1, created: true } };
+				if (call.method === "POST")
+					return {
+						json: {
+							id: "p",
+							status: "running",
+							next_offset: 1,
+							output: [{ data: "one\n" }],
+						},
+					};
+				polls += 1;
+				return {
+					json: {
+						id: "p",
+						status: "done",
+						exit_code: 0,
+						next_offset: 2,
+						output: [{ data: "two\n" }],
+					},
+				};
+			}),
+		);
+		const events: unknown[] = [];
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+			onActivity: (event) => events.push(event),
+		});
+		await tool(tools, "remote_run").execute(
+			{ terminal: "bench-app", command: "make" },
+			context(),
+		);
+		await tool(tools, "remote_write").execute(
+			{ terminal: "bench-app", action: "write", path: "a", content: "x" },
+			context(),
+		);
+		expect(polls).toBe(1);
+		expect(events.map((event) => (event as { type: string }).type)).toEqual([
+			"command",
+			"output",
+			"output",
+			"exit",
+			"note",
+		]);
+		expect(events[0]).toMatchObject({
+			terminal: "bench-app",
+			sessionId: "1790_task",
+			cwd: WORKSPACE,
+			command: "make",
+		});
+		expect(events[3]).toMatchObject({ type: "exit", exitCode: 0 });
+		expect(events[4]).toMatchObject({
+			type: "note",
+			text: `remote_write: created ${WORKSPACE}/a (1 B)`,
+		});
+	});
+
+	it("continues a still-running command's output where the last call stopped", async () => {
+		let resumed = false;
+		const offsets: Array<string | null> = [];
+		const { fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) => {
+				if (call.method === "POST")
+					return {
+						json: {
+							id: "p",
+							status: "running",
+							next_offset: 3,
+							output: [{ data: "abc" }],
+						},
+					};
+				if (!resumed)
+					return {
+						json: { id: "p", status: "running", next_offset: 3, output: [] },
+					};
+				offsets.push(call.url.searchParams.get("offset"));
+				return {
+					json: {
+						id: "p",
+						status: "done",
+						exit_code: 0,
+						next_offset: 4,
+						output: [{ data: "d" }],
+					},
+				};
+			}),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+		});
+		const first = await tool(tools, "remote_run").execute(
+			{ terminal: "bench-app", command: "x", timeout_seconds: 1 },
+			context(),
+		);
+		expect(first).toContain("still running");
+		resumed = true;
+		const second = await tool(tools, "remote_run").execute(
+			{ terminal: "bench-app", process_id: "p" },
+			context(),
+		);
+		expect(offsets).toEqual(["3"]);
+		expect(second).toMatch(/exit 0 after [\d.]+ s\nd$/);
+	});
+
+	it("a display that throws does not break the tool", async () => {
+		const { fetchImpl } = fakeOpenWebUi(withWorkspace(() => done("ok")));
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+			onActivity: () => {
+				throw new Error("display gone");
+			},
+		});
+		expect(
+			await tool(tools, "remote_run").execute(
+				{ terminal: "bench-app", command: "true" },
+				context(),
+			),
+		).toContain("exit 0");
+	});
+});

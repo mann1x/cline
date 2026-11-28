@@ -21,6 +21,7 @@ import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "
 import { createVscodeCodeIntelProvider } from "@/hosts/vscode/code-intel-support"
 import { writeGeneratedImage } from "@/hosts/vscode/image-generation-support"
 import { createVscodeWorkspaceLister } from "@/hosts/vscode/list-files-support"
+import { remoteTerminalMirror } from "@/hosts/vscode/remote-terminal-mirror"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
@@ -277,6 +278,9 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		...createRemoteTerminalTools({
 			getConfig: readRemoteTerminalsConfig,
 			discover: rediscoverRemoteTerminals,
+			// What the model does on each machine streams into a read-only tab
+			// per machine in the Terminal panel.
+			onActivity: (event) => remoteTerminalMirror().handle(event),
 			// `remote_copy` copies inside the session's workspace folder only.
 			getLocalRoot: () => options?.cwd ?? process.cwd(),
 			onWorkspace: recordRemoteWorkspace,

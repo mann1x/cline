@@ -32,6 +32,10 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   machine without the contents passing through the conversation. Uploads
   leave out `.git` and `node_modules`; downloads never replace local files
   unless asked.
+- **Watch the model on a remote terminal.** Each machine the model uses
+  gets a read-only tab in VS Code's Terminal panel ("bench-app (remote)")
+  showing every command, its output as it runs and how it ended, plus a
+  line for each read, write and copy. It opens without taking focus.
 
 ### Fixes
 

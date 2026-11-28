@@ -120,7 +120,38 @@ export interface CreateRemoteTerminalToolsOptions {
 	 * the session's list does not know; returns the usable list.
 	 */
 	discover?: () => Promise<RemoteTerminal[]>;
+	/**
+	 * What the tools do on each machine, as it happens: for a host that shows
+	 * it (VS Code mirrors it into a read-only terminal per machine).
+	 */
+	onActivity?: (event: RemoteActivity) => void;
 }
+
+/** One step of what the remote tools do on a machine. */
+export type RemoteActivity =
+	| {
+			type: "command";
+			terminal: string;
+			sessionId: string;
+			cwd: string;
+			command: string;
+	  }
+	| { type: "output"; terminal: string; sessionId: string; data: string }
+	| {
+			type: "exit";
+			terminal: string;
+			sessionId: string;
+			exitCode: number | null | undefined;
+			seconds: number;
+	  }
+	| {
+			type: "running";
+			terminal: string;
+			sessionId: string;
+			processId: string;
+			seconds: number;
+	  }
+	| { type: "note"; terminal: string; sessionId: string; text: string };
 
 /** Why a configuration offers no remote tools, or `undefined` when it does. */
 export function remoteTerminalsUnavailable(
@@ -411,6 +442,41 @@ export function createRemoteTerminalTools(
 	const workspaces = new Map<string, Promise<string>>();
 	// The marker each started command carries, by Open Terminal's process id.
 	const runMarkers = new Map<string, string>();
+	// How far each still-running command's output has been read, so waiting
+	// for it again continues instead of repeating what was already returned.
+	const readOffsets = new Map<string, number>();
+
+	const emit = (event: RemoteActivity) => {
+		try {
+			options.onActivity?.(event);
+		} catch {
+			// A display must never break the tool.
+		}
+	};
+	const note = (
+		terminal: RemoteTerminal,
+		context: AgentToolContext,
+		text: string,
+	) =>
+		emit({
+			type: "note",
+			terminal: terminal.name.trim(),
+			sessionId: remoteWorkspaceId(context),
+			text,
+		});
+	const shown = (
+		terminal: RemoteTerminal,
+		context: AgentToolContext,
+		data: string,
+	) => {
+		if (data)
+			emit({
+				type: "output",
+				terminal: terminal.name.trim(),
+				sessionId: remoteWorkspaceId(context),
+				data,
+			});
+	};
 
 	/**
 	 * Stops a command and everything it started. Not `DELETE /execute/<id>`:
@@ -596,13 +662,19 @@ export function createRemoteTerminalTools(
 				const id = input.process_id.trim();
 				if (input.kill) {
 					await stopRun(client, id);
+					readOffsets.delete(id);
+					note(terminal, context, `stopped process ${id}`);
 					return `[${terminal.name}] stopped process ${id}.`;
 				}
+				note(terminal, context, `waiting again for process ${id}`);
 				response = await client.request<ExecResponse>(
 					"GET",
 					`/execute/${encodeURIComponent(id)}/status`,
 					{
-						query: { wait: Math.min(POLL_WAIT_SECONDS, timeout), offset: 0 },
+						query: {
+							wait: Math.min(POLL_WAIT_SECONDS, timeout),
+							offset: readOffsets.get(id) ?? 0,
+						},
 						signal: context.signal,
 					},
 				);
@@ -613,6 +685,13 @@ export function createRemoteTerminalTools(
 					);
 				}
 				const marker = randomUUID().replace(/-/g, "");
+				emit({
+					type: "command",
+					terminal: terminal.name.trim(),
+					sessionId: remoteWorkspaceId(context),
+					cwd: inside(workspace, input.cwd),
+					command: input.command,
+				});
 				try {
 					response = await client.request<ExecResponse>("POST", "/execute", {
 						query: { wait: Math.min(POLL_WAIT_SECONDS, timeout) },
@@ -640,6 +719,7 @@ export function createRemoteTerminalTools(
 				if (response.status === "running") runMarkers.set(response.id, marker);
 			}
 			collected += outputText(response);
+			shown(terminal, context, outputText(response));
 			try {
 				while (
 					response.status === "running" &&
@@ -658,6 +738,7 @@ export function createRemoteTerminalTools(
 						},
 					);
 					collected += outputText(response);
+					shown(terminal, context, outputText(response));
 				}
 			} catch (error) {
 				if (context.signal?.aborted && response.status === "running") {
@@ -671,9 +752,31 @@ export function createRemoteTerminalTools(
 				}
 				throw error;
 			}
-			if (response.status !== "running") runMarkers.delete(response.id);
+			if (response.status !== "running") {
+				runMarkers.delete(response.id);
+				readOffsets.delete(response.id);
+			} else {
+				readOffsets.set(response.id, response.next_offset ?? 0);
+			}
 			const seconds = ((Date.now() - started) / 1000).toFixed(1);
 			const output = trimRemoteOutput(collected.trimEnd());
+			emit(
+				response.status === "running"
+					? {
+							type: "running",
+							terminal: terminal.name.trim(),
+							sessionId: remoteWorkspaceId(context),
+							processId: response.id,
+							seconds: Number(seconds),
+						}
+					: {
+							type: "exit",
+							terminal: terminal.name.trim(),
+							sessionId: remoteWorkspaceId(context),
+							exitCode: response.exit_code,
+							seconds: Number(seconds),
+						},
+			);
 			if (response.status === "running") {
 				return `[${terminal.name}] still running after ${seconds} s as process ${response.id}. Call ${REMOTE_TERMINAL_TOOL_NAMES.RUN} with process_id "${response.id}" to keep waiting, or with kill: true to stop it.\n${output}`;
 			}
@@ -1132,8 +1235,49 @@ export function createRemoteTerminalTools(
 		},
 	});
 
-	const tools: AgentTool[] = [run, read, write] as AgentTool[];
-	if (options.getLocalRoot) tools.push(copy as AgentTool);
+	// Reads, writes and copies show as one line each in the host's display:
+	// the first line of what the tool returns, or why it failed.
+	const announced = (tool: AgentTool): AgentTool => ({
+		...tool,
+		execute: async (input, context) => {
+			const name = (input as { terminal?: unknown } | undefined)?.terminal;
+			try {
+				const result = await tool.execute(input, context);
+				const line = String(result).split("\n")[0] ?? "";
+				const match = /^\[([^\]]+)\] (.*)$/.exec(line);
+				if (match) {
+					emit({
+						type: "note",
+						terminal: match[1],
+						sessionId: remoteWorkspaceId(context),
+						text: `${tool.name}: ${match[2]}`,
+					});
+				}
+				return result;
+			} catch (error) {
+				if (typeof name === "string") {
+					emit({
+						type: "note",
+						terminal:
+							matchRemoteTerminal(
+								usableTerminals(options.getConfig() ?? initial),
+								name,
+							)?.name.trim() ?? name,
+						sessionId: remoteWorkspaceId(context),
+						text: `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+					});
+				}
+				throw error;
+			}
+		},
+	});
+
+	const tools: AgentTool[] = [
+		run as unknown as AgentTool,
+		announced(read as unknown as AgentTool),
+		announced(write as unknown as AgentTool),
+	];
+	if (options.getLocalRoot) tools.push(announced(copy as unknown as AgentTool));
 	return tools;
 }
 

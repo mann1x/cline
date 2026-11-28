@@ -1653,6 +1653,7 @@ export {
 	matchRemoteTerminal,
 	REMOTE_TERMINAL_TOOL_NAMES,
 	REMOTE_WORKSPACE_ROOT,
+	type RemoteActivity,
 	type RemoteTerminal,
 	type RemoteTerminalsConfig,
 	type RemoteWorkspaceRecord,
