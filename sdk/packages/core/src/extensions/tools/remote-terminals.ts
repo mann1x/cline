@@ -22,6 +22,7 @@
  * `remote_read` (reads), `remote_write` (writes).
  */
 
+import { randomUUID } from "node:crypto";
 import {
 	type AgentTool,
 	type AgentToolContext,
@@ -50,6 +51,28 @@ export const REMOTE_TERMINAL_TOOL_NAMES = {
 	READ: "remote_read",
 	WRITE: "remote_write",
 } as const;
+
+/** The environment variable that marks every process a `remote_run` command starts. */
+export const RUN_MARKER_VARIABLE = "CEREBRILINE_RUN";
+
+/**
+ * A POSIX shell command that kills every process carrying `marker`, other
+ * than itself: TERM first, then KILL for whatever is left after 2 s.
+ */
+export function stopCommand(marker: string): string {
+	if (!/^[A-Za-z0-9]+$/.test(marker))
+		throw new Error(`unexpected run marker: ${marker}`);
+	return [
+		`m='${RUN_MARKER_VARIABLE}=${marker}';`,
+		"for s in TERM KILL; do",
+		"found=;",
+		'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue;',
+		`if tr '\\0' '\\n' < "$p/environ" 2>/dev/null | grep -qxF "$m"; then kill -$s "\${p#/proc/}" 2>/dev/null && found=1; fi;`,
+		"done;",
+		'[ -z "$found" ] && break; [ "$s" = TERM ] && sleep 2;',
+		"done; echo stopped",
+	].join(" ");
+}
 
 /** Where a session's workspace lives under the account's home. */
 export const REMOTE_WORKSPACE_ROOT = "cerebriline";
@@ -156,7 +179,6 @@ class OpenTerminalClient {
 		options: {
 			query?: Record<string, string | number | boolean | undefined>;
 			body?: unknown;
-			sessionId?: string;
 			signal?: AbortSignal;
 		} = {},
 	): Promise<T> {
@@ -169,7 +191,9 @@ class OpenTerminalClient {
 		};
 		if (options.body !== undefined)
 			headers["Content-Type"] = "application/json";
-		if (options.sessionId) headers["X-Session-Id"] = options.sessionId;
+		// No X-Session-Id: Open WebUI reads it as one of its own chat ids and
+		// refuses any other ("Chat access denied"). The workspace travels as
+		// `cwd` and `HOME` on every call instead.
 		let response: Response;
 		try {
 			response = await this.fetchImpl(url, {
@@ -249,6 +273,46 @@ export function createRemoteTerminalTools(
 
 	// One workspace per machine and session, created on first use.
 	const workspaces = new Map<string, Promise<string>>();
+	// The marker each started command carries, by Open Terminal's process id.
+	const runMarkers = new Map<string, string>();
+
+	/**
+	 * Stops a command and everything it started. Not `DELETE /execute/<id>`:
+	 * in multi-user mode the command runs under a root `sudo`, and the server,
+	 * not being root, is refused when it signals that process group, so the
+	 * command runs on. Every command started here carries its own marker in
+	 * its environment, inherited by all its children; this kills, as the
+	 * account itself, each process that has it (TERM, then KILL after 2 s).
+	 */
+	const stopRun = async (
+		client: OpenTerminalClient,
+		processId: string,
+		knownMarker?: string,
+	): Promise<void> => {
+		const marker = knownMarker ?? runMarkers.get(processId);
+		if (!marker) {
+			// Started before this session's tools existed: all that is left is
+			// Open Terminal's own stop, which may be refused.
+			await client.request(
+				"DELETE",
+				`/execute/${encodeURIComponent(processId)}`,
+				{
+					query: { force: true },
+				},
+			);
+			return;
+		}
+		const done = await client.request<ExecResponse>("POST", "/execute", {
+			query: { wait: POLL_WAIT_SECONDS },
+			body: { command: stopCommand(marker) },
+		});
+		if (done.exit_code !== 0) {
+			throw new RemoteTerminalError(
+				`Could not stop process ${processId}: ${outputText(done).trim() || `exit ${done.exit_code}`}`,
+			);
+		}
+		runMarkers.delete(processId);
+	};
 
 	const resolve = (name: unknown) => {
 		const config = options.getConfig();
@@ -289,7 +353,6 @@ export function createRemoteTerminalTools(
 					body: {
 						command: `mkdir -p "$HOME"/${quoteShell(relative)} && cd "$HOME"/${quoteShell(relative)} && pwd`,
 					},
-					sessionId: workspaceId,
 					signal: context.signal,
 				});
 				const path = outputText(created).trim().split("\n").pop()?.trim() ?? "";
@@ -385,7 +448,6 @@ export function createRemoteTerminalTools(
 		execute: async (input, context) => {
 			const { terminal, client } = resolve(input.terminal);
 			const workspace = await workspaceFor(terminal, client, context);
-			const sessionId = remoteWorkspaceId(context);
 			const timeout = Math.min(
 				Math.max(Number(input.timeout_seconds) || DEFAULT_TIMEOUT_SECONDS, 1),
 				MAX_TIMEOUT_SECONDS,
@@ -396,10 +458,7 @@ export function createRemoteTerminalTools(
 			if (input.process_id?.trim()) {
 				const id = input.process_id.trim();
 				if (input.kill) {
-					await client.request("DELETE", `/execute/${encodeURIComponent(id)}`, {
-						sessionId,
-						signal: context.signal,
-					});
+					await stopRun(client, id);
 					return `[${terminal.name}] stopped process ${id}.`;
 				}
 				response = await client.request<ExecResponse>(
@@ -407,7 +466,6 @@ export function createRemoteTerminalTools(
 					`/execute/${encodeURIComponent(id)}/status`,
 					{
 						query: { wait: Math.min(POLL_WAIT_SECONDS, timeout), offset: 0 },
-						sessionId,
 						signal: context.signal,
 					},
 				);
@@ -417,16 +475,32 @@ export function createRemoteTerminalTools(
 						"Give a `command` to run, or a `process_id` to wait for.",
 					);
 				}
-				response = await client.request<ExecResponse>("POST", "/execute", {
-					query: { wait: Math.min(POLL_WAIT_SECONDS, timeout) },
-					body: {
-						command: input.command,
-						cwd: inside(workspace, input.cwd),
-						env: { HOME: workspace },
-					},
-					sessionId,
-					signal: context.signal,
-				});
+				const marker = randomUUID().replace(/-/g, "");
+				try {
+					response = await client.request<ExecResponse>("POST", "/execute", {
+						query: { wait: Math.min(POLL_WAIT_SECONDS, timeout) },
+						body: {
+							command: input.command,
+							cwd: inside(workspace, input.cwd),
+							env: { HOME: workspace, [RUN_MARKER_VARIABLE]: marker },
+						},
+						signal: context.signal,
+					});
+				} catch (error) {
+					// Stopped while the start request was still waiting: the command
+					// may be running, and its process id never arrived. The marker is
+					// enough to find it.
+					if (context.signal?.aborted) {
+						await stopRun(client, "(starting)", marker).catch((stopError) =>
+							options.onError?.(
+								`Could not stop a command on "${terminal.name}"`,
+								stopError,
+							),
+						);
+					}
+					throw error;
+				}
+				if (response.status === "running") runMarkers.set(response.id, marker);
 			}
 			collected += outputText(response);
 			try {
@@ -443,7 +517,6 @@ export function createRemoteTerminalTools(
 								wait: Math.max(1, Math.min(POLL_WAIT_SECONDS, Math.ceil(left))),
 								offset: response.next_offset ?? 0,
 							},
-							sessionId,
 							signal: context.signal,
 						},
 					);
@@ -452,15 +525,16 @@ export function createRemoteTerminalTools(
 			} catch (error) {
 				if (context.signal?.aborted && response.status === "running") {
 					// The user stopped the run: stop the command too, not just the wait.
-					await client
-						.request("DELETE", `/execute/${encodeURIComponent(response.id)}`, {
-							query: { force: true },
-							sessionId,
-						})
-						.catch(() => undefined);
+					await stopRun(client, response.id).catch((stopError) =>
+						options.onError?.(
+							`Could not stop process ${response.id} on "${terminal.name}"`,
+							stopError,
+						),
+					);
 				}
 				throw error;
 			}
+			if (response.status !== "running") runMarkers.delete(response.id);
 			const seconds = ((Date.now() - started) / 1000).toFixed(1);
 			const output = trimRemoteOutput(collected.trimEnd());
 			if (response.status === "running") {
@@ -524,9 +598,8 @@ export function createRemoteTerminalTools(
 		execute: async (input, context) => {
 			const { terminal, client } = resolve(input.terminal);
 			const workspace = await workspaceFor(terminal, client, context);
-			const sessionId = remoteWorkspaceId(context);
 			const path = inside(workspace, input.path);
-			const common = { sessionId, signal: context.signal };
+			const common = { signal: context.signal };
 			switch (input.action) {
 				case "read": {
 					const file = await client.request<{
@@ -664,7 +737,6 @@ export function createRemoteTerminalTools(
 		execute: async (input, context) => {
 			const { terminal, client } = resolve(input.terminal);
 			const workspace = await workspaceFor(terminal, client, context);
-			const sessionId = remoteWorkspaceId(context);
 			const path = inside(workspace, input.path);
 			if (input.action === "write") {
 				if (typeof input.content !== "string")
@@ -675,7 +747,6 @@ export function createRemoteTerminalTools(
 					created?: boolean;
 				}>("POST", "/files/write", {
 					body: { path, content: input.content },
-					sessionId,
 					signal: context.signal,
 				});
 				return `[${terminal.name}] ${written.created ? "created" : "wrote"} ${written.path} (${written.size} B)`;
@@ -695,7 +766,6 @@ export function createRemoteTerminalTools(
 								allow_multiple: edit.replace_all === true,
 							})),
 						},
-						sessionId,
 						signal: context.signal,
 					},
 				);
@@ -732,7 +802,6 @@ export async function removeRemoteWorkspace(
 		body: {
 			command: `rm -rf -- "$HOME"/${quoteShell(`${REMOTE_WORKSPACE_ROOT}/${id}`)}`,
 		},
-		sessionId: id,
 	});
 	if (done.status !== "done" || done.exit_code !== 0) {
 		throw new RemoteTerminalError(

@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from "node:child_process";
 import type { AgentToolContext } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import { createPlanModeCommandGuardExtension } from "./command-guard-extension";
@@ -5,9 +6,11 @@ import {
 	createRemoteTerminalTools,
 	type RemoteTerminalsConfig,
 	type RemoteWorkspaceRecord,
+	RUN_MARKER_VARIABLE,
 	remoteTerminalsUnavailable,
 	remoteWorkspaceId,
 	removeRemoteWorkspace,
+	stopCommand,
 	trimRemoteOutput,
 } from "./remote-terminals";
 
@@ -169,12 +172,15 @@ describe("remote_run", () => {
 			`mkdir -p "$HOME"/'cerebriline/1790_task' && cd "$HOME"/'cerebriline/1790_task' && pwd`,
 		);
 		expect(run.headers.Authorization).toBe("Bearer sk-test");
-		expect(run.headers["X-Session-Id"]).toBe("1790_task");
-		expect(run.body).toEqual({
+		expect(run.headers["X-Session-Id"]).toBeUndefined();
+		expect(run.body).toMatchObject({
 			command: "echo hello",
 			cwd: `${WORKSPACE}/src`,
 			env: { HOME: WORKSPACE },
 		});
+		// Every command carries a marker of its own, for stopping it.
+		const env = run.body?.env as Record<string, string>;
+		expect(env[RUN_MARKER_VARIABLE]).toMatch(/^[a-f0-9]{32}$/);
 		expect(records).toEqual([
 			{
 				terminal: "bench-app",
@@ -274,9 +280,18 @@ describe("remote_run", () => {
 		const abort = new AbortController();
 		const { calls, fetchImpl } = fakeOpenWebUi(
 			withWorkspace((call) => {
-				if (call.method === "POST")
+				if (call.method === "POST" && call.body?.command === "sleep 99")
 					return {
 						json: { id: "p4", status: "running", next_offset: 0, output: [] },
+					};
+				if (call.method === "POST")
+					return {
+						json: {
+							id: "stop",
+							status: "done",
+							exit_code: 0,
+							output: [{ data: "stopped\n" }],
+						},
 					};
 				if (call.method === "GET") {
 					abort.abort();
@@ -295,11 +310,18 @@ describe("remote_run", () => {
 				context({ signal: abort.signal }),
 			),
 		).rejects.toThrow();
-		const kill = calls.find((call) => call.method === "DELETE");
-		expect(kill?.url.pathname).toBe(
-			"/api/v1/machines/solidpc-bench-app/execute/p4",
+		// Not Open Terminal's DELETE, which its server cannot carry out under
+		// sudo: a command that kills whatever carries this run's marker.
+		const started = calls.find((call) => call.body?.command === "sleep 99");
+		const marker = (started?.body?.env as Record<string, string>)[
+			RUN_MARKER_VARIABLE
+		];
+		const stop = calls.at(-1);
+		expect(stop?.url.pathname).toBe(
+			"/api/v1/machines/solidpc-bench-app/execute",
 		);
-		expect(kill?.url.searchParams.get("force")).toBe("true");
+		expect(stop?.body?.command).toBe(stopCommand(marker));
+		expect(calls.some((call) => call.method === "DELETE")).toBe(false);
 	});
 
 	it("names the configured terminals when asked for one that does not exist", async () => {
@@ -518,5 +540,76 @@ describe("plan mode", () => {
 		expect(
 			before("remote_read", { terminal: "bench-app", action: "list" }),
 		).toBeUndefined();
+	});
+});
+
+describe("remote_run cancelled while starting", () => {
+	it("stops the command by its marker though no process id came back", async () => {
+		const abort = new AbortController();
+		const { calls, fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) => {
+				if (call.body?.command === "sleep 99") {
+					abort.abort();
+					throw new Error("aborted");
+				}
+				return {
+					json: {
+						id: "stop",
+						status: "done",
+						exit_code: 0,
+						output: [{ data: "stopped\n" }],
+					},
+				};
+			}),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+		});
+		await expect(
+			tool(tools, "remote_run").execute(
+				{ terminal: "bench-app", command: "sleep 99" },
+				context({ signal: abort.signal }),
+			),
+		).rejects.toThrow();
+		const started = calls.find((call) => call.body?.command === "sleep 99");
+		const marker = (started?.body?.env as Record<string, string>)[
+			RUN_MARKER_VARIABLE
+		];
+		expect(calls.at(-1)?.body?.command).toBe(stopCommand(marker));
+	});
+});
+
+describe.skipIf(process.platform === "win32")("stopCommand", () => {
+	it("kills a marked command and its children, and nothing else", async () => {
+		const marker = "abc123";
+		// A shell whose child is the long-running process, as `sudo … bash -c` has.
+		const marked = spawn("sh", ["-c", "sleep 30; echo survived"], {
+			env: { ...process.env, [RUN_MARKER_VARIABLE]: marker },
+		});
+		const other = spawn("sh", ["-c", "sleep 30"], {
+			env: { ...process.env, [RUN_MARKER_VARIABLE]: "other" },
+		});
+		const exited = new Promise((resolve) => marked.on("exit", resolve));
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		const result = spawnSync("sh", ["-c", stopCommand(marker)], {
+			encoding: "utf8",
+		});
+		expect(result.stdout.trim()).toBe("stopped");
+		await exited;
+		const children = spawnSync(
+			"sh",
+			[
+				"-c",
+				`grep -l "${RUN_MARKER_VARIABLE}=${marker}" /proc/[0-9]*/environ 2>/dev/null | wc -l`,
+			],
+			{
+				encoding: "utf8",
+			},
+		);
+		expect(children.stdout.trim()).toBe("0");
+		expect(other.exitCode).toBeNull();
+		other.kill("SIGKILL");
+		expect(() => stopCommand("x; rm -rf /")).toThrow(/unexpected/);
 	});
 });

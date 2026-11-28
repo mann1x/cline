@@ -1654,9 +1654,11 @@ export {
 	type RemoteTerminal,
 	type RemoteTerminalsConfig,
 	type RemoteWorkspaceRecord,
+	RUN_MARKER_VARIABLE,
 	remoteTerminalsUnavailable,
 	remoteWorkspaceId,
 	removeRemoteWorkspace,
+	stopCommand,
 	trimRemoteOutput,
 } from "./extensions/tools/remote-terminals";
 export {
