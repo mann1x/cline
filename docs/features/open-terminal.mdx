@@ -147,6 +147,26 @@ The first time the model uses a machine, a read-only tab for it opens in VS Code
 
 The tab shows what Cerebriline does on the machine, not everything that happens there.
 
+### Testing web apps and GUI programs there
+
+Two more tools, off until you tick them in the Remote terminals tab (**Offer the remote browser**, **Offer the remote desktop**). Open Terminal needs its browser and desktop features on (`OPEN_TERMINAL_ENABLE_BROWSER`, `OPEN_TERMINAL_ENABLE_DESKTOP`).
+
+- **`remote_browser`**: a real Chrome tab on the terminal. The model opens a page, reads it as an accessibility tree with element refs (`@e3`), clicks and types by ref or by screenshot pixels, in batches of up to 50 steps. `http://localhost:<port>` is the terminal's own localhost, so it reaches a server the model started there.
+- **`remote_desktop`**: your account's Linux desktop on the terminal (XFCE, 1280×800). The model takes a screenshot, then clicks, types and presses keys on it. Once the desktop is running, programs the model starts with `remote_run` open on it. It needs a model that can see images. Every conversation of the same account shares the one desktop.
+
+Ask for them by name or by what you want done:
+
+- *"On bench-app, serve the site in `site/` and test the signup form with the remote browser."*
+- *"Start the Tk app on bench-app and use the remote desktop to click through its menus and check the About box."*
+
+Both are approved like the local browser (the browser box in auto-approve).
+
+### Opening a terminal's port in your local browser
+
+`remote_read` with `action: "forward"` opens a port of the terminal on your computer, at `http://127.0.0.1:<port>/`, through Open WebUI. The model can then load it with the local `browser` tool, or you can open it yourself. Only ports your account's programs listen on can be forwarded. Plain HTTP only: WebSockets do not pass, so a dev server's live reload will not. A forward closes after an hour without requests.
+
+- *"Run the app on bench-app on port 3000 and check it in the browser here."*
+
 ### Typing there yourself
 
 Run **Cerebriline: Open a Shell on a Remote Terminal** from the Command Palette. Pick the machine, then where to start: your account's home folder, or one conversation's folder (listed by the conversation's first line, newest first). You get an ordinary terminal tab, **bench-app (shell)**, in the same account the model uses, so you see its files and can run, fix or inspect anything it left there. In a conversation's folder, `HOME` points there too, as for the model's commands.
@@ -244,5 +264,6 @@ A `cd` does not carry over between commands; the model passes a working director
 | `502` or a timeout | Open WebUI cannot reach the terminal: check the URL in the connection and that the container is running (`docker ps`). |
 | `400` mentioning `X-User-Id` | The terminal runs in multi-user mode and the request did not come through Open WebUI. Connect through Open WebUI. |
 | The shell's browser sign-in does not open or does not return | The approval page is on the Open WebUI address from the Remote terminals tab, and it sends the answer back to `127.0.0.1` on the computer running VS Code: open the shell from a VS Code running on the same computer as the browser. |
+| A command that starts a server never returns | `nohup server &` keeps the call open until its timeout. The model is told to start servers with `setsid -f server >log 2>&1 </dev/null`, which returns at once. |
 | `shell ended: Session not found` | The shell exited (you typed `exit`), or Open Terminal restarted. Open a new one. |
 | A command stops after 5 minutes | Open WebUI ends a single request after 300 seconds. Cerebriline runs long commands in the background and polls them; if you see this, report it. |

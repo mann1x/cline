@@ -32,6 +32,8 @@ export function readRemoteTerminalsConfig(): RemoteTerminalsConfig | undefined {
 	return {
 		openWebUiUrl: stored.openWebUiUrl,
 		apiKey: state.getSecretKey("openWebUiApiKey")?.trim() || undefined,
+		browser: stored.browser === true,
+		desktop: stored.desktop === true,
 		terminals: mergeRemoteTerminals(stored.terminals, discovered.machines)
 			.filter((terminal) => terminal.enabled && terminal.name && terminal.machineId)
 			.map((terminal) => ({

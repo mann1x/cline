@@ -1347,3 +1347,195 @@ describe("images, input, run records, processes, info, ports", () => {
 		).rejects.toThrow(/Nothing of this account listens on port 9999/);
 	});
 });
+
+describe("remote browser, desktop and port forward", () => {
+	const png = (width: number, height: number) => {
+		const bytes = new Uint8Array(24);
+		bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+		const view = new DataView(bytes.buffer);
+		view.setUint32(16, width);
+		view.setUint32(20, height);
+		return bytes;
+	};
+	const seeing = {
+		metadata: { modelSupportsImages: true },
+	} as Partial<AgentToolContext>;
+
+	it("offers the browser and desktop only when switched on", () => {
+		const { fetchImpl } = fakeOpenWebUi(() => done());
+		const names = (config: RemoteTerminalsConfig) =>
+			createRemoteTerminalTools({ getConfig: () => config, fetchImpl }).map(
+				(entry) => entry.name,
+			);
+		expect(names(CONFIG)).not.toContain("remote_browser");
+		expect(names({ ...CONFIG, browser: true, desktop: true })).toEqual(
+			expect.arrayContaining(["remote_browser", "remote_desktop"]),
+		);
+	});
+
+	it("opens a Chrome tab, keeps it as the conversation's, and acts on refs", async () => {
+		const page = {
+			session_id: "tab1",
+			url: "http://localhost:8899/",
+			title: "T",
+			snapshot: 'button @e2 "Click me"',
+		};
+		const { calls, fetchImpl } = fakeOpenWebUi((call) => {
+			if (call.url.pathname.endsWith("/browser/sessions"))
+				return { json: { id: "tab1" } };
+			if (call.url.pathname.endsWith("/browser/sessions/tab1"))
+				return { json: { id: "tab1", mode: "chrome" } };
+			if (call.url.pathname.endsWith("/browser/screenshot"))
+				return { bytes: png(1024, 768), contentType: "image/png" };
+			if (
+				call.url.pathname.endsWith("/browser/snapshot") ||
+				call.url.pathname.endsWith("/browser/action")
+			)
+				return { json: page };
+			return done();
+		});
+		const tools = createRemoteTerminalTools({
+			getConfig: () => ({ ...CONFIG, browser: true }),
+			fetchImpl,
+		});
+		const opened = (await tool(tools, "remote_browser").execute(
+			{ terminal: "bench-app", action: "open", url: "http://localhost:8899/" },
+			context(seeing),
+		)) as unknown as Array<{ type: string; text?: string }>;
+		expect(opened[0].text).toContain('button @e2 "Click me"');
+		expect(opened[0].text).toContain("Screenshot: 1024×768 px.");
+		expect(opened[1].type).toBe("image");
+		const patchCall = calls.find((call) => call.method === "PATCH");
+		expect(patchCall?.body).toEqual({ mode: "chrome", active: true });
+		await tool(tools, "remote_browser").execute(
+			{
+				terminal: "bench-app",
+				action: "act",
+				actions: [{ action: "click", ref: "@e2", x: undefined }],
+			},
+			context(),
+		);
+		const acted = calls.find((call) =>
+			call.url.pathname.endsWith("/browser/action"),
+		);
+		expect(acted?.body).toEqual({
+			session_id: "tab1",
+			actions: [{ action: "click", ref: "@e2" }],
+		});
+	});
+
+	it("says a step failed instead of 'could not reach'", async () => {
+		const { fetchImpl } = fakeOpenWebUi(() => ({
+			status: 502,
+			json: {
+				detail: { completed_actions: 1, failed_action_index: 1, error: "" },
+			},
+		}));
+		const tools = createRemoteTerminalTools({
+			getConfig: () => ({ ...CONFIG, desktop: true }),
+			fetchImpl,
+		});
+		await expect(
+			tool(tools, "remote_desktop").execute(
+				{
+					terminal: "bench-app",
+					action: "act",
+					actions: [
+						{ action: "key", key: "a" },
+						{ action: "key", key: "b" },
+					],
+				},
+				context(),
+			),
+		).rejects.toThrow(
+			/step 2 failed: it timed out\. 1 step\(s\) before it took effect/,
+		);
+	});
+
+	it("never moves the desktop pointer to where it already is (Open Terminal waits forever)", async () => {
+		const { calls, fetchImpl } = fakeOpenWebUi(() => ({
+			bytes: png(1280, 800),
+			contentType: "image/png",
+		}));
+		const tools = createRemoteTerminalTools({
+			getConfig: () => ({ ...CONFIG, desktop: true }),
+			fetchImpl,
+		});
+		const act = (actions: unknown[]) =>
+			tool(tools, "remote_desktop").execute(
+				{ terminal: "bench-app", action: "act", actions },
+				context(seeing),
+			);
+		await act([
+			{ action: "click", x: 640, y: 400 },
+			{ action: "click", x: 639, y: 400 },
+		]);
+		await act([{ action: "click", x: 638, y: 400 }]);
+		const sent = calls.map((call) =>
+			(call.body as { actions: Array<{ x: number }> }).actions.map(
+				(item) => item.x,
+			),
+		);
+		// A new desktop starts with the pointer at the centre.
+		expect(sent).toEqual([[639, 638], [637]]);
+	});
+
+	it("forwards a remote port to 127.0.0.1, adding the key and undoing Open WebUI's rewrites", async () => {
+		const prefix = "/api/v1/machines/solidpc-bench-app/proxy/8899/";
+		const seen: Array<{ url: string; auth: string | null }> = [];
+		const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+			const url = new URL(String(input));
+			if (url.pathname.endsWith("/ports"))
+				return new Response(JSON.stringify({ ports: [{ port: 8899 }] }));
+			if (url.pathname.endsWith("/execute"))
+				return new Response(
+					JSON.stringify({
+						id: "ws",
+						status: "done",
+						exit_code: 0,
+						output: [{ data: `${WORKSPACE}\n` }],
+					}),
+				);
+			if (url.pathname.endsWith("/system/info")) return new Response("{}");
+			seen.push({
+				url: url.pathname + url.search,
+				auth: new Headers(init?.headers).get("authorization"),
+			});
+			if (url.pathname.endsWith("/old"))
+				return new Response(null, {
+					status: 302,
+					headers: { location: `${prefix}new?x=1` },
+				});
+			return new Response(
+				`<script>parent.postMessage({type: 'terminal-browser-state'}, '*')</script><h1>hi</h1>`,
+				{ headers: { "content-type": "text/html" } },
+			);
+		}) as typeof fetch;
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+		});
+		const answer = await tool(tools, "remote_read").execute(
+			{ terminal: "bench-app", action: "forward", port: 8899 },
+			context(),
+		);
+		const local = String(answer).match(
+			/http:\/\/127\.0\.0\.1:\d+\//,
+		)?.[0] as string;
+		expect(local).toBeTruthy();
+		const page = await fetch(`${local}docs/?q=2`);
+		expect(await page.text()).toBe("<h1>hi</h1>");
+		expect(seen[0]).toEqual({
+			url: `${prefix}docs/?q=2`,
+			auth: "Bearer sk-test",
+		});
+		const moved = await fetch(`${local}old`, { redirect: "manual" });
+		expect(moved.headers.get("location")).toBe("/new?x=1");
+		await expect(
+			tool(tools, "remote_read").execute(
+				{ terminal: "bench-app", action: "forward", port: 9000 },
+				context(),
+			),
+		).rejects.toThrow(/Nothing of this account listens on port 9000/);
+	});
+});

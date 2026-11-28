@@ -356,6 +356,28 @@ describe("browser", () => {
 		]);
 	});
 
+	it("states the screenshot's pixel size beside it", async () => {
+		// GLM saw 900×600 screenshots ~1000 px wide and clicked 11% off.
+		const tool = createBrowserTool({
+			cwd: CWD,
+			createDriver: () =>
+				fakeDriver({
+					navigateToUrl: vi.fn(async () =>
+						result({
+							screenshot:
+								"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA4QAAAJYCAIAAAC1p7+M",
+						}),
+					),
+				}),
+		});
+		const output = (await run(
+			tool,
+			{ action: "open", url: "/repo/game.html" },
+			true,
+		)) as Array<{ text?: string }>;
+		expect(output[0].text).toContain("Screenshot: 900×600 px.");
+	});
+
 	it("sends text only to a model that cannot", async () => {
 		// An image a model cannot read is context window spent on nothing.
 		const tool = createBrowserTool({

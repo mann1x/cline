@@ -17,6 +17,10 @@ export interface StoredRemoteTerminals {
 	/** Days a deleted conversation's workspace is kept before it is removed. */
 	retentionDays: number
 	terminals: StoredRemoteTerminal[]
+	/** Offer `remote_browser` (a Chrome tab on the terminal). Off unless ticked. */
+	browser?: boolean
+	/** Offer `remote_desktop` (the account's Linux desktop on the terminal). Off unless ticked. */
+	desktop?: boolean
 }
 
 export const DEFAULT_REMOTE_RETENTION_DAYS = 7
@@ -50,6 +54,8 @@ export function parseRemoteTerminals(raw: string | undefined): StoredRemoteTermi
 			if (item.enabled === false) terminal.enabled = false
 			return [terminal]
 		}),
+		...(parsed?.browser === true ? { browser: true } : {}),
+		...(parsed?.desktop === true ? { desktop: true } : {}),
 	}
 }
 

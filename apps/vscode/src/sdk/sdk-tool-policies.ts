@@ -34,7 +34,7 @@ export function buildToolPolicies(
 	// Remote terminals: the same three questions, asked about another machine.
 	set(["remote_read", "remote_write", "remote_run", "remote_copy"])
 	set(["fetch_web_content", "web_fetch", "web_search"])
-	set(["browser", "browser_action", "render_image"])
+	set(["browser", "browser_action", "render_image", "remote_browser", "remote_desktop"])
 	// `pipeline` is deliberately unlisted. A run needs the person's approval of
 	// that version on disk (the Approve Pipeline command), and every command
 	// and tool node inside it is asked for under the same policies and toggles
@@ -168,7 +168,15 @@ function isWebFetchTool(toolName: string): boolean {
 function isBrowserTool(toolName: string): boolean {
 	// `render_image` runs a page too. The model wrote that page, but a page can
 	// ask the network for anything, so it answers to the same box.
-	return toolName === "browser" || toolName === "browser_action" || toolName === "render_image"
+	// The remote browser and desktop drive a real browser or desktop too, on a
+	// remote terminal: same box.
+	return (
+		toolName === "browser" ||
+		toolName === "browser_action" ||
+		toolName === "render_image" ||
+		toolName === "remote_browser" ||
+		toolName === "remote_desktop"
+	)
 }
 
 /**

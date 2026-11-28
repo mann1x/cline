@@ -4,6 +4,7 @@ import {
 	describeDelimiterBalance,
 	findScriptSyntaxError,
 } from "./delimiter-balance";
+import { imageSizeFromBase64, screenshotSizeNote } from "./image-size";
 
 /**
  * What a driver reports back from one action.
@@ -602,8 +603,9 @@ export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 			if (!image) {
 				return text;
 			}
+			const sizeNote = screenshotSizeNote(imageSizeFromBase64(image.data));
 			return [
-				{ type: "text", text },
+				{ type: "text", text: sizeNote ? `${text}\n\n${sizeNote}` : text },
 				{ type: "image", data: image.data, mediaType: image.mediaType },
 			];
 		},

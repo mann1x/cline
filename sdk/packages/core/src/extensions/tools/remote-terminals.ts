@@ -1,3 +1,5 @@
+import { imageSize, screenshotSizeNote } from "./image-size";
+import { openPortForward, type PortForward } from "./remote-port-forward";
 /**
  * Remote terminals: Open Terminal machines, reached through Open WebUI.
  *
@@ -54,6 +56,10 @@ export interface RemoteTerminalsConfig {
 	/** The user's Open WebUI API key (`sk-…`). */
 	apiKey?: string;
 	terminals: RemoteTerminal[];
+	/** Offer `remote_browser`: a Chrome tab on the terminal, read and driven by the model. */
+	browser?: boolean;
+	/** Offer `remote_desktop`: the account's Linux desktop on the terminal, seen and driven by the model. */
+	desktop?: boolean;
 }
 
 export const REMOTE_TERMINAL_TOOL_NAMES = {
@@ -61,6 +67,8 @@ export const REMOTE_TERMINAL_TOOL_NAMES = {
 	READ: "remote_read",
 	WRITE: "remote_write",
 	COPY: "remote_copy",
+	BROWSER: "remote_browser",
+	DESKTOP: "remote_desktop",
 } as const;
 
 /** The environment variable that marks every process a `remote_run` command starts. */
@@ -351,7 +359,7 @@ class OpenTerminalClient {
 
 	/** One request through the proxy; a non-2xx answer becomes a readable error. */
 	private async send(
-		method: "GET" | "POST" | "DELETE",
+		method: "GET" | "POST" | "DELETE" | "PATCH",
 		path: string,
 		options: {
 			query?: Record<string, string | number | boolean | undefined>;
@@ -395,6 +403,24 @@ class OpenTerminalClient {
 		return response;
 	}
 
+	/** A JSON POST whose answer may be bytes (a screenshot). */
+	async postRaw(
+		path: string,
+		body: unknown,
+		signal?: AbortSignal,
+	): Promise<{ status: number; contentType: string; bytes: Uint8Array }> {
+		const response = await this.send("POST", path, {
+			body: JSON.stringify(body),
+			contentType: "application/json",
+			signal,
+		});
+		return {
+			status: response.status,
+			contentType: response.headers.get("content-type") ?? "",
+			bytes: new Uint8Array(await response.arrayBuffer()),
+		};
+	}
+
 	/** A GET whose answer may be JSON or bytes (an image, a web page). */
 	async getRaw(
 		path: string,
@@ -411,7 +437,7 @@ class OpenTerminalClient {
 	}
 
 	async request<T>(
-		method: "GET" | "POST" | "DELETE",
+		method: "GET" | "POST" | "DELETE" | "PATCH",
 		path: string,
 		options: {
 			query?: Record<string, string | number | boolean | undefined>;
@@ -463,6 +489,28 @@ class OpenTerminalClient {
 	}
 
 	private describeFailure(status: number, body: string): string {
+		// A browser or desktop batch that stopped part-way answers with what ran.
+		try {
+			const parsed = JSON.parse(body) as {
+				detail?: {
+					completed_actions?: number;
+					failed_action_index?: number | null;
+					error?: string;
+				};
+			};
+			const batch = parsed.detail;
+			if (
+				batch &&
+				typeof batch === "object" &&
+				typeof batch.completed_actions === "number"
+			) {
+				const failed =
+					typeof batch.failed_action_index === "number"
+						? `step ${batch.failed_action_index + 1} failed`
+						: "the steps ran but the final view could not be taken";
+				return `On "${this.terminal.name}" ${failed}: ${batch.error?.trim() || "it timed out"}. ${batch.completed_actions} step(s) before it took effect and are not undone. Look again (snapshot or screenshot) before retrying.`;
+			}
+		} catch {}
 		const detail = body.slice(0, 300).trim();
 		const name = `"${this.terminal.name}"`;
 		switch (status) {
@@ -516,6 +564,10 @@ export function createRemoteTerminalTools(
 	// How far each still-running command's output has been read, so waiting
 	// for it again continues instead of repeating what was already returned.
 	const readOffsets = new Map<string, number>();
+	// Local forwards of remote ports, one per machine and port.
+	const forwards = new Map<string, Promise<PortForward>>();
+	// The browser tab each conversation is working in, per machine.
+	const browserTabs = new Map<string, string>();
 	// The machine summary, said once per machine and session on first use.
 	const machineNotes = new Map<string, string>();
 
@@ -783,7 +835,7 @@ export function createRemoteTerminalTools(
 			"Remote terminals:",
 			terminalList,
 			workspaceNote,
-			"A `cd` does not carry over to the next call: pass `cwd` instead. A command still running when `timeout_seconds` is reached keeps running; call again with its `process_id` to wait for it, with `process_id` and `input` to type into it (answer a prompt; end lines with \\n), or with `process_id` and `kill: true` to stop it. `remote_read` with action `processes` lists this conversation's commands.",
+			"A `cd` does not carry over to the next call: pass `cwd` instead. A command still running when `timeout_seconds` is reached keeps running; call again with its `process_id` to wait for it, with `process_id` and `input` to type into it (answer a prompt; end lines with \\n), or with `process_id` and `kill: true` to stop it. `remote_read` with action `processes` lists this conversation's commands. To start a server or GUI program and return at once, use `setsid -f <command> >log 2>&1 </dev/null`: a plain `nohup ... &` keeps this call waiting until timeout_seconds.",
 		].join("\n"),
 		inputSchema: {
 			type: "object",
@@ -994,7 +1046,8 @@ export function createRemoteTerminalTools(
 				| "processes"
 				| "info"
 				| "ports"
-				| "fetch";
+				| "fetch"
+				| "forward";
 			path?: string;
 			start_line?: number;
 			end_line?: number;
@@ -1008,7 +1061,7 @@ export function createRemoteTerminalTools(
 		name: REMOTE_TERMINAL_TOOL_NAMES.READ,
 		readOnly: true,
 		description: [
-			"Look at a remote terminal without changing it: read a file (a line range of text, or an image, which you see), list a directory, search file contents (grep), find files by name (glob), list this conversation's commands and whether they still run (processes), the machine's cores, memory and disk (info), the ports programs listen on (ports), or GET a page from one of them (fetch: `port` and `path`).",
+			"Look at a remote terminal without changing it: read a file (a line range of text, or an image, which you see), list a directory, search file contents (grep), find files by name (glob), list this conversation's commands and whether they still run (processes), the machine's cores, memory and disk (info), the ports programs listen on (ports), GET a page from one of them (fetch: `port` and `path`), or open one of those ports on the user's machine so the local `browser` tool can load it (forward: `port`; answers with a http://127.0.0.1:… address, plain HTTP only).",
 			"Remote terminals:",
 			terminalList,
 			workspaceNote,
@@ -1028,11 +1081,13 @@ export function createRemoteTerminalTools(
 						"info",
 						"ports",
 						"fetch",
+						"forward",
 					],
 				},
 				port: {
 					type: "number",
-					description: "fetch: the port a program on the terminal listens on.",
+					description:
+						"fetch and forward: the port a program on the terminal listens on.",
 				},
 				path: {
 					type: "string",
@@ -1196,6 +1251,46 @@ export function createRemoteTerminalTools(
 						context,
 					);
 				}
+				case "forward": {
+					const port = Number(input.port);
+					if (!Number.isInteger(port) || port < 1 || port > 65535) {
+						throw new RemoteTerminalError("forward needs a `port` (1-65535).");
+					}
+					const listed = await client.request<{
+						ports?: Array<{ port?: number }>;
+					}>("GET", "/ports", common);
+					if (!(listed.ports ?? []).some((entry) => entry.port === port)) {
+						throw new RemoteTerminalError(
+							`Nothing of this account listens on port ${port} on "${terminal.name}"; see action ports. Start the server first.`,
+						);
+					}
+					const key = `${terminal.machineId.trim()}:${port}`;
+					let pending = forwards.get(key);
+					if (!pending) {
+						pending = openPortForward(
+							{
+								machineId: terminal.machineId.trim(),
+								port,
+								getConnection: () => {
+									const current = options.getConfig() ?? initial;
+									return {
+										openWebUiUrl: current.openWebUiUrl,
+										apiKey: current.apiKey,
+									};
+								},
+							},
+							fetchImpl,
+						);
+						forwards.set(key, pending);
+						pending.catch(() => forwards.delete(key));
+					}
+					const forward = await pending;
+					return withNote(
+						`[${terminal.name}] port ${port} is open on the user's machine at ${forward.url} (through Open WebUI). Load it with the \`browser\` tool. Plain HTTP only: WebSockets do not pass. It closes after an hour without requests.`,
+						terminal,
+						context,
+					);
+				}
 				case "fetch": {
 					const port = Number(input.port);
 					if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -1299,7 +1394,7 @@ export function createRemoteTerminalTools(
 				}
 				default:
 					throw new RemoteTerminalError(
-						`Unknown action "${String(input.action)}": use read, list, grep, glob, processes, info, ports or fetch.`,
+						`Unknown action "${String(input.action)}": use read, list, grep, glob, processes, info, ports, fetch or forward.`,
 					);
 			}
 		},
@@ -1663,12 +1758,365 @@ export function createRemoteTerminalTools(
 		},
 	});
 
+	/** A screenshot as the model gets it: the image for a model that sees, a note otherwise. */
+	const screenshotOutput = (
+		text: string,
+		raw: { contentType: string; bytes: Uint8Array },
+		context: AgentToolContext,
+	): RemoteToolOutput => {
+		const kind = raw.contentType.split(";")[0].trim() || "image/png";
+		if (context.metadata?.modelSupportsImages !== true) {
+			return `${text}\n(A screenshot was taken; this model cannot see images.)`;
+		}
+		const sizeNote = screenshotSizeNote(imageSize(raw.bytes));
+		return [
+			{ type: "text", text: sizeNote ? `${text}\n${sizeNote}` : text },
+			{
+				type: "image",
+				data: Buffer.from(raw.bytes).toString("base64"),
+				mediaType: kind,
+			},
+		];
+	};
+
+	const actionItemSchema = (kinds: string[], withRefs: boolean) => ({
+		type: "object",
+		properties: {
+			action: { type: "string", enum: kinds },
+			...(withRefs
+				? {
+						ref: {
+							type: "string",
+							description:
+								"An element ref from the snapshot, e.g. @e3 (instead of x and y).",
+						},
+						url: { type: "string", description: "navigate: the URL." },
+					}
+				: {}),
+			x: { type: "number", description: "Pixels in the last screenshot." },
+			y: { type: "number" },
+			to_x: { type: "number", description: "drag: where to." },
+			to_y: { type: "number" },
+			button: { type: "string", enum: ["left", "middle", "right"] },
+			direction: { type: "string", enum: ["up", "down", "left", "right"] },
+			amount: { type: "number", description: "scroll: how far." },
+			text: { type: "string", description: "type: the text." },
+			key: {
+				type: "string",
+				description:
+					"key: a key or combination, e.g. Enter, Tab, ctrl+a, alt+F2.",
+			},
+		},
+		required: ["action"],
+	});
+
+	// Where each machine's desktop pointer is, as far as this process moved it.
+	// Open Terminal's `xdotool mousemove --sync` waits forever (10 s, then
+	// fails) when the pointer is already at the target, and a new desktop
+	// starts with it in the middle of the screen. Measured on bench-app
+	// 2026-11-28: the same position twice -> 502 after 10.0 s; elsewhere 0.6 s.
+	const pointers = new Map<string, { x: number; y: number }>();
+	const avoidPointerHang = (
+		machine: string,
+		actions: Array<Record<string, unknown>>,
+	) => {
+		let at = pointers.get(machine) ?? { x: 640, y: 400 };
+		for (const item of actions) {
+			if (typeof item.x === "number" && typeof item.y === "number") {
+				if (item.x === at.x && item.y === at.y)
+					item.x = item.x > 0 ? item.x - 1 : item.x + 1;
+				at = { x: item.x as number, y: item.y as number };
+			}
+			if (typeof item.to_x === "number" && typeof item.to_y === "number") {
+				if (item.to_x === at.x && item.to_y === at.y)
+					item.to_x = item.to_x > 0 ? item.to_x - 1 : item.to_x + 1;
+				at = { x: item.to_x as number, y: item.to_y as number };
+			}
+		}
+		pointers.set(machine, at);
+		return actions;
+	};
+
+	const cleanActions = (actions: unknown): Array<Record<string, unknown>> => {
+		if (!Array.isArray(actions) || actions.length === 0) {
+			throw new RemoteTerminalError(
+				"act needs `actions`: a list of 1-50 steps.",
+			);
+		}
+		return actions
+			.slice(0, 50)
+			.map((item) =>
+				Object.fromEntries(
+					Object.entries((item ?? {}) as Record<string, unknown>).filter(
+						([, value]) =>
+							value !== undefined && value !== null && value !== "",
+					),
+				),
+			);
+	};
+
+	const remoteBrowser = createTool<
+		{
+			terminal: string;
+			action: "open" | "snapshot" | "screenshot" | "act" | "tabs" | "close";
+			url?: string;
+			actions?: Array<Record<string, unknown>>;
+			session_id?: string;
+		},
+		RemoteToolOutput
+	>({
+		name: REMOTE_TERMINAL_TOOL_NAMES.BROWSER,
+		description: [
+			"A real Chrome tab running on a remote terminal: open a page, read it, click and type in it. URLs are as the terminal sees them, so http://localhost:<port> reaches a server you started there with remote_run.",
+			"open: a new tab at `url` (it becomes this conversation's tab). snapshot: the page as an accessibility tree, with refs like @e3 for the elements you can use. act: `actions`, 1-50 steps run in order (click, double_click, move, drag, scroll, type, key, navigate, back, forward, reload), each on a `ref` from the latest snapshot or on x,y pixels of the latest screenshot; answers with a fresh snapshot. Refs can expire after the page changes: take a new snapshot. screenshot: an image of the tab. tabs: the open tabs. close: close a tab.",
+			"Remote terminals:",
+			terminalList,
+		].join("\n"),
+		inputSchema: {
+			type: "object",
+			properties: {
+				terminal: terminalProperty,
+				action: {
+					type: "string",
+					enum: ["open", "snapshot", "screenshot", "act", "tabs", "close"],
+				},
+				url: { type: "string", description: "open: an http(s) URL." },
+				actions: {
+					type: "array",
+					description: "act: the steps, in order.",
+					items: actionItemSchema(
+						[
+							"click",
+							"double_click",
+							"move",
+							"drag",
+							"scroll",
+							"type",
+							"key",
+							"navigate",
+							"back",
+							"forward",
+							"reload",
+						],
+						true,
+					),
+				},
+				session_id: {
+					type: "string",
+					description: "A tab from `tabs`. Default: this conversation's tab.",
+				},
+			},
+			required: ["terminal", "action"],
+		},
+		execute: async (input, context) => {
+			const { terminal, client } = await resolve(input.terminal);
+			const tabKey = `${terminal.machineId.trim()}\u0000${remoteWorkspaceId(context)}`;
+			const common = { signal: context.signal };
+			const tab = () => {
+				const id = input.session_id?.trim() || browserTabs.get(tabKey);
+				if (!id) {
+					throw new RemoteTerminalError(
+						`No browser tab yet on "${terminal.name}": use action open with a url first.`,
+					);
+				}
+				return id;
+			};
+			const describe = (page: {
+				session_id?: string;
+				url?: string;
+				title?: string;
+				snapshot?: string;
+			}) =>
+				`[${terminal.name}] tab ${page.session_id ?? ""}${page.title ? ` "${page.title}"` : ""}${page.url ? ` ${page.url}` : ""}\n${trimRemoteOutput(page.snapshot ?? "")}`;
+			const withScreenshot = async (text: string, id: string) => {
+				if (context.metadata?.modelSupportsImages !== true) return text;
+				try {
+					const raw = await client.getRaw(
+						"/browser/screenshot",
+						{ session_id: id },
+						context.signal,
+					);
+					return screenshotOutput(text, raw, context);
+				} catch {
+					return text;
+				}
+			};
+			switch (input.action) {
+				case "open": {
+					if (!input.url?.trim()) {
+						throw new RemoteTerminalError("open needs a `url`.");
+					}
+					const created = await client.request<{ id?: string }>(
+						"POST",
+						"/browser/sessions",
+						{ ...common, body: { url: input.url.trim() } },
+					);
+					if (!created.id) {
+						throw new RemoteTerminalError(
+							`"${terminal.name}" did not open a browser tab.`,
+						);
+					}
+					await client.request(
+						"PATCH",
+						`/browser/sessions/${encodeURIComponent(created.id)}`,
+						{
+							...common,
+							body: { mode: "chrome", active: true },
+						},
+					);
+					browserTabs.set(tabKey, created.id);
+					const page = await client.request<Record<string, string>>(
+						"GET",
+						"/browser/snapshot",
+						{ ...common, query: { session_id: created.id } },
+					);
+					return withScreenshot(describe(page), created.id);
+				}
+				case "snapshot": {
+					const id = tab();
+					const page = await client.request<Record<string, string>>(
+						"GET",
+						"/browser/snapshot",
+						{ ...common, query: { session_id: id } },
+					);
+					return describe(page);
+				}
+				case "screenshot": {
+					const id = tab();
+					const raw = await client.getRaw(
+						"/browser/screenshot",
+						{ session_id: id },
+						context.signal,
+					);
+					return screenshotOutput(`[${terminal.name}] tab ${id}`, raw, context);
+				}
+				case "act": {
+					const id = tab();
+					const page = await client.request<Record<string, string>>(
+						"POST",
+						"/browser/action",
+						{
+							...common,
+							body: { session_id: id, actions: cleanActions(input.actions) },
+						},
+					);
+					return withScreenshot(describe(page), id);
+				}
+				case "tabs": {
+					const listed = await client.request<{
+						tabs?: Array<{
+							session_id: string;
+							url?: string;
+							title?: string;
+							mode?: string;
+							selected?: boolean;
+						}>;
+					}>("GET", "/browser/tabs", common);
+					const lines = (listed.tabs ?? []).map(
+						(entry) =>
+							`${entry.session_id}${entry.session_id === browserTabs.get(tabKey) ? " (this conversation's)" : ""}  ${entry.mode ?? ""}  ${entry.title ?? ""}  ${entry.url ?? ""}`,
+					);
+					return `[${terminal.name}] ${lines.length} browser tab${lines.length === 1 ? "" : "s"}${lines.length ? `\n${lines.join("\n")}` : ""}`;
+				}
+				case "close": {
+					const id = tab();
+					await client.request(
+						"DELETE",
+						`/browser/sessions/${encodeURIComponent(id)}`,
+						common,
+					);
+					if (browserTabs.get(tabKey) === id) browserTabs.delete(tabKey);
+					return `[${terminal.name}] closed tab ${id}.`;
+				}
+				default:
+					throw new RemoteTerminalError(
+						`Unknown action "${String(input.action)}": use open, snapshot, screenshot, act, tabs or close.`,
+					);
+			}
+		},
+	});
+
+	const remoteDesktop = createTool<
+		{
+			terminal: string;
+			action: "screenshot" | "act";
+			actions?: Array<Record<string, unknown>>;
+		},
+		RemoteToolOutput
+	>({
+		name: REMOTE_TERMINAL_TOOL_NAMES.DESKTOP,
+		description: [
+			"The Linux desktop of your account on a remote terminal (XFCE, 1280×800): see it and drive it with the mouse and keyboard. Needs a model that can see images.",
+			"screenshot: an image of the desktop; the first one starts the desktop. Once it runs, programs you start with remote_run open on it (start them with `setsid -f <program> >/dev/null 2>&1 </dev/null` so the call returns). act: `actions`, 1-50 steps run in order (click, double_click, move, drag, scroll, type, key) on x,y pixels of the latest screenshot; answers with a fresh screenshot. Every conversation of this account shares the one desktop.",
+			"Remote terminals:",
+			terminalList,
+		].join("\n"),
+		inputSchema: {
+			type: "object",
+			properties: {
+				terminal: terminalProperty,
+				action: { type: "string", enum: ["screenshot", "act"] },
+				actions: {
+					type: "array",
+					description: "act: the steps, in order.",
+					items: actionItemSchema(
+						["click", "double_click", "move", "drag", "scroll", "type", "key"],
+						false,
+					),
+				},
+			},
+			required: ["terminal", "action"],
+		},
+		execute: async (input, context) => {
+			const { terminal, client } = await resolve(input.terminal);
+			switch (input.action) {
+				case "screenshot": {
+					const raw = await client.getRaw(
+						"/desktop/screenshot",
+						{},
+						context.signal,
+					);
+					return screenshotOutput(
+						`[${terminal.name}] desktop. Programs started with remote_run now open on it.`,
+						raw,
+						context,
+					);
+				}
+				case "act": {
+					const raw = await client.postRaw(
+						"/desktop/action",
+						{
+							actions: avoidPointerHang(
+								terminal.machineId.trim(),
+								cleanActions(input.actions),
+							),
+						},
+						context.signal,
+					);
+					return screenshotOutput(
+						`[${terminal.name}] desktop after the steps`,
+						raw,
+						context,
+					);
+				}
+				default:
+					throw new RemoteTerminalError(
+						`Unknown action "${String(input.action)}": use screenshot or act.`,
+					);
+			}
+		},
+	});
+
 	const tools: AgentTool[] = [
 		run as unknown as AgentTool,
 		announced(read as unknown as AgentTool),
 		announced(write as unknown as AgentTool),
 	];
 	if (options.getLocalRoot) tools.push(announced(copy as unknown as AgentTool));
+	if (initial.browser)
+		tools.push(announced(remoteBrowser as unknown as AgentTool));
+	if (initial.desktop)
+		tools.push(announced(remoteDesktop as unknown as AgentTool));
 	return tools;
 }
 

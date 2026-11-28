@@ -144,5 +144,16 @@ describe("remote terminal tools", () => {
 		expect(isToolAutoApproved("remote_write", withActions({ readFiles: true }))).toBe(false)
 		expect(isToolAutoApproved("remote_copy", withActions({ editFiles: true }))).toBe(true)
 		expect(isToolAutoApproved("remote_copy", withActions({ readFiles: true }))).toBe(false)
+		// The remote browser and desktop drive a real browser or desktop: the browser box.
+		for (const name of ["remote_browser", "remote_desktop"]) {
+			expect(buildToolPolicies(DEFAULT_AUTO_APPROVAL_SETTINGS)[name]).toEqual({ autoApprove: false })
+			expect(isToolAutoApproved(name, withActions({ useBrowserTool: true }))).toBe(true)
+			expect(
+				isToolAutoApproved(
+					name,
+					withActions({ executeSafeCommands: true, readFiles: true, useBrowserTool: false, useBrowser: false }),
+				),
+			).toBe(false)
+		}
 	})
 })

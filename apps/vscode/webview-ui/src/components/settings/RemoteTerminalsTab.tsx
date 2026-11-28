@@ -220,6 +220,24 @@ const RemoteTerminalsTab = () => {
 				</div>
 			</div>
 
+			<div className="flex flex-col gap-1">
+				<SettingsCheckbox
+					checked={stored.browser === true}
+					onChange={(checked) => patch({ browser: checked || undefined })}>
+					Offer the remote browser (<code>remote_browser</code>)
+				</SettingsCheckbox>
+				<SettingsCheckbox
+					checked={stored.desktop === true}
+					onChange={(checked) => patch({ desktop: checked || undefined })}>
+					Offer the remote desktop (<code>remote_desktop</code>)
+				</SettingsCheckbox>
+				<p className="text-xs m-0 text-(--vscode-descriptionForeground)">
+					A Chrome tab, and a Linux desktop, on the terminal, which the model reads and clicks in: for testing web apps
+					and GUI programs it runs there. Needs the browser and desktop features on in Open Terminal. Each adds a tool
+					the model sees on every request, so they are off until ticked. Approved like the local browser.
+				</p>
+			</div>
+
 			<DebouncedTextField
 				className="w-full"
 				initialValue={String(stored.retentionDays)}

@@ -43,6 +43,16 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   fetches pages from them. `remote_run` can type into a running command to
   answer its prompt, and stopping a command now also works after a VS Code
   reload.
+- **Remote terminals: browser, desktop, port forward.** Two opt-in tools
+  (tick them in the Remote terminals tab): `remote_browser`, a Chrome tab
+  on the terminal that the model reads and clicks in, and `remote_desktop`,
+  the account's Linux desktop there, where programs the model starts open
+  and it clicks and types. `remote_read` can also forward a terminal's port
+  to `127.0.0.1` on your computer, so the local browser can open a web app
+  running there. Starting a server with `remote_run` now returns at once
+  when started as the tool suggests.
+- **Browser screenshots state their size.** Models that see a resized image
+  can scale their clicks; GLM's landed 11% off before.
 - **Remote terminals: your own shell there.** "Cerebriline: Open a Shell on
   a Remote Terminal" opens a terminal tab you type into, on a remote
   terminal, in the account the model uses and, if you pick one, in a
