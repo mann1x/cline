@@ -44,11 +44,10 @@ export interface ProviderApiMetrics {
 	/**
 	 * Generation throughput, summed over the requests that reported it.
 	 *
-	 * Only some providers time their own work (Ollama and llama.cpp do), so
-	 * these stay zero elsewhere and the rate is simply not shown. An estimate
-	 * from wall-clock would include queueing, prompt processing and the
-	 * client's own latency, and calling that the model's speed would make the
-	 * comparison it exists for meaningless.
+	 * The engine's own timing where it reports one (local Ollama, llama.cpp);
+	 * otherwise the provider fills in the streaming time measured after the
+	 * first token (Ollama cloud models report counts but no durations). Never
+	 * whole wall-clock: that would include queueing and prompt processing.
 	 */
 	generateTokens: number
 	generateMs: number

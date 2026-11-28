@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { engineName, formatDuration, formatRate, prefillRate, summarizeTimings, timingRows } from "./request-timings"
+import {
+	engineName,
+	formatDuration,
+	formatRate,
+	generationRate,
+	prefillRate,
+	summarizeTimings,
+	timingRows,
+} from "./request-timings"
 
 describe("formatDuration", () => {
 	it("picks the unit the number reads best in", () => {
@@ -201,5 +209,29 @@ describe("engineName", () => {
 	it("says who reported the engine total in the expanded rows", () => {
 		const rows = timingRows({ engine: "llamacpp", engineTotalMs: 4443, requestMs: 4717 }, 163, "opencoti")
 		expect(rows.find((row) => row.label === "Engine total")?.note).toBe("reported by opencoti")
+	})
+})
+
+describe("a generation rate Cerebriline measured", () => {
+	const cloud = {
+		requestMs: 2_400,
+		firstTokenMs: 700,
+		engine: "ollama" as const,
+		promptTokens: 36,
+		generateTokens: 34,
+		generateMs: 1_700,
+		generatePerSecond: 20,
+		generateMeasuredBy: "client" as const,
+	}
+
+	it("is marked as derived, not as the engine's", () => {
+		expect(generationRate(cloud)).toEqual({ perSecond: 20, derived: true })
+		expect(summarizeTimings(cloud)).toContain("gen*")
+	})
+
+	it("says where the generation time came from", () => {
+		const rows = timingRows(cloud)
+		const time = rows.find((row) => row.label === "Generation time")
+		expect(time?.note).toBe("measured by Cerebriline after the first token")
 	})
 })

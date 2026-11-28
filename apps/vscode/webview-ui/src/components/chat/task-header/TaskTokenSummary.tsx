@@ -63,7 +63,9 @@ export const TaskTokenSummary = memo<TaskTokenSummaryProps>(
 						↓ {formatTokenNumber(tokensOut)}
 					</span>
 					{rate && (
-						<span title="Generation speed, averaged over the requests whose provider reported timings">{rate}</span>
+						<span title="Generation speed, averaged over this task's requests: the engine's own timing where it reports one (local Ollama, llama.cpp), otherwise the streaming time Cerebriline measured after the first token (Ollama cloud models)">
+							{rate}
+						</span>
 					)}
 					{connections.length > 1 && (
 						// A disclosure rather than a tooltip, for the same reason

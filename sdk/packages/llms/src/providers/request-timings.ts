@@ -213,6 +213,30 @@ export function readEngineTimings(
 export function mergeRequestTimings(
 	measured: RequestTimings,
 	engine: RequestTimings | undefined,
+	outputTokens?: number,
 ): RequestTimings {
-	return engine ? { ...engine, ...measured } : measured;
+	const merged = engine ? { ...engine, ...measured } : measured;
+	if (merged.generateMs !== undefined) {
+		return merged;
+	}
+	// The engine gave no generation time: Ollama cloud models send token
+	// counts and a total, but no durations. The time after the first token
+	// arrived is spent streaming the rest, so the tokens over that span is a
+	// measurement of two real quantities -- marked as Cline's, not the
+	// engine's. A request with one token, or no first token, has no rate.
+	const tokens = merged.generateTokens ?? outputTokens;
+	const span =
+		merged.requestMs !== undefined && merged.firstTokenMs !== undefined
+			? merged.requestMs - merged.firstTokenMs
+			: undefined;
+	if (tokens === undefined || tokens <= 1 || !span || span <= 0) {
+		return merged;
+	}
+	return {
+		...merged,
+		generateTokens: tokens,
+		generateMs: span,
+		generatePerSecond: (tokens * 1000) / span,
+		generateMeasuredBy: "client",
+	};
 }

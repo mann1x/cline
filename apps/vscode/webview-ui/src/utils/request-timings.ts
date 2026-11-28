@@ -108,7 +108,10 @@ export function generationRate(
 ): { perSecond: number; derived: boolean } | undefined {
 	const reported = timings?.generatePerSecond ?? rateFrom(timings?.generateTokens, timings?.generateMs)
 	if (reported !== undefined) {
-		return { perSecond: reported, derived: false }
+		// Filled in by the provider from Cerebriline's own clock when the engine
+		// gave no generation time (Ollama cloud models): a measurement, still not
+		// the engine's.
+		return { perSecond: reported, derived: timings?.generateMeasuredBy === "client" }
 	}
 	if (timings?.requestMs === undefined || timings.firstTokenMs === undefined) {
 		return undefined
@@ -230,8 +233,17 @@ export function timingRows(timings: RequestTimings | undefined, outputTokens?: n
 		push("Prompt rate", formatRate(prefillRate(timings)))
 		push("Cached prompt", formatTokens(timings.cachedTokens), "served from the KV cache")
 		push("Generated tokens", formatTokens(timings.generateTokens))
-		push("Generation time", formatDuration(timings.generateMs))
-		push("Generation rate", formatRate(generationRate(timings, outputTokens)?.perSecond))
+		const measuredHere = timings.generateMeasuredBy === "client"
+		push(
+			"Generation time",
+			formatDuration(timings.generateMs),
+			measuredHere ? "measured by Cerebriline after the first token" : undefined,
+		)
+		push(
+			"Generation rate",
+			formatRate(generationRate(timings, outputTokens)?.perSecond),
+			measuredHere ? "derived from output tokens and Cerebriline's timing" : undefined,
+		)
 		if (timings.draftTokens !== undefined && timings.draftTokens > 0) {
 			const accepted = timings.draftAcceptedTokens ?? 0
 			push(

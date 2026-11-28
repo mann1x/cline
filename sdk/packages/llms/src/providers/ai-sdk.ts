@@ -2584,9 +2584,15 @@ async function* emitAiSdkEvents(
 		// timing display is not a reason to change how anything is billed.
 		const engineTimings = readEngineTimings(finishProviderMetadata);
 		const completedAt = Date.now();
+		const usage = normalizeUsage(
+			usageToEmit,
+			metadataToUse,
+			pricingValue,
+			request,
+		);
 		yield {
 			type: "usage",
-			usage: normalizeUsage(usageToEmit, metadataToUse, pricingValue, request),
+			usage,
 			timings: mergeRequestTimings(
 				{
 					requestMs: completedAt - startedAt,
@@ -2595,6 +2601,7 @@ async function* emitAiSdkEvents(
 						: {}),
 				},
 				engineTimings,
+				(usage as { outputTokens?: number }).outputTokens,
 			),
 		};
 	}

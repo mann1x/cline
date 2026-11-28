@@ -224,6 +224,13 @@ export interface RequestTimings {
 	generateTokens?: number;
 	generateMs?: number;
 	generatePerSecond?: number;
+	/**
+	 * `"client"` when the engine gave no generation time (Ollama cloud models
+	 * report token counts but no durations) and `generateMs` is the time
+	 * Cline measured between the first token and the end of the stream.
+	 * Absent when the engine timed itself.
+	 */
+	generateMeasuredBy?: "client";
 	/** The engine's own total, which includes admission Cline cannot see. */
 	engineTotalMs?: number;
 	/** Prompt tokens served from the engine's KV cache instead of recomputed. */

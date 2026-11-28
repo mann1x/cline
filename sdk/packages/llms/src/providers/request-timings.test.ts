@@ -173,6 +173,54 @@ describe("mergeRequestTimings", () => {
 		const merged = mergeRequestTimings({ requestMs: 500 }, undefined);
 		expect(merged).toEqual({ requestMs: 500 });
 	});
+
+	it("measures generation itself when the engine gave counts but no durations (Ollama cloud)", () => {
+		// What deepseek-v4.1-flash:cloud's final chunk carried on 2026-11-28:
+		// counts and total_duration, no eval_duration.
+		const engine = readEngineTimings({
+			ollama: {
+				total_duration: 445_736_423,
+				prompt_eval_count: 36,
+				prompt_eval_cached_count: 0,
+				eval_count: 34,
+			},
+		});
+		expect(engine?.generateMs).toBeUndefined();
+		const merged = mergeRequestTimings(
+			{ requestMs: 2_400, firstTokenMs: 700 },
+			engine,
+			34,
+		);
+		expect(merged.generateTokens).toBe(34);
+		expect(merged.generateMs).toBe(1_700);
+		expect(merged.generatePerSecond).toBeCloseTo(20, 5);
+		expect(merged.generateMeasuredBy).toBe("client");
+	});
+
+	it("never replaces the engine's own generation time", () => {
+		const merged = mergeRequestTimings(
+			{ requestMs: 9_000, firstTokenMs: 1_000 },
+			{
+				engine: "ollama",
+				generateTokens: 400,
+				generateMs: 5_000,
+				generatePerSecond: 80,
+			},
+			400,
+		);
+		expect(merged.generateMs).toBe(5_000);
+		expect(merged.generateMeasuredBy).toBeUndefined();
+	});
+
+	it("has no rate for a single token or without a first token", () => {
+		expect(
+			mergeRequestTimings({ requestMs: 900, firstTokenMs: 800 }, undefined, 1)
+				.generateMs,
+		).toBeUndefined();
+		expect(
+			mergeRequestTimings({ requestMs: 900 }, undefined, 50).generateMs,
+		).toBeUndefined();
+	});
 });
 
 /**
