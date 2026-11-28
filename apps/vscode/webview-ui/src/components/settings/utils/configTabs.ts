@@ -1,25 +1,17 @@
 import type { Mode } from "@shared/storage/types"
 
 /**
- * The tabs the API configuration section can show.
- *
- * `plan` and `act` are the session's own model. The rest are scoped tabs, each
- * configuring a model or endpoint used for one particular job.
+ * The tabs the API configuration section can show: `plan` and `act` are the
+ * session's own model; the rest, listed here, are scoped tabs, each
+ * configuring a model or endpoint used for one particular job. The single list: `ConfigTab` is
+ * derived from it, so a new tab cannot be added to the type and missed here --
+ * which is what happened to "remote" (4.100.315): it answered `isModelTab`
+ * with true, so the Model button showed selected and disabled beside it, with
+ * the Model tab's toggles under its form and no way back.
  */
-export type ConfigTab =
-	| Mode
-	| "vision"
-	| "agents"
-	| "escalation"
-	| "imagegen"
-	| "audio"
-	| "video"
-	| "remote"
-	| "embedding"
-	| "jev"
+export const SCOPED_TABS = ["vision", "agents", "escalation", "imagegen", "audio", "video", "remote", "embedding", "jev"] as const
 
-/** The tabs that are not the session's model. */
-export const SCOPED_TABS = ["vision", "agents", "escalation", "imagegen", "audio", "video", "embedding", "jev"] as const
+export type ConfigTab = Mode | (typeof SCOPED_TABS)[number]
 
 /**
  * Is this tab the session's own model, rather than one of the scoped tabs?

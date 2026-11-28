@@ -16,6 +16,10 @@ describe("isModelTab", () => {
 		}
 	})
 
+	it("is false on the Remote terminals tab", () => {
+		expect(isModelTab("remote")).toBe(false)
+	})
+
 	it("is false on the Images tab specifically", () => {
 		expect(isModelTab("imagegen")).toBe(false)
 	})
