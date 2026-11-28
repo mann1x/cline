@@ -33,6 +33,8 @@ const ClineCommands = {
 	UndockChat: prefix + ".undockChat",
 	DockChat: prefix + ".dockChat",
 	ClearWebviewCache: prefix + ".clearWebviewCache",
+	OpenRemoteShell: prefix + ".openRemoteShell",
+	SignOutOfOpenWebUi: prefix + ".signOutOfOpenWebUi",
 	AccountButton: prefix + ".accountButtonClicked",
 	WorktreesButton: prefix + ".worktreesButtonClicked",
 	TerminalOutput: prefix + ".addTerminalOutputToChat",

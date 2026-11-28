@@ -44,4 +44,4 @@ export function remoteMirrorBanner(name: string): string {
 	return `${dim(`What Cerebriline runs on ${name}, as it happens. Read-only: typing here does nothing.`)}\r\n`
 }
 
-export const REMOTE_MIRROR_INPUT_HINT = `\r\n${yellow("This tab only shows what the model runs; it does not take input.")}\r\n`
+export const REMOTE_MIRROR_INPUT_HINT = `\r\n${yellow('This tab only shows what the model runs; it does not take input. To type there yourself, run "Cerebriline: Open a Shell on a Remote Terminal".')}\r\n`

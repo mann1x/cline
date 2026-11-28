@@ -165,6 +165,17 @@
 				"category": "Cerebriline"
 			},
 			{
+				"command": "cerebriline.openRemoteShell",
+				"title": "Open a Shell on a Remote Terminal",
+				"category": "Cerebriline",
+				"icon": "$(terminal-linux)"
+			},
+			{
+				"command": "cerebriline.signOutOfOpenWebUi",
+				"title": "Sign Out of Open WebUI (Remote Shells)",
+				"category": "Cerebriline"
+			},
+			{
 				"command": "cerebriline.accountButtonClicked",
 				"title": "Account",
 				"icon": "$(account)"

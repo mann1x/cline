@@ -50,6 +50,7 @@ import { abortCommitGeneration, generateCommitMsg } from "./hosts/vscode/commit-
 import { registerClineOutputChannel } from "./hosts/vscode/hostbridge/env/debugLog"
 import { approvePipelineCommand } from "./hosts/vscode/pipeline-approve"
 import { registerSshFsBridge } from "./hosts/vscode/remote/sshfs-bridge"
+import { registerRemoteShell } from "./hosts/vscode/remote-shell"
 import {
 	disposeVscodeCommentReviewController,
 	getVscodeCommentReviewController,
@@ -208,6 +209,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand(commands.ClearWebviewCache, () => confirmWebviewCachePurge(context)),
 	)
+	registerRemoteShell(context, commands.OpenRemoteShell, commands.SignOutOfOpenWebUi)
 	context.subscriptions.push(vscode.commands.registerCommand(commands.AccountButton, () => sendAccountButtonClickedEvent()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.WorktreesButton, () => sendWorktreesButtonClickedEvent()))
 	// Cerebriline is not on the Marketplace -- upstream Cline is, and one of us

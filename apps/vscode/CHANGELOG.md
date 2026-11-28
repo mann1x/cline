@@ -43,6 +43,12 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   fetches pages from them. `remote_run` can type into a running command to
   answer its prompt, and stopping a command now also works after a VS Code
   reload.
+- **Remote terminals: your own shell there.** "Cerebriline: Open a Shell on
+  a Remote Terminal" opens a terminal tab you type into, on a remote
+  terminal, in the account the model uses and, if you pick one, in a
+  conversation's folder. It signs in to Open WebUI once in your browser and
+  keeps the connection alive by itself. The read-only tab that shows the
+  model's commands stays as it is.
 
 ### Fixes
 

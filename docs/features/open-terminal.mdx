@@ -147,6 +147,14 @@ The first time the model uses a machine, a read-only tab for it opens in VS Code
 
 The tab shows what Cerebriline does on the machine, not everything that happens there.
 
+### Typing there yourself
+
+Run **Cerebriline: Open a Shell on a Remote Terminal** from the Command Palette. Pick the machine, then where to start: your account's home folder, or one conversation's folder (listed by the conversation's first line, newest first). You get an ordinary terminal tab, **bench-app (shell)**, in the same account the model uses, so you see its files and can run, fix or inspect anything it left there. In a conversation's folder, `HOME` points there too, as for the model's commands.
+
+The first time, your browser opens Open WebUI and asks you to approve the sign-in for **Cerebriline (VS Code)**. Approve it, and go back to VS Code. You stay signed in while you use it: Open WebUI's terminal connection accepts only a signed-in session, not the API key, so Cerebriline keeps that sign-in (in VS Code's secret storage, not in settings) and renews it in the background. **Cerebriline: Sign Out of Open WebUI (Remote Shells)** forgets it; you can also end it in Open WebUI.
+
+Closing the tab ends the shell on the machine. A dropped connection reconnects by itself and continues where the output stopped.
+
 ### Copying files
 
 `remote_copy` moves a file or a whole folder between your local workspace and a machine, any file type, without the contents passing through the conversation:
@@ -235,4 +243,6 @@ A `cd` does not carry over between commands; the model passes a working director
 | `404 Machine '<id>' not found` | The Machine ID in Cerebriline does not match the connection ID in Open WebUI, or the connection is disabled, or your Open WebUI user has no access to it. |
 | `502` or a timeout | Open WebUI cannot reach the terminal: check the URL in the connection and that the container is running (`docker ps`). |
 | `400` mentioning `X-User-Id` | The terminal runs in multi-user mode and the request did not come through Open WebUI. Connect through Open WebUI. |
+| The shell's browser sign-in does not open or does not return | The approval page is on the Open WebUI address from the Remote terminals tab, and it sends the answer back to `127.0.0.1` on the computer running VS Code: open the shell from a VS Code running on the same computer as the browser. |
+| `shell ended: Session not found` | The shell exited (you typed `exit`), or Open Terminal restarted. Open a new one. |
 | A command stops after 5 minutes | Open WebUI ends a single request after 300 seconds. Cerebriline runs long commands in the background and polls them; if you see this, report it. |

@@ -37,6 +37,7 @@ export default defineConfig({
 			"src/shared/provider-switch-carry.test.ts",
 			"src/shared/remote-terminals.test.ts",
 			"src/shared/remote-terminal-render.test.ts",
+			"src/shared/remote-shell.test.ts",
 			"src/shared/vision-config.test.ts",
 			"src/shared/agent-nodes.test.ts",
 			"src/shared/run-duration.test.ts",
