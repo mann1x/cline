@@ -176,6 +176,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.remoteTerminalsEnabled !== undefined) {
 			controller.stateManager.setGlobalState("remoteTerminalsEnabled", request.remoteTerminalsEnabled)
 		}
+		if (request.startSkills !== undefined) {
+			controller.stateManager.setGlobalState("startSkills", request.startSkills)
+		}
 		if (request.remoteTerminals !== undefined) {
 			controller.stateManager.setGlobalState("remoteTerminals", request.remoteTerminals)
 		}

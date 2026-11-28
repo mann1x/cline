@@ -50,6 +50,12 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   keeps the connection alive by itself. The read-only tab that shows the
   model's commands stays as it is.
 
+- **Skills: start every conversation with a skill.** The play button on a
+  skill in the Skills tab adds it to the first message of each new
+  conversation, as if you had typed `/skill-name`. An optional one-line
+  message under it starts the conversation by itself when you open a new
+  chat with **+**.
+
 ### Fixes
 
 - **Generation speed for Ollama cloud models.** The task header shows the

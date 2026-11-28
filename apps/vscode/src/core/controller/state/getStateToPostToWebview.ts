@@ -121,6 +121,7 @@ export async function getStateToPostToWebview(controller: {
 	const videoEndpoint = stateManager.getGlobalSettingsKey("videoEndpoint")
 	const remoteTerminalsEnabled = stateManager.getGlobalSettingsKey("remoteTerminalsEnabled")
 	const remoteTerminals = stateManager.getGlobalSettingsKey("remoteTerminals")
+	const startSkills = stateManager.getGlobalSettingsKey("startSkills")
 	const embeddingEnabled = stateManager.getGlobalSettingsKey("embeddingEnabled")
 	const retrievalEndpoints = stateManager.getGlobalSettingsKey("retrievalEndpoints")
 	const libraryEnabled = stateManager.getGlobalSettingsKey("libraryEnabled")
@@ -304,6 +305,7 @@ export async function getStateToPostToWebview(controller: {
 		videoApiKeySet: secretSet("videoApiKey"),
 		remoteTerminalsEnabled,
 		remoteTerminals,
+		startSkills,
 		openWebUiApiKeySet: secretSet("openWebUiApiKey"),
 		remoteTerminalsDiscovered: stateManager.getGlobalStateKey("remoteTerminalsDiscovered"),
 		embeddingEnabled,

@@ -376,6 +376,9 @@ const USER_SETTINGS_FIELDS = {
 	// description, enabled}]}` for the Remote terminals tab, round-tripped
 	// whole. The Open WebUI API key is a secret (`openWebUiApiKey`).
 	remoteTerminals: { default: "" as string },
+	// JSON `[{name, message?}]`: skills that start every new conversation
+	// (the ▶ on a skill in the Skills tab). See `src/shared/start-skills.ts`.
+	startSkills: { default: "" as string },
 	// JSON `{useProvider, embedding: {baseUrl, model}, reranking: {baseUrl,
 	// model, enabled}}` for the Embedding tab, round-tripped whole. The two keys
 	// are secrets.

@@ -348,6 +348,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		videoApiKeySet: false,
 		remoteTerminalsEnabled: false,
 		remoteTerminals: "",
+		startSkills: "",
 		openWebUiApiKeySet: false,
 		remoteTerminalsDiscovered: "",
 		jevEnabled: false,

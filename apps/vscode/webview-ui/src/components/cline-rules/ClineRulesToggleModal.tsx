@@ -11,11 +11,19 @@ import {
 	ToggleWindsurfRuleRequest,
 	ToggleWorkflowRequest,
 } from "@shared/proto/cline/file"
+import {
+	parseStartSkills,
+	type StartSkill,
+	serializeStartSkills,
+	setStartSkill,
+	setStartSkillMessage,
+} from "@shared/start-skills"
 import { VSCodeButton, VSCodeLink, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import React, { useEffect, useRef, useState } from "react"
 import { useClickAway, useWindowSize } from "react-use"
 import styled from "styled-components"
 import PopupModalContainer from "@/components/common/PopupModalContainer"
+import { updateSetting } from "@/components/settings/utils/settingsHandlers"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import useRemoteConfigSettings from "@/hooks/useRemoteConfigSettings"
@@ -48,7 +56,19 @@ const ClineRulesToggleModal: React.FC = () => {
 		setGlobalSkillsToggles,
 		setLocalSkillsToggles,
 		setRemoteRulesToggles,
+		startSkills: startSkillsSetting,
 	} = useExtensionState()
+	const startSkills = parseStartSkills(startSkillsSetting)
+	const saveStartSkills = (next: StartSkill[]) => updateSetting("startSkills", serializeStartSkills(next))
+	const startSkillFor = (name: string) => {
+		const entry = startSkills.find((skill) => skill.name === name)
+		return {
+			on: !!entry,
+			message: entry?.message ?? "",
+			onToggle: (on: boolean) => saveStartSkills(setStartSkill(startSkills, name, on)),
+			onMessage: (message: string) => saveStartSkills(setStartSkillMessage(startSkills, name, message)),
+		}
+	}
 	const [globalHooks, setGlobalHooks] = useState<Array<{ name: string; enabled: boolean; absolutePath: string }>>([])
 	const [workspaceHooks, setWorkspaceHooks] = useState<
 		Array<{ workspaceName: string; hooks: Array<{ name: string; enabled: boolean; absolutePath: string }> }>
@@ -837,6 +857,7 @@ const ClineRulesToggleModal: React.FC = () => {
 															key={skill.name}
 															rulePath={skill.name}
 															ruleType="skill"
+															startSkill={startSkillFor(skill.name)}
 															toggleRule={(_path, enabled) => skill.toggle(enabled)}
 														/>
 													)
@@ -867,6 +888,7 @@ const ClineRulesToggleModal: React.FC = () => {
 														readOnly={true}
 														rulePath={skill.path}
 														ruleType="skill"
+														startSkill={startSkillFor(skill.name)}
 														toggleRule={(_path, enabled) => toggleSkill(true, skill.path, enabled)}
 													/>
 												))}
@@ -895,6 +917,7 @@ const ClineRulesToggleModal: React.FC = () => {
 														key={skill.path}
 														rulePath={skill.path}
 														ruleType="skill"
+														startSkill={startSkillFor(skill.name)}
 														toggleRule={(_path, enabled) => toggleSkill(true, skill.path, enabled)}
 													/>
 												))}
@@ -917,6 +940,7 @@ const ClineRulesToggleModal: React.FC = () => {
 														key={skill.path}
 														rulePath={skill.path}
 														ruleType="skill"
+														startSkill={startSkillFor(skill.name)}
 														toggleRule={(path, enabled) => toggleSkill(false, path, enabled)}
 													/>
 												))}

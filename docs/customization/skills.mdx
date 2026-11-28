@@ -96,6 +96,12 @@ Every skill has a toggle to enable or disable it. This lets you control which sk
 
 For example, you might disable a CI/CD skill when working on local development, or enable a client-specific skill only when working on that client's project.
 
+### Starting Every Conversation with a Skill
+
+The play button on a skill's row makes it start every new conversation you begin from the chat: your first message is sent as if it began with `/skill-name`, so the model always gets the whole skill. If your message already names the skill, it is not added twice. Several skills can be switched on; they are added in the order you switched them on. Resumed conversations, sub-agents and the editor commands (Explain, Fix, ...) are not affected.
+
+When a skill is switched on, a one-line field appears under it. Leave it empty to wait for your first message. Type a message there and the conversation starts by itself whenever you open a new chat with the **+** button: `/skill-name` and that message are sent without you typing anything. Each automatic start is a full model turn, so leave the field empty if you usually begin with your own question. The field saves when you press Enter or click elsewhere.
+
 ## Writing Your SKILL.md
 
 ### Naming Conventions

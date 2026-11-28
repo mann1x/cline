@@ -380,6 +380,7 @@ message Settings {
   optional bool pipelines_enabled = 257;
   optional bool remote_terminals_enabled = 258;
   optional string remote_terminals = 259;
+  optional string start_skills = 260;
 }
 
 message State {
@@ -593,6 +594,8 @@ message UpdateSettingsRequest {
   optional bool remote_terminals_enabled = 123;
   optional string remote_terminals = 124;
   optional string open_web_ui_api_key = 125;
+  // Skills that start every new conversation, as one JSON list (src/shared/start-skills.ts).
+  optional string start_skills = 126;
   // The Embedding tab: the switch, the two endpoints as one JSON record, and
   // the two keys, write-only like the image key.
   optional bool embedding_enabled = 101;

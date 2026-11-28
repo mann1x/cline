@@ -1,7 +1,8 @@
 import { StringRequest } from "@shared/proto/cline/common"
 import { DeleteSkillRequest, RuleFileRequest } from "@shared/proto/index.cline"
 import { REMOTE_URI_SCHEME } from "@shared/remote-config/constants"
-import { EyeIcon, InfoIcon, PenIcon, Trash2Icon } from "lucide-react"
+import { EyeIcon, InfoIcon, PenIcon, PlayIcon, Trash2Icon } from "lucide-react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -39,6 +40,8 @@ const RuleRow: React.FC<{
 	/** A real file that can be opened and toggled but not edited or deleted, e.g. a built-in skill. */
 	readOnly?: boolean
 	onDeleteSkill?: () => void
+	/** Skills only: whether this skill starts every new conversation, and its optional automatic message. */
+	startSkill?: { on: boolean; message: string; onToggle: (on: boolean) => void; onMessage: (message: string) => void }
 }> = ({
 	rulePath,
 	enabled,
@@ -49,7 +52,14 @@ const RuleRow: React.FC<{
 	alwaysEnabled = false,
 	readOnly = false,
 	onDeleteSkill,
+	startSkill,
 }) => {
+	// Saved when the field loses focus or on Enter, not on every keystroke.
+	const [startDraft, setStartDraft] = useState(startSkill?.message ?? "")
+	useEffect(() => setStartDraft(startSkill?.message ?? ""), [startSkill?.message])
+	const saveStartDraft = () => {
+		if (startSkill && startDraft.trim() !== startSkill.message) startSkill.onMessage(startDraft)
+	}
 	const displayName = getDisplayNameFromPath(rulePath)
 	const skillDisplayName = getSkillDisplayNameFromSkillMdPath(rulePath)
 
@@ -175,6 +185,22 @@ const RuleRow: React.FC<{
 						onClick={() => toggleRule(rulePath, !enabled)}
 						title={isDisabled ? "This rule is required and cannot be disabled" : undefined}
 					/>
+					{startSkill && (
+						<Button
+							aria-label="Start new conversations with this skill"
+							aria-pressed={startSkill.on}
+							className={startSkill.on ? "text-(--vscode-textLink-foreground)" : "opacity-50"}
+							onClick={() => startSkill.onToggle(!startSkill.on)}
+							size="xs"
+							title={
+								startSkill.on
+									? "Starts every new conversation: added to your first message. Click to stop."
+									: "Start every new conversation with this skill"
+							}
+							variant="icon">
+							<PlayIcon />
+						</Button>
+					)}
 					<Button
 						aria-label={isRemote || readOnly ? `View ${ruleType} file` : `Edit ${ruleType} file`}
 						onClick={handleEditClick}
@@ -196,6 +222,20 @@ const RuleRow: React.FC<{
 					</Button>
 				</div>
 			</div>
+			{startSkill?.on && (
+				<input
+					aria-label="Message sent automatically when you open a new chat"
+					className="mt-1 w-full rounded border border-(--vscode-input-border) bg-(--vscode-input-background) px-2 py-0.5 text-xs text-(--vscode-input-foreground) placeholder:text-(--vscode-input-placeholderForeground)"
+					onBlur={saveStartDraft}
+					onChange={(event) => setStartDraft(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Enter") event.currentTarget.blur()
+					}}
+					placeholder="Optional: send this automatically when you open a new chat (+)"
+					type="text"
+					value={startDraft}
+				/>
+			)}
 		</div>
 	)
 }

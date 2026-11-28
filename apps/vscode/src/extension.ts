@@ -71,6 +71,7 @@ import { telemetryService } from "./services/telemetry"
 import type { RolloutBundleActivation } from "./services/telemetry/rollout-metadata"
 import { LG_TASK_URI_PATH, SharedUriHandler, TASK_URI_PATH } from "./services/uri/SharedUriHandler"
 import { ShowMessageType } from "./shared/proto/host/window"
+import { autoStartMessage, parseStartSkills } from "./shared/start-skills"
 import { fileExistsAtPath } from "./utils/fs"
 
 export async function reportRolloutActivation(input: RolloutBundleActivation): Promise<void> {
@@ -196,6 +197,13 @@ export async function activate(context: vscode.ExtensionContext) {
 			await sidebarInstance.controller.clearTask()
 			await sidebarInstance.controller.postStateToWebview()
 			await sendChatButtonClickedEvent()
+			// A start skill with a message opens the conversation by itself.
+			const autoStart = autoStartMessage(
+				parseStartSkills(sidebarInstance.controller.stateManager.getGlobalSettingsKey("startSkills")),
+			)
+			if (autoStart) {
+				await sidebarInstance.controller.initTask(autoStart)
+			}
 		}),
 	)
 	context.subscriptions.push(vscode.commands.registerCommand(commands.McpButton, () => sendMcpButtonClickedEvent()))

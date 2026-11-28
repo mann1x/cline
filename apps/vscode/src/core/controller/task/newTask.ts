@@ -3,6 +3,7 @@ import { PlanActMode } from "@shared/proto/cline/state"
 import { NewTaskRequest } from "@shared/proto/cline/task"
 import { Settings } from "@shared/storage/state-keys"
 import { convertProtoToApiProvider } from "@/shared/proto-conversions/models/api-configuration-conversion"
+import { parseStartSkills, withStartSkills } from "@/shared/start-skills"
 import { DEFAULT_BROWSER_SETTINGS } from "../../../shared/BrowserSettings"
 import { Controller } from ".."
 import { normalizeOpenaiReasoningEffort } from "../state/reasoningEffort"
@@ -69,6 +70,10 @@ export async function newTask(controller: Controller, request: NewTaskRequest): 
 		}).filter(([_, value]) => value !== undefined),
 	)
 
-	const taskId = await controller.initTask(request.text, request.images, request.files, undefined, filteredTaskSettings)
+	// Skills switched on to start every new conversation go in front of the
+	// first message, as if typed (Skills tab, the play button on a skill).
+	const startSkills = parseStartSkills(controller.stateManager.getGlobalSettingsKey("startSkills"))
+	const text = startSkills.length > 0 ? withStartSkills(request.text ?? "", startSkills) : request.text
+	const taskId = await controller.initTask(text, request.images, request.files, undefined, filteredTaskSettings)
 	return String.create({ value: taskId || "" })
 }

@@ -143,6 +143,7 @@ export interface ExtensionState {
 	remoteTerminalsEnabled: boolean
 	/** JSON for the Remote terminals tab: Open WebUI's URL, retention, the terminals. */
 	remoteTerminals: string
+	startSkills: string
 	/** Whether an Open WebUI API key is stored. Never the key. */
 	openWebUiApiKeySet: boolean
 	/** JSON: the machines Open WebUI last reported for this user, and any error. */
