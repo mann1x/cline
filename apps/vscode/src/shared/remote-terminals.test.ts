@@ -6,6 +6,8 @@ import {
 	expiredRemoteWorkspaces,
 	isUsableRemoteTerminal,
 	markRemoteWorkspacesDeleted,
+	mergeRemoteTerminals,
+	parseDiscoveredRemoteTerminals,
 	parseRemoteTerminals,
 	parseRemoteWorkspaces,
 	serializeRemoteTerminals,
@@ -81,5 +83,54 @@ describe("the workspace registry", () => {
 		]
 		expect(expiredRemoteWorkspaces(entries, 7, 7 * DAY).map((entry) => entry.workspaceId)).toEqual(["1790_a"])
 		expect(expiredRemoteWorkspaces(entries, 7, 13 * DAY).map((entry) => entry.workspaceId)).toEqual(["1790_a", "1790_b"])
+	})
+})
+
+describe("mergeRemoteTerminals", () => {
+	const discovered = [
+		{ name: "solidpc", machineId: "solidpc-open-terminal" },
+		{ name: "bench-app", machineId: "solidpc-bench-app" },
+	]
+
+	it("offers every machine Open WebUI lists, with no row needed", () => {
+		expect(mergeRemoteTerminals([], discovered)).toEqual([
+			{
+				name: "solidpc",
+				machineId: "solidpc-open-terminal",
+				enabled: true,
+				source: "openwebui",
+				discoveredName: "solidpc",
+			},
+			{
+				name: "bench-app",
+				machineId: "solidpc-bench-app",
+				enabled: true,
+				source: "openwebui",
+				discoveredName: "bench-app",
+			},
+		])
+	})
+
+	it("lets a row rename, describe or switch off a listed machine, and keeps rows for unlisted ones", () => {
+		const merged = mergeRemoteTerminals(
+			[
+				{ name: "open-terminal", machineId: "solidpc-open-terminal", description: "general box" },
+				{ name: "", machineId: "solidpc-bench-app", enabled: false },
+				{ name: "gpu", machineId: "elsewhere-gpu" },
+			],
+			discovered,
+		)
+		expect(merged.map((entry) => [entry.name, entry.enabled, entry.source, entry.storedIndex])).toEqual([
+			["open-terminal", true, "openwebui", 0],
+			["bench-app", false, "openwebui", 1],
+			["gpu", true, "manual", 2],
+		])
+		expect(merged[0].description).toBe("general box")
+	})
+
+	it("reads the discovery cache, keeping an error beside the old machines", () => {
+		const parsed = parseDiscoveredRemoteTerminals(JSON.stringify({ at: 5, machines: [{ machineId: "m" }], error: "401" }))
+		expect(parsed).toEqual({ at: 5, machines: [{ name: "m", machineId: "m" }], error: "401" })
+		expect(parseDiscoveredRemoteTerminals("junk")).toEqual({ at: 0, machines: [] })
 	})
 })

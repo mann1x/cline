@@ -1649,6 +1649,8 @@ export {
 export {
 	type CreateRemoteTerminalToolsOptions,
 	createRemoteTerminalTools,
+	listRemoteMachines,
+	matchRemoteTerminal,
 	REMOTE_TERMINAL_TOOL_NAMES,
 	REMOTE_WORKSPACE_ROOT,
 	type RemoteTerminal,

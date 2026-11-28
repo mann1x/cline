@@ -145,6 +145,8 @@ export interface ExtensionState {
 	remoteTerminals: string
 	/** Whether an Open WebUI API key is stored. Never the key. */
 	openWebUiApiKeySet: boolean
+	/** JSON: the machines Open WebUI last reported for this user, and any error. */
+	remoteTerminalsDiscovered: string
 	/** Whether `jev` is offered and the harness's Jev hooks run. */
 	jevEnabled: boolean
 	/** JSON `JevSettings` (model, floors, timeout, hook switches). */

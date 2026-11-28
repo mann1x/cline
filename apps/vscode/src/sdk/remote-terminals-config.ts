@@ -1,10 +1,17 @@
-import { type RemoteTerminalsConfig, type RemoteWorkspaceRecord, removeRemoteWorkspace } from "@cline/core"
+import {
+	listRemoteMachines,
+	type RemoteTerminal,
+	type RemoteTerminalsConfig,
+	type RemoteWorkspaceRecord,
+	removeRemoteWorkspace,
+} from "@cline/core"
 import { StateManager } from "@/core/storage/StateManager"
 import {
 	addRemoteWorkspace,
 	expiredRemoteWorkspaces,
-	isUsableRemoteTerminal,
 	markRemoteWorkspacesDeleted,
+	mergeRemoteTerminals,
+	parseDiscoveredRemoteTerminals,
 	parseRemoteTerminals,
 	parseRemoteWorkspaces,
 } from "@/shared/remote-terminals"
@@ -21,15 +28,65 @@ export function readRemoteTerminalsConfig(): RemoteTerminalsConfig | undefined {
 		return undefined
 	}
 	const stored = parseRemoteTerminals(state.getGlobalSettingsKey("remoteTerminals"))
+	const discovered = parseDiscoveredRemoteTerminals(state.getGlobalStateKey("remoteTerminalsDiscovered"))
 	return {
 		openWebUiUrl: stored.openWebUiUrl,
 		apiKey: state.getSecretKey("openWebUiApiKey")?.trim() || undefined,
-		terminals: stored.terminals.filter(isUsableRemoteTerminal).map((terminal) => ({
-			name: terminal.name,
-			machineId: terminal.machineId,
-			...(terminal.description ? { description: terminal.description } : {}),
-		})),
+		terminals: mergeRemoteTerminals(stored.terminals, discovered.machines)
+			.filter((terminal) => terminal.enabled && terminal.name && terminal.machineId)
+			.map((terminal) => ({
+				name: terminal.name,
+				machineId: terminal.machineId,
+				...(terminal.description ? { description: terminal.description } : {}),
+			})),
 	}
+}
+
+const DISCOVERY_MIN_INTERVAL_MS = 60 * 1000
+let discovering: Promise<void> | undefined
+
+/**
+ * Asks Open WebUI which machines this user can reach and keeps the answer
+ * (`remoteTerminalsDiscovered`). At most once a minute unless `force`. A
+ * failure is kept as the error, beside the machines from before.
+ */
+export async function refreshRemoteTerminalDiscovery(options: { force?: boolean; timeoutMs?: number } = {}): Promise<void> {
+	const state = StateManager.get()
+	const stored = parseRemoteTerminals(state.getGlobalSettingsKey("remoteTerminals"))
+	const apiKey = state.getSecretKey("openWebUiApiKey")?.trim()
+	const previous = parseDiscoveredRemoteTerminals(state.getGlobalStateKey("remoteTerminalsDiscovered"))
+	if (!stored.openWebUiUrl || !apiKey) {
+		if (previous.at || previous.machines.length) state.setGlobalState("remoteTerminalsDiscovered", "")
+		return
+	}
+	if (!options.force && Date.now() - previous.at < DISCOVERY_MIN_INTERVAL_MS) return
+	if (discovering) return discovering
+	discovering = (async () => {
+		try {
+			const machines = await listRemoteMachines(
+				{ openWebUiUrl: stored.openWebUiUrl, apiKey },
+				fetch,
+				AbortSignal.timeout(options.timeoutMs ?? 10_000),
+			)
+			state.setGlobalState("remoteTerminalsDiscovered", JSON.stringify({ at: Date.now(), machines }))
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			state.setGlobalState(
+				"remoteTerminalsDiscovered",
+				JSON.stringify({ at: Date.now(), machines: previous.machines, error: message }),
+			)
+			Logger.warn(`[RemoteTerminals] could not list the machines in Open WebUI: ${message}`)
+		} finally {
+			discovering = undefined
+		}
+	})()
+	return discovering
+}
+
+/** For a name the session does not know: ask Open WebUI again, return the usable terminals. */
+export async function rediscoverRemoteTerminals(): Promise<RemoteTerminal[]> {
+	await refreshRemoteTerminalDiscovery({ force: true, timeoutMs: 5000 })
+	return readRemoteTerminalsConfig()?.terminals ?? []
 }
 
 function readRegistry() {

@@ -100,10 +100,16 @@ export function createPlanModeCommandGuardExtension(
 		// Remote terminals: a file write on the remote machine waits for Act
 		// mode like a local one, and a remote command is held to the same
 		// file-editing blacklist as `run_commands`.
-		if (context.tool.name === REMOTE_TERMINAL_TOOL_NAMES.WRITE) {
+		if (
+			context.tool.name === REMOTE_TERMINAL_TOOL_NAMES.WRITE ||
+			context.tool.name === REMOTE_TERMINAL_TOOL_NAMES.COPY
+		) {
+			// `remote_copy` writes on one side or the other, so it waits for
+			// Act mode in both directions.
+			const remoteName = context.tool.name;
 			capturePlanModeCommandBlocked(options.telemetry, {
-				tool_name: REMOTE_TERMINAL_TOOL_NAMES.WRITE,
-				blocked_construct: "remote_write",
+				tool_name: remoteName,
+				blocked_construct: remoteName,
 				command_count: 1,
 				agent_id: context.snapshot.agentId,
 				conversation_id: context.snapshot.conversationId,
@@ -113,7 +119,7 @@ export function createPlanModeCommandGuardExtension(
 			});
 			return {
 				skip: true,
-				reason: formatPlanModeBlockedCommandError("`remote_write`"),
+				reason: formatPlanModeBlockedCommandError(`\`${remoteName}\``),
 			};
 		}
 		if (context.tool.name === REMOTE_TERMINAL_TOOL_NAMES.RUN) {

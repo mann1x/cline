@@ -349,6 +349,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		remoteTerminalsEnabled: false,
 		remoteTerminals: "",
 		openWebUiApiKeySet: false,
+		remoteTerminalsDiscovered: "",
 		jevEnabled: false,
 		jevSettings: "",
 		jevApiKeySet: false,

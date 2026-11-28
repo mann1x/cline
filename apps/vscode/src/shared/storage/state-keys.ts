@@ -78,6 +78,9 @@ const GLOBAL_STATE_FIELDS = {
 	// JSON list of the remote workspaces sessions have used, for the retention
 	// sweep: `[{terminal, machineId, workspaceId, path, firstUsed, deletedAt?}]`.
 	remoteWorkspaces: { default: "" as string },
+	// JSON `{at, machines: [{name, machineId}], error?}`: what Open WebUI last
+	// said about the machines this user can reach (`GET /api/v1/machines/`).
+	remoteTerminalsDiscovered: { default: "" as string },
 	clineVersion: { default: undefined as string | undefined },
 	"cline.generatedMachineId": { default: undefined as string | undefined }, // Note, distinctId reads/writes this directly from/to StorageContext before StateManager is initialized.
 	lastShownAnnouncementId: { default: undefined as string | undefined },

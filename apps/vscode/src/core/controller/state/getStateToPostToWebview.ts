@@ -305,6 +305,7 @@ export async function getStateToPostToWebview(controller: {
 		remoteTerminalsEnabled,
 		remoteTerminals,
 		openWebUiApiKeySet: secretSet("openWebUiApiKey"),
+		remoteTerminalsDiscovered: stateManager.getGlobalStateKey("remoteTerminalsDiscovered"),
 		embeddingEnabled,
 		retrievalEndpoints,
 		embeddingApiKeySet: secretSet("embeddingApiKey"),

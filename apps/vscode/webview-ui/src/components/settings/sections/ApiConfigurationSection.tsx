@@ -3,7 +3,7 @@ import { audioEndpointsConfigured, parseAudioEndpoints } from "@shared/audio-end
 import { parseJevSettings } from "@shared/jev-settings"
 import { resolveScopedModelStatus } from "@shared/model-scope-config"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
-import { isUsableRemoteTerminal, parseRemoteTerminals } from "@shared/remote-terminals"
+import { mergeRemoteTerminals, parseDiscoveredRemoteTerminals, parseRemoteTerminals } from "@shared/remote-terminals"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints } from "@shared/retrieval-endpoints"
 import { parseVideoEndpoint, videoEndpointConfigured } from "@shared/video-endpoint"
 import { useState } from "react"
@@ -82,6 +82,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		remoteTerminalsEnabled,
 		remoteTerminals,
 		openWebUiApiKeySet,
+		remoteTerminalsDiscovered,
 		embeddingEnabled,
 		retrievalEndpoints,
 		jevEnabled,
@@ -121,7 +122,12 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	const remoteStored = parseRemoteTerminals(remoteTerminals)
 	const remoteUnconfigured =
 		remoteTerminalsEnabled &&
-		(!remoteStored.openWebUiUrl || !openWebUiApiKeySet || !remoteStored.terminals.some(isUsableRemoteTerminal))
+		(!remoteStored.openWebUiUrl ||
+			!openWebUiApiKeySet ||
+			!mergeRemoteTerminals(
+				remoteStored.terminals,
+				parseDiscoveredRemoteTerminals(remoteTerminalsDiscovered).machines,
+			).some((terminal) => terminal.enabled && terminal.name && terminal.machineId))
 	// And of the embedding model: nothing is embedded, and every search stays
 	// on keywords, while the tab names no model or nowhere to ask for it.
 	const embeddingUnconfigured = embeddingEnabled && !embeddingEndpointConfigured(parseRetrievalEndpoints(retrievalEndpoints))
@@ -680,7 +686,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 							{remoteUnconfigured ? (
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
 									The Remote terminals tab needs the Open WebUI URL, an Open WebUI API key and at least one
-									terminal before the tools are offered.
+									machine (listed by Open WebUI or added there) before the tools are offered.
 								</p>
 							) : null}
 						</div>

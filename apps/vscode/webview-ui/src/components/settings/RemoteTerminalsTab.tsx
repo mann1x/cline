@@ -1,6 +1,9 @@
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import {
 	duplicateRemoteTerminalNames,
+	type EffectiveRemoteTerminal,
+	mergeRemoteTerminals,
+	parseDiscoveredRemoteTerminals,
 	parseRemoteTerminals,
 	type StoredRemoteTerminal,
 	type StoredRemoteTerminals,
@@ -21,7 +24,7 @@ import { SettingsCheckbox } from "./common/SettingsCheckbox"
  * WebUI. Each terminal here is one name the model can use.
  */
 const RemoteTerminalsTab = () => {
-	const { remoteTerminals, openWebUiApiKeySet } = useExtensionState()
+	const { remoteTerminals, openWebUiApiKeySet, remoteTerminalsDiscovered } = useExtensionState()
 	const stored = useMemo(() => parseRemoteTerminals(remoteTerminals), [remoteTerminals])
 	// Every field saves the whole record, and the fields debounce on their own
 	// clocks: two edited in quick succession must not each start from the
@@ -43,10 +46,6 @@ const RemoteTerminalsTab = () => {
 	}, [])
 
 	const patch = (change: Partial<StoredRemoteTerminals>) => void save({ ...latest.current, ...change })
-	const patchTerminal = (index: number, change: Partial<StoredRemoteTerminal>) => {
-		const terminals = latest.current.terminals.map((terminal, at) => (at === index ? { ...terminal, ...change } : terminal))
-		void save({ ...latest.current, terminals })
-	}
 
 	const saveApiKey = useCallback(async (value: string) => {
 		try {
@@ -56,7 +55,26 @@ const RemoteTerminalsTab = () => {
 		}
 	}, [])
 
-	const duplicates = duplicateRemoteTerminalNames(stored.terminals)
+	const discovered = useMemo(() => parseDiscoveredRemoteTerminals(remoteTerminalsDiscovered), [remoteTerminalsDiscovered])
+	const terminals = mergeRemoteTerminals(stored.terminals, discovered.machines)
+	const canAsk = Boolean(stored.openWebUiUrl && openWebUiApiKeySet)
+	const duplicates = duplicateRemoteTerminalNames(terminals.filter((terminal) => terminal.enabled))
+
+	/**
+	 * A change to one terminal: its row on the tab if it has one, else a new
+	 * row for that machine (an Open WebUI machine is only stored once it is
+	 * renamed, described or switched off).
+	 */
+	const change = (terminal: EffectiveRemoteTerminal, patchRow: Partial<StoredRemoteTerminal>) => {
+		const rows = latest.current.terminals
+		const index =
+			terminal.source === "openwebui" ? rows.findIndex((row) => row.machineId === terminal.machineId) : terminal.storedIndex
+		const terminalsNext =
+			index !== undefined && index >= 0
+				? rows.map((row, at) => (at === index ? { ...row, ...patchRow } : row))
+				: [...rows, { name: "", machineId: terminal.machineId, ...patchRow }]
+		void save({ ...latest.current, terminals: terminalsNext })
+	}
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -94,59 +112,94 @@ const RemoteTerminalsTab = () => {
 			</p>
 
 			<div className="flex flex-col gap-2">
-				<span className="font-medium text-sm">Terminals</span>
-				{stored.terminals.length === 0 ? (
+				<div className="flex items-center justify-between gap-2">
+					<span className="font-medium text-sm">Terminals</span>
+					<VSCodeButton appearance="secondary" disabled={!canAsk} onClick={() => void save({ ...latest.current })}>
+						Refresh from Open WebUI
+					</VSCodeButton>
+				</div>
+				<p className="text-xs m-0 text-(--vscode-descriptionForeground)">
+					The machines Open WebUI lets you use appear here by themselves, under their Open WebUI names. Rename, describe
+					or switch one off here; add a terminal only for a machine Open WebUI does not list.
+				</p>
+				{discovered.error ? (
+					<p className="text-xs m-0 text-(--vscode-errorForeground)">
+						Could not ask Open WebUI for its machines: {discovered.error}
+					</p>
+				) : canAsk && discovered.at ? (
 					<p className="text-xs m-0 text-(--vscode-descriptionForeground)">
-						No terminal yet. Add one for each machine.
+						Open WebUI lists {discovered.machines.length} machine{discovered.machines.length === 1 ? "" : "s"} for
+						you.
 					</p>
 				) : null}
-				{stored.terminals.map((terminal, index) => (
-					<div
-						className="flex flex-col gap-1 p-2 rounded border border-solid border-(--vscode-panel-border)"
-						// biome-ignore lint/suspicious/noArrayIndexKey: rows have no identity but their place; a name being typed cannot be the key.
-						key={index}>
-						<div className="flex items-center gap-2 flex-wrap">
+				{terminals.length === 0 ? (
+					<p className="text-xs m-0 text-(--vscode-descriptionForeground)">
+						{canAsk ? "No machine yet." : "Enter the Open WebUI URL and API key above to see your machines."}
+					</p>
+				) : null}
+				{terminals.map((terminal) => {
+					const fromOpenWebUi = terminal.source === "openwebui"
+					return (
+						<div
+							className="flex flex-col gap-1 p-2 rounded border border-solid border-(--vscode-panel-border)"
+							key={fromOpenWebUi ? `owui:${terminal.machineId}` : `row:${terminal.storedIndex}`}>
+							<div className="flex items-center gap-2 flex-wrap">
+								<DebouncedTextField
+									className="flex-1 min-w-[120px]"
+									initialValue={terminal.name}
+									onChange={(value) =>
+										change(terminal, {
+											name: fromOpenWebUi && value.trim() === terminal.discoveredName ? "" : value.trim(),
+										})
+									}
+									placeholder={terminal.discoveredName ?? "bench-app"}>
+									<span className="text-xs">Name</span>
+								</DebouncedTextField>
+								{fromOpenWebUi ? (
+									<span className="text-xs text-(--vscode-descriptionForeground) self-end pb-1">
+										machine <code>{terminal.machineId}</code> · from Open WebUI
+									</span>
+								) : (
+									<DebouncedTextField
+										className="flex-1 min-w-[120px]"
+										initialValue={terminal.machineId}
+										onChange={(value) => change(terminal, { machineId: value.trim() })}
+										placeholder="solidpc-bench-app">
+										<span className="text-xs">Machine ID in Open WebUI</span>
+									</DebouncedTextField>
+								)}
+							</div>
 							<DebouncedTextField
-								className="flex-1 min-w-[120px]"
-								initialValue={terminal.name}
-								onChange={(value) => patchTerminal(index, { name: value.trim() })}
-								placeholder="bench-app">
-								<span className="text-xs">Name</span>
+								className="w-full"
+								initialValue={terminal.description ?? ""}
+								onChange={(value) => change(terminal, { description: value.trim() || undefined })}
+								placeholder="Builds and benchmarks the app">
+								<span className="text-xs">What it is for (shown to the model)</span>
 							</DebouncedTextField>
-							<DebouncedTextField
-								className="flex-1 min-w-[120px]"
-								initialValue={terminal.machineId}
-								onChange={(value) => patchTerminal(index, { machineId: value.trim() })}
-								placeholder="solidpc-bench-app">
-								<span className="text-xs">Machine ID in Open WebUI</span>
-							</DebouncedTextField>
+							<div className="flex items-center justify-between gap-2">
+								<SettingsCheckbox
+									checked={terminal.enabled}
+									onChange={(checked) => change(terminal, { enabled: checked ? undefined : false })}>
+									Offer to the model
+								</SettingsCheckbox>
+								{fromOpenWebUi ? null : (
+									<VSCodeButton
+										appearance="secondary"
+										onClick={() =>
+											void save({
+												...latest.current,
+												terminals: latest.current.terminals.filter(
+													(_, at) => at !== terminal.storedIndex,
+												),
+											})
+										}>
+										Remove
+									</VSCodeButton>
+								)}
+							</div>
 						</div>
-						<DebouncedTextField
-							className="w-full"
-							initialValue={terminal.description ?? ""}
-							onChange={(value) => patchTerminal(index, { description: value.trim() || undefined })}
-							placeholder="Builds and benchmarks the app">
-							<span className="text-xs">What it is for (shown to the model)</span>
-						</DebouncedTextField>
-						<div className="flex items-center justify-between gap-2">
-							<SettingsCheckbox
-								checked={terminal.enabled !== false}
-								onChange={(checked) => patchTerminal(index, { enabled: checked ? undefined : false })}>
-								Offer to the model
-							</SettingsCheckbox>
-							<VSCodeButton
-								appearance="secondary"
-								onClick={() =>
-									void save({
-										...latest.current,
-										terminals: latest.current.terminals.filter((_, at) => at !== index),
-									})
-								}>
-								Remove
-							</VSCodeButton>
-						</div>
-					</div>
-				))}
+					)
+				})}
 				{duplicates.length > 0 ? (
 					<p className="text-xs m-0 text-(--vscode-errorForeground)">
 						Two terminals are called “{duplicates.join("”, “")}”. The model asks for a terminal by name, so only the

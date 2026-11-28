@@ -31,7 +31,13 @@ import { readLibraryImageDescriber, readLibraryToolsConfig, readMemoryToolsConfi
 import { probeMediaServer, readLeadMediaProvider } from "./media-endpoint-config"
 import { readMediaToolsConfig } from "./media-tools-config"
 import { readQaCredentials } from "./qa-credentials-store"
-import { readRemoteTerminalsConfig, recordRemoteWorkspace, sweepRemoteWorkspaces } from "./remote-terminals-config"
+import {
+	readRemoteTerminalsConfig,
+	recordRemoteWorkspace,
+	rediscoverRemoteTerminals,
+	refreshRemoteTerminalDiscovery,
+	sweepRemoteWorkspaces,
+} from "./remote-terminals-config"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
@@ -261,9 +267,18 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 	// counterparts (`sdk-tool-policies.ts`). Each session works in a folder of
 	// its own on each machine; a deleted conversation's folders are removed by
 	// the sweep after the tab's retention period.
+	// The machines come from Open WebUI's own list (with the tab's rows over
+	// it): refreshed here, briefly, so a machine added there is in this
+	// session's list; `discover` asks again for a name the list lacks.
+	if (readRemoteTerminalsConfig()) {
+		await refreshRemoteTerminalDiscovery({ timeoutMs: 3000 }).catch(() => undefined)
+	}
 	tools.push(
 		...createRemoteTerminalTools({
 			getConfig: readRemoteTerminalsConfig,
+			discover: rediscoverRemoteTerminals,
+			// `remote_copy` copies inside the session's workspace folder only.
+			getLocalRoot: () => options?.cwd ?? process.cwd(),
 			onWorkspace: recordRemoteWorkspace,
 			onError: (message, error) => Logger.error(`${message}:`, error),
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),

@@ -32,7 +32,7 @@ export function buildToolPolicies(
 	set(["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file", "sed"])
 	set(["run_commands", "execute_command"])
 	// Remote terminals: the same three questions, asked about another machine.
-	set(["remote_read", "remote_write", "remote_run"])
+	set(["remote_read", "remote_write", "remote_run", "remote_copy"])
 	set(["fetch_web_content", "web_fetch", "web_search"])
 	set(["browser", "browser_action", "render_image"])
 	// `pipeline` is deliberately unlisted. A run needs the person's approval of
@@ -134,7 +134,17 @@ export function isEditTool(toolName: string): boolean {
 	// toggle -- and by this predicate's denial text, which says the file was
 	// not modified. `awk` is not here: see `isReadTool`.
 	// `remote_write` writes on a remote terminal: the same box as a local edit.
-	return ["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file", "sed", "remote_write"].includes(toolName)
+	// `remote_copy` writes here (download) or there (upload): the same box.
+	return [
+		"editor",
+		"replace_in_file",
+		"write_to_file",
+		"apply_patch",
+		"delete_file",
+		"sed",
+		"remote_write",
+		"remote_copy",
+	].includes(toolName)
 }
 
 function isCommandTool(toolName: string): boolean {

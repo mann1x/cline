@@ -90,6 +90,7 @@
 		"officeparser": "8.0.0",
 		"pdfjs-dist": "6.2.108",
 		"simple-git": "4.0.2",
+		"tar": "^7.5.2",
 		"tesseract.js": "7.0.0",
 		"tree-sitter-wasms": "^0.1.12",
 		"turndown": "7.2.0",

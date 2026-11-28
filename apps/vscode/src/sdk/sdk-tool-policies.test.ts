@@ -130,7 +130,7 @@ describe("remote terminal tools", () => {
 
 	it("are always routed through the approval callback", () => {
 		const policies = buildToolPolicies(DEFAULT_AUTO_APPROVAL_SETTINGS)
-		for (const name of ["remote_run", "remote_read", "remote_write"]) {
+		for (const name of ["remote_run", "remote_read", "remote_write", "remote_copy"]) {
 			expect(policies[name]).toEqual({ autoApprove: false })
 		}
 	})
@@ -142,5 +142,7 @@ describe("remote terminal tools", () => {
 		expect(isToolAutoApproved("remote_read", withActions({ editFiles: true }))).toBe(false)
 		expect(isToolAutoApproved("remote_write", withActions({ editFiles: true }))).toBe(true)
 		expect(isToolAutoApproved("remote_write", withActions({ readFiles: true }))).toBe(false)
+		expect(isToolAutoApproved("remote_copy", withActions({ editFiles: true }))).toBe(true)
+		expect(isToolAutoApproved("remote_copy", withActions({ readFiles: true }))).toBe(false)
 	})
 })

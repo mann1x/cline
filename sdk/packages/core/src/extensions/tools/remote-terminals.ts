@@ -23,11 +23,21 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
+import { basename } from "node:path";
 import {
 	type AgentTool,
 	type AgentToolContext,
 	createTool,
 } from "@cline/shared";
+import {
+	DEFAULT_UPLOAD_EXCLUDES,
+	MAX_TRANSFER_BYTES,
+	packFolder,
+	resolveLocalPath,
+	unpackArchive,
+	writeLocalFile,
+} from "./remote-copy-local";
 
 export interface RemoteTerminal {
 	/** What the user and the model call it, e.g. `bench-app`. */
@@ -50,6 +60,7 @@ export const REMOTE_TERMINAL_TOOL_NAMES = {
 	RUN: "remote_run",
 	READ: "remote_read",
 	WRITE: "remote_write",
+	COPY: "remote_copy",
 } as const;
 
 /** The environment variable that marks every process a `remote_run` command starts. */
@@ -99,6 +110,16 @@ export interface CreateRemoteTerminalToolsOptions {
 	onWorkspace?: (record: RemoteWorkspaceRecord) => void;
 	onError?: (message: string, error: unknown) => void;
 	log?: (message: string) => void;
+	/**
+	 * The session's local workspace folder. With it, `remote_copy` is offered
+	 * too, and copies only inside this folder; without it, it is not.
+	 */
+	getLocalRoot?: () => string | undefined;
+	/**
+	 * Asks Open WebUI again for the machines this user can reach, for a name
+	 * the session's list does not know; returns the usable list.
+	 */
+	discover?: () => Promise<RemoteTerminal[]>;
 }
 
 /** Why a configuration offers no remote tools, or `undefined` when it does. */
@@ -120,6 +141,76 @@ function usableTerminals(config: RemoteTerminalsConfig): RemoteTerminal[] {
 		if (!name || !terminal.machineId.trim() || seen.has(key)) return false;
 		seen.add(key);
 		return true;
+	});
+}
+
+function squash(value: string): string {
+	return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * The terminal a name means: its name, then its machine ID (ignoring case),
+ * then the only one whose name or ID contains it ignoring case and
+ * punctuation, so "open-terminal" finds `solidpc-open-terminal`.
+ */
+export function matchRemoteTerminal(
+	terminals: readonly RemoteTerminal[],
+	name: unknown,
+): RemoteTerminal | undefined {
+	const wanted = typeof name === "string" ? name.trim().toLowerCase() : "";
+	if (!wanted) return undefined;
+	const exact =
+		terminals.find((entry) => entry.name.trim().toLowerCase() === wanted) ??
+		terminals.find((entry) => entry.machineId.trim().toLowerCase() === wanted);
+	if (exact) return exact;
+	const part = squash(wanted);
+	if (!part) return undefined;
+	const partial = terminals.filter(
+		(entry) =>
+			squash(entry.name).includes(part) ||
+			squash(entry.machineId).includes(part),
+	);
+	return partial.length === 1 ? partial[0] : undefined;
+}
+
+/**
+ * The machines this Open WebUI user may use (`GET /api/v1/machines/`), as
+ * terminals named by their Open WebUI name. Machine templates (a terminal
+ * orchestrator's) are left out: they need a template chosen per chat.
+ */
+export async function listRemoteMachines(
+	config: Pick<RemoteTerminalsConfig, "openWebUiUrl" | "apiKey">,
+	fetchImpl: typeof fetch = fetch,
+	signal?: AbortSignal,
+): Promise<RemoteTerminal[]> {
+	const root = (config.openWebUiUrl ?? "").trim().replace(/\/+$/, "");
+	if (!root || !config.apiKey?.trim()) return [];
+	const response = await fetchImpl(`${root}/api/v1/machines/`, {
+		headers: { Authorization: `Bearer ${config.apiKey.trim()}` },
+		signal,
+	});
+	if (!response.ok) {
+		throw new RemoteTerminalError(
+			response.status === 401
+				? "Open WebUI refused the API key (401): wrong or revoked key, or API keys are disabled (Admin Settings → General)."
+				: `Open WebUI answered HTTP ${response.status} listing machines.`,
+		);
+	}
+	const body = (await response.json()) as unknown;
+	if (!Array.isArray(body)) return [];
+	return body.flatMap((entry) => {
+		const item = entry as {
+			id?: unknown;
+			name?: unknown;
+			template_id?: unknown;
+		};
+		const machineId = typeof item.id === "string" ? item.id.trim() : "";
+		if (!machineId || item.template_id) return [];
+		const name =
+			typeof item.name === "string" && item.name.trim()
+				? item.name.trim()
+				: machineId;
+		return [{ name, machineId }];
 	});
 }
 
@@ -173,6 +264,50 @@ class OpenTerminalClient {
 		return `${root}/api/v1/machines/${encodeURIComponent(this.terminal.machineId.trim())}`;
 	}
 
+	/** One request through the proxy; a non-2xx answer becomes a readable error. */
+	private async send(
+		method: "GET" | "POST" | "DELETE",
+		path: string,
+		options: {
+			query?: Record<string, string | number | boolean | undefined>;
+			body?: RequestInit["body"];
+			contentType?: string;
+			signal?: AbortSignal;
+		},
+	): Promise<Response> {
+		const url = new URL(`${this.base}${path}`);
+		for (const [key, value] of Object.entries(options.query ?? {})) {
+			if (value !== undefined) url.searchParams.set(key, String(value));
+		}
+		const headers: Record<string, string> = {
+			Authorization: `Bearer ${(this.config.apiKey ?? "").trim()}`,
+		};
+		if (options.contentType) headers["Content-Type"] = options.contentType;
+		// No X-Session-Id: Open WebUI reads it as one of its own chat ids and
+		// refuses any other ("Chat access denied"). The workspace travels as
+		// `cwd` and `HOME` on every call instead.
+		let response: Response;
+		try {
+			response = await this.fetchImpl(url, {
+				method,
+				headers,
+				body: options.body,
+				signal: options.signal,
+			});
+		} catch (error) {
+			if (options.signal?.aborted) throw error;
+			throw new RemoteTerminalError(
+				`Open WebUI at ${this.config.openWebUiUrl} did not answer: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		if (!response.ok) {
+			throw new RemoteTerminalError(
+				this.describeFailure(response.status, await response.text()),
+			);
+		}
+		return response;
+	}
+
 	async request<T>(
 		method: "GET" | "POST" | "DELETE",
 		path: string,
@@ -182,39 +317,14 @@ class OpenTerminalClient {
 			signal?: AbortSignal;
 		} = {},
 	): Promise<T> {
-		const url = new URL(`${this.base}${path}`);
-		for (const [key, value] of Object.entries(options.query ?? {})) {
-			if (value !== undefined) url.searchParams.set(key, String(value));
-		}
-		const headers: Record<string, string> = {
-			Authorization: `Bearer ${(this.config.apiKey ?? "").trim()}`,
-		};
-		if (options.body !== undefined)
-			headers["Content-Type"] = "application/json";
-		// No X-Session-Id: Open WebUI reads it as one of its own chat ids and
-		// refuses any other ("Chat access denied"). The workspace travels as
-		// `cwd` and `HOME` on every call instead.
-		let response: Response;
-		try {
-			response = await this.fetchImpl(url, {
-				method,
-				headers,
-				body:
-					options.body === undefined ? undefined : JSON.stringify(options.body),
-				signal: options.signal,
-			});
-		} catch (error) {
-			if (options.signal?.aborted) throw error;
-			throw new RemoteTerminalError(
-				`Open WebUI at ${this.config.openWebUiUrl} did not answer: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
+		const response = await this.send(method, path, {
+			query: options.query,
+			body:
+				options.body === undefined ? undefined : JSON.stringify(options.body),
+			contentType: options.body === undefined ? undefined : "application/json",
+			signal: options.signal,
+		});
 		const text = await response.text();
-		if (!response.ok) {
-			throw new RemoteTerminalError(
-				this.describeFailure(response.status, text),
-			);
-		}
 		try {
 			return JSON.parse(text) as T;
 		} catch {
@@ -222,6 +332,32 @@ class OpenTerminalClient {
 				`"${this.terminal.name}" answered with something that is not JSON (HTTP ${response.status}).`,
 			);
 		}
+	}
+
+	/** Streams `data` into `directory` as `filename` (Open Terminal's multipart upload). */
+	async upload(
+		directory: string,
+		filename: string,
+		data: Uint8Array,
+		signal?: AbortSignal,
+	): Promise<{ path: string; size: number }> {
+		const form = new FormData();
+		form.append("file", new Blob([new Uint8Array(data)]), filename);
+		const response = await this.send("POST", "/files/upload", {
+			query: { directory },
+			body: form,
+			signal,
+		});
+		return (await response.json()) as { path: string; size: number };
+	}
+
+	/** A file's bytes, as stored (Open Terminal's raw view). */
+	async download(path: string, signal?: AbortSignal): Promise<Uint8Array> {
+		const response = await this.send("GET", "/files/view", {
+			query: { path },
+			signal,
+		});
+		return new Uint8Array(await response.arrayBuffer());
 	}
 
 	private describeFailure(status: number, body: string): string {
@@ -314,21 +450,23 @@ export function createRemoteTerminalTools(
 		runMarkers.delete(processId);
 	};
 
-	const resolve = (name: unknown) => {
+	const resolve = async (name: unknown) => {
 		const config = options.getConfig();
 		const why = remoteTerminalsUnavailable(config);
 		if (why || !config)
 			throw new RemoteTerminalError(
 				`Remote terminals are not available: ${why}.`,
 			);
-		const wanted = typeof name === "string" ? name.trim().toLowerCase() : "";
-		const terminal = usableTerminals(config).find(
-			(entry) => entry.name.trim().toLowerCase() === wanted,
-		);
+		let terminal = matchRemoteTerminal(usableTerminals(config), name);
+		let known = usableTerminals(config);
+		if (!terminal && options.discover) {
+			// A machine added in Open WebUI since the session started.
+			known = await options.discover().catch(() => known);
+			terminal = matchRemoteTerminal(known, name);
+		}
 		if (!terminal) {
-			const known = usableTerminals(config).map((entry) => entry.name.trim());
 			throw new RemoteTerminalError(
-				`There is no remote terminal called "${String(name ?? "")}". Configured: ${known.join(", ")}.`,
+				`There is no remote terminal called "${String(name ?? "")}". Available: ${known.map((entry) => `${entry.name.trim()} (${entry.machineId.trim()})`).join(", ")}.`,
 			);
 		}
 		return {
@@ -383,17 +521,16 @@ export function createRemoteTerminalTools(
 		return `${workspace}/${given.replace(/^\.\//, "")}`;
 	};
 
-	const terminalList = initial.terminals
-		.filter((terminal) => names.includes(terminal.name.trim()))
+	const terminalList = usableTerminals(initial)
 		.map(
 			(terminal) =>
-				`- ${terminal.name.trim()}${terminal.description?.trim() ? `: ${terminal.description.trim()}` : ""}`,
+				`- ${terminal.name.trim()}${terminal.machineId.trim() !== terminal.name.trim() ? ` (machine ${terminal.machineId.trim()})` : ""}${terminal.description?.trim() ? `: ${terminal.description.trim()}` : ""}`,
 		)
 		.join("\n");
 	const terminalProperty = {
 		type: "string",
-		enum: names,
-		description: "Which remote terminal, by name.",
+		description:
+			"Which remote terminal: its name from the list (its machine ID works too).",
 	};
 	const workspaceNote = `Each conversation has its own workspace folder on each terminal (~/${REMOTE_WORKSPACE_ROOT}/<session>); relative paths start there, and HOME points at it. The terminals are Linux containers, separate from the user's machine: nothing here touches local files.`;
 
@@ -446,7 +583,7 @@ export function createRemoteTerminalTools(
 			required: ["terminal"],
 		},
 		execute: async (input, context) => {
-			const { terminal, client } = resolve(input.terminal);
+			const { terminal, client } = await resolve(input.terminal);
 			const workspace = await workspaceFor(terminal, client, context);
 			const timeout = Math.min(
 				Math.max(Number(input.timeout_seconds) || DEFAULT_TIMEOUT_SECONDS, 1),
@@ -596,7 +733,7 @@ export function createRemoteTerminalTools(
 			required: ["terminal", "action"],
 		},
 		execute: async (input, context) => {
-			const { terminal, client } = resolve(input.terminal);
+			const { terminal, client } = await resolve(input.terminal);
 			const workspace = await workspaceFor(terminal, client, context);
 			const path = inside(workspace, input.path);
 			const common = { signal: context.signal };
@@ -735,7 +872,7 @@ export function createRemoteTerminalTools(
 			required: ["terminal", "action", "path"],
 		},
 		execute: async (input, context) => {
-			const { terminal, client } = resolve(input.terminal);
+			const { terminal, client } = await resolve(input.terminal);
 			const workspace = await workspaceFor(terminal, client, context);
 			const path = inside(workspace, input.path);
 			if (input.action === "write") {
@@ -777,7 +914,227 @@ export function createRemoteTerminalTools(
 		},
 	});
 
-	return [run, read, write] as AgentTool[];
+	/** A short command on the machine, waited for to the end (packing can take a while). */
+	const execToEnd = async (
+		client: OpenTerminalClient,
+		command: string,
+		signal?: AbortSignal,
+	): Promise<{ exitCode: number | null | undefined; output: string }> => {
+		let response = await client.request<ExecResponse>("POST", "/execute", {
+			query: { wait: POLL_WAIT_SECONDS },
+			body: { command },
+			signal,
+		});
+		let output = outputText(response);
+		while (response.status === "running") {
+			response = await client.request<ExecResponse>(
+				"GET",
+				`/execute/${encodeURIComponent(response.id)}/status`,
+				{
+					query: { wait: POLL_WAIT_SECONDS, offset: response.next_offset ?? 0 },
+					signal,
+				},
+			);
+			output += outputText(response);
+		}
+		return { exitCode: response.exit_code, output };
+	};
+
+	const megabytes = (bytes: number) =>
+		bytes < 1024 * 1024
+			? `${(bytes / 1024).toFixed(1)} KB`
+			: `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+	const copy = createTool<
+		{
+			terminal: string;
+			direction: "upload" | "download";
+			from: string;
+			to?: string;
+			exclude?: string[];
+			overwrite?: boolean;
+		},
+		string
+	>({
+		name: REMOTE_TERMINAL_TOOL_NAMES.COPY,
+		description: [
+			"Copy a file or a whole folder between the local workspace and a remote terminal, without the contents passing through the conversation. Any file type, binaries included.",
+			"Remote terminals:",
+			terminalList,
+			`upload: \`from\` is a local path (relative to the local workspace, and inside it), \`to\` a path on the terminal (relative to this conversation's workspace there; default: the same name in it). download: the other way round; default \`to\` is the same name in the local workspace.`,
+			`A folder is copied with its contents into \`to\`. On upload, ${DEFAULT_UPLOAD_EXCLUDES.join(" and ")} are left out unless \`exclude\` names its own list (pass [] to send everything). Existing local files are not replaced unless \`overwrite\` is true. At most ${MAX_TRANSFER_BYTES / 1024 / 1024 / 1024} GB per copy.`,
+		].join("\n"),
+		inputSchema: {
+			type: "object",
+			properties: {
+				terminal: terminalProperty,
+				direction: { type: "string", enum: ["upload", "download"] },
+				from: { type: "string", description: "The file or folder to copy." },
+				to: {
+					type: "string",
+					description:
+						"Where it goes. For a folder, the folder that receives its contents.",
+				},
+				exclude: {
+					type: "array",
+					items: { type: "string" },
+					description:
+						"Paths to leave out of a folder: a name or glob matches any path segment (`*.log`), one with / matches from the folder (`build/**`).",
+				},
+				overwrite: {
+					type: "boolean",
+					description: "Replace local files that already exist (download).",
+				},
+			},
+			required: ["terminal", "direction", "from"],
+		},
+		execute: async (input, context) => {
+			const { terminal, client } = await resolve(input.terminal);
+			const root = options.getLocalRoot?.();
+			if (!root)
+				throw new RemoteTerminalError(
+					"There is no local workspace to copy to or from.",
+				);
+			const workspace = await workspaceFor(terminal, client, context);
+			const signal = context.signal;
+			const started = Date.now();
+			const tag = randomUUID().replace(/-/g, "").slice(0, 12);
+			const took = () => `${((Date.now() - started) / 1000).toFixed(1)} s`;
+			if (typeof input.from !== "string" || !input.from.trim())
+				throw new RemoteTerminalError("Name what to copy in `from`.");
+
+			if (input.direction === "upload") {
+				const local = await resolveLocalPath(root, input.from.trim());
+				const info = await stat(local).catch(() => undefined);
+				if (!info)
+					throw new RemoteTerminalError(
+						`${input.from} does not exist in the local workspace.`,
+					);
+				const target = inside(workspace, input.to?.trim() || basename(local));
+				if (info.isFile()) {
+					if (info.size > MAX_TRANSFER_BYTES)
+						throw new RemoteTerminalError(
+							`${input.from} is larger than ${MAX_TRANSFER_BYTES / 1024 / 1024} MB.`,
+						);
+					const data = new Uint8Array(await readFile(local));
+					const slash = target.lastIndexOf("/");
+					const sent = await client.upload(
+						target.slice(0, slash) || "/",
+						target.slice(slash + 1),
+						data,
+						signal,
+					);
+					return `[${terminal.name}] uploaded ${input.from} to ${sent.path} (${megabytes(sent.size)}, ${took()})`;
+				}
+				if (!info.isDirectory())
+					throw new RemoteTerminalError(
+						`${input.from} is neither a file nor a folder.`,
+					);
+				const packed = await packFolder(
+					local,
+					input.exclude ?? DEFAULT_UPLOAD_EXCLUDES,
+				);
+				const archiveName = `.cerebriline-upload-${tag}.tar.gz`;
+				await client.upload(
+					workspace,
+					archiveName,
+					new Uint8Array(packed.archive),
+					signal,
+				);
+				const archivePath = `${workspace}/${archiveName}`;
+				const unpacked = await execToEnd(
+					client,
+					`mkdir -p ${quoteShell(target)} && tar -xzf ${quoteShell(archivePath)} -C ${quoteShell(target)} --no-same-owner; status=$?; rm -f ${quoteShell(archivePath)}; exit $status`,
+					signal,
+				);
+				if (unpacked.exitCode !== 0) {
+					throw new RemoteTerminalError(
+						`Unpacking on "${terminal.name}" failed: ${unpacked.output.trim() || `exit ${unpacked.exitCode}`}`,
+					);
+				}
+				const left = packed.excluded
+					? `; left out ${packed.excluded} path${packed.excluded === 1 ? "" : "s"} matching ${(input.exclude ?? DEFAULT_UPLOAD_EXCLUDES).join(", ")}`
+					: "";
+				return `[${terminal.name}] uploaded ${input.from} to ${target}: ${packed.files} file${packed.files === 1 ? "" : "s"}, ${megabytes(packed.bytes)} (${megabytes(packed.archive.length)} packed), ${took()}${left}`;
+			}
+
+			if (input.direction === "download") {
+				const remote = inside(workspace, input.from.trim());
+				const name = remote.replace(/\/+$/, "").split("/").pop() || "download";
+				const local = await resolveLocalPath(root, input.to?.trim() || name);
+				const kind = await execToEnd(
+					client,
+					`if [ -d ${quoteShell(remote)} ]; then echo dir; elif [ -f ${quoteShell(remote)} ]; then stat -c 'file %s' ${quoteShell(remote)}; else echo missing; fi`,
+					signal,
+				);
+				const answer = kind.output.trim().split("\n").pop() ?? "";
+				if (answer === "missing" || kind.exitCode !== 0)
+					throw new RemoteTerminalError(
+						`${remote} does not exist on "${terminal.name}".`,
+					);
+				if (answer.startsWith("file")) {
+					const size = Number(answer.split(" ")[1]);
+					if (size > MAX_TRANSFER_BYTES)
+						throw new RemoteTerminalError(
+							`${remote} is larger than ${MAX_TRANSFER_BYTES / 1024 / 1024} MB.`,
+						);
+					const data = await client.download(remote, signal);
+					const written = await writeLocalFile(
+						local,
+						data,
+						input.overwrite === true,
+					);
+					return `[${terminal.name}] downloaded ${remote} to ${local} (${megabytes(data.length)}${written.replaced ? ", replaced the existing file" : ""}, ${took()})`;
+				}
+				const archivePath = `${workspace}/.cerebriline-download-${tag}.tar.gz`;
+				const excludes = (input.exclude ?? [])
+					.map((pattern) => `--exclude=${quoteShell(pattern)}`)
+					.join(" ");
+				const packed = await execToEnd(
+					client,
+					`tar -czf ${quoteShell(archivePath)} ${excludes} -C ${quoteShell(remote)} . && stat -c %s ${quoteShell(archivePath)}`,
+					signal,
+				);
+				try {
+					if (packed.exitCode !== 0) {
+						throw new RemoteTerminalError(
+							`Packing ${remote} on "${terminal.name}" failed: ${packed.output.trim() || `exit ${packed.exitCode}`}`,
+						);
+					}
+					const size = Number(packed.output.trim().split("\n").pop());
+					if (size > MAX_TRANSFER_BYTES) {
+						throw new RemoteTerminalError(
+							`${remote} packs to more than ${MAX_TRANSFER_BYTES / 1024 / 1024} MB; copy a smaller folder or leave more out with \`exclude\`.`,
+						);
+					}
+					const archive = await client.download(archivePath, signal);
+					const result = await unpackArchive(archive, local, {
+						overwrite: input.overwrite === true,
+					});
+					const notes = [
+						result.replaced
+							? `replaced ${result.replaced} existing file${result.replaced === 1 ? "" : "s"}`
+							: "",
+						result.skipped
+							? `skipped ${result.skipped} link${result.skipped === 1 ? "" : "s"} or special file${result.skipped === 1 ? "" : "s"}`
+							: "",
+					].filter(Boolean);
+					return `[${terminal.name}] downloaded ${remote} to ${local}: ${result.files} file${result.files === 1 ? "" : "s"}, ${megabytes(result.bytes)} (${megabytes(archive.length)} packed), ${took()}${notes.length ? `; ${notes.join("; ")}` : ""}`;
+				} finally {
+					await execToEnd(client, `rm -f ${quoteShell(archivePath)}`).catch(
+						() => undefined,
+					);
+				}
+			}
+			throw new RemoteTerminalError(
+				`Unknown direction "${String(input.direction)}": use upload or download.`,
+			);
+		},
+	});
+
+	const tools: AgentTool[] = [run, read, write] as AgentTool[];
+	if (options.getLocalRoot) tools.push(copy as AgentTool);
+	return tools;
 }
 
 /**

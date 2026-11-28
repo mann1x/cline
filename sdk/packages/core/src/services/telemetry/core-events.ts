@@ -664,7 +664,8 @@ export interface PlanModeCommandBlockedTelemetryProperties {
 		| "sed"
 		| "extract_document"
 		| "remote_run"
-		| "remote_write";
+		| "remote_write"
+		| "remote_copy";
 	/**
 	 * Short description of the blocked construct (e.g. "`rm`", "`sed -i`
 	 * (in-place edit)"). Never contains raw command content.

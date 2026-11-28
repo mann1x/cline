@@ -13,6 +13,7 @@ import { installDocumentReaderLanguages } from "@/sdk/document-reader-languages"
 import { installLibraryVectors } from "@/sdk/library-config"
 import { applyModelRequestCapture } from "@/sdk/model-request-capture"
 import { updateQaCredentials } from "@/sdk/qa-credentials-store"
+import { refreshRemoteTerminalDiscovery } from "@/sdk/remote-terminals-config"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
 import { telemetryService } from "../../../services/telemetry"
@@ -180,6 +181,15 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		}
 		if (request.openWebUiApiKey !== undefined) {
 			controller.stateManager.setSecret("openWebUiApiKey", request.openWebUiApiKey.trim() || undefined)
+		}
+		if (
+			request.remoteTerminalsEnabled !== undefined ||
+			request.remoteTerminals !== undefined ||
+			request.openWebUiApiKey !== undefined
+		) {
+			// The tab shows what Open WebUI reports: ask it now, briefly, so the
+			// state posted below already has the answer (or why there is none).
+			await refreshRemoteTerminalDiscovery({ force: true, timeoutMs: 5000 }).catch(() => undefined)
 		}
 		if (request.jevEnabled !== undefined) {
 			controller.stateManager.setGlobalState("jevEnabled", request.jevEnabled)

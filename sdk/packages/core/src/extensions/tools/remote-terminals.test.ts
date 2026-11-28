@@ -1,9 +1,27 @@
 import { spawn, spawnSync } from "node:child_process";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentToolContext } from "@cline/shared";
+import { create } from "tar";
 import { describe, expect, it } from "vitest";
 import { createPlanModeCommandGuardExtension } from "./command-guard-extension";
 import {
+	packFolder,
+	resolveLocalPath,
+	unpackArchive,
+} from "./remote-copy-local";
+import {
 	createRemoteTerminalTools,
+	listRemoteMachines,
+	matchRemoteTerminal,
 	type RemoteTerminalsConfig,
 	type RemoteWorkspaceRecord,
 	RUN_MARKER_VARIABLE,
@@ -32,11 +50,17 @@ interface Call {
 	url: URL;
 	headers: Record<string, string>;
 	body?: Record<string, unknown>;
+	form?: FormData;
 }
 
 /** A fake Open WebUI: records every request, answers from a handler. */
 function fakeOpenWebUi(
-	handler: (call: Call) => { status?: number; json?: unknown; text?: string },
+	handler: (call: Call) => {
+		status?: number;
+		json?: unknown;
+		text?: string;
+		bytes?: Uint8Array;
+	},
 ) {
 	const calls: Call[] = [];
 	const fetchImpl = (async (input: URL | string, init?: RequestInit) => {
@@ -44,10 +68,18 @@ function fakeOpenWebUi(
 			method: init?.method ?? "GET",
 			url: new URL(String(input)),
 			headers: (init?.headers ?? {}) as Record<string, string>,
-			body: init?.body ? JSON.parse(String(init.body)) : undefined,
+			body:
+				init?.body && !(init.body instanceof FormData)
+					? JSON.parse(String(init.body))
+					: undefined,
+			form: init?.body instanceof FormData ? init.body : undefined,
 		};
 		calls.push(call);
 		const answer = handler(call);
+		if (answer.bytes)
+			return new Response(new Uint8Array(answer.bytes), {
+				status: answer.status ?? 200,
+			});
 		const text = answer.text ?? JSON.stringify(answer.json ?? {});
 		return new Response(text, { status: answer.status ?? 200 });
 	}) as typeof fetch;
@@ -58,7 +90,12 @@ const WORKSPACE = "/home/u76b162c1/cerebriline/1790_task";
 
 /** Answers the workspace mkdir, then hands everything else to `rest`. */
 function withWorkspace(
-	rest: (call: Call) => { status?: number; json?: unknown; text?: string },
+	rest: (call: Call) => {
+		status?: number;
+		json?: unknown;
+		text?: string;
+		bytes?: Uint8Array;
+	},
 ) {
 	return (call: Call) => {
 		const command = call.body?.command;
@@ -132,9 +169,11 @@ describe("remote terminals: offering", () => {
 			"remote_write",
 		]);
 		expect(tool(tools, "remote_run").description).toContain(
-			"- bench-app: builds and benchmarks the app",
+			"- bench-app (machine solidpc-bench-app): builds and benchmarks the app",
 		);
-		expect(tool(tools, "remote_run").description).toContain("- general");
+		expect(tool(tools, "remote_run").description).toContain(
+			"- general (machine solidpc-open-terminal)",
+		);
 		expect(tool(tools, "remote_read").readOnly).toBe(true);
 		expect(tool(tools, "remote_write").readOnly).toBeUndefined();
 	});
@@ -334,7 +373,9 @@ describe("remote_run", () => {
 				{ terminal: "gpu", command: "x" },
 				context(),
 			),
-		).rejects.toThrow(/no remote terminal called "gpu".*bench-app, general/);
+		).rejects.toThrow(
+			/no remote terminal called "gpu".*Available: bench-app \(solidpc-bench-app\), general/,
+		);
 	});
 
 	it("explains Open WebUI's refusals", async () => {
@@ -540,6 +581,11 @@ describe("plan mode", () => {
 		expect(
 			before("remote_read", { terminal: "bench-app", action: "list" }),
 		).toBeUndefined();
+		for (const direction of ["upload", "download"]) {
+			expect(
+				before("remote_copy", { terminal: "bench-app", direction, from: "x" }),
+			).toMatchObject({ skip: true });
+		}
 	});
 });
 
@@ -611,5 +657,283 @@ describe.skipIf(process.platform === "win32")("stopCommand", () => {
 		expect(other.exitCode).toBeNull();
 		other.kill("SIGKILL");
 		expect(() => stopCommand("x; rm -rf /")).toThrow(/unexpected/);
+	});
+});
+
+const done = (data = "") => ({
+	json: { id: "x", status: "done", exit_code: 0, output: [{ data }] },
+});
+
+async function tempDir(label: string): Promise<string> {
+	return mkdtemp(join(tmpdir(), `rt-${label}-`));
+}
+
+describe("matching and discovery", () => {
+	const terminals = [
+		{ name: "solidpc", machineId: "solidpc-open-terminal" },
+		{ name: "bench-app", machineId: "solidpc-bench-app" },
+	];
+
+	it("finds a terminal by name, by machine ID, or by a part only one of them has", () => {
+		expect(matchRemoteTerminal(terminals, "Bench-App")?.machineId).toBe(
+			"solidpc-bench-app",
+		);
+		expect(matchRemoteTerminal(terminals, "solidpc-open-terminal")?.name).toBe(
+			"solidpc",
+		);
+		expect(matchRemoteTerminal(terminals, "open-terminal")?.name).toBe(
+			"solidpc",
+		);
+		expect(matchRemoteTerminal(terminals, "openterminal")?.name).toBe(
+			"solidpc",
+		);
+		// "solidpc" is a name, so it wins over the two IDs that contain it.
+		expect(matchRemoteTerminal(terminals, "solidpc")?.machineId).toBe(
+			"solidpc-open-terminal",
+		);
+		expect(
+			matchRemoteTerminal(
+				[
+					{ name: "a", machineId: "x-gpu-1" },
+					{ name: "b", machineId: "x-gpu-2" },
+				],
+				"gpu",
+			),
+		).toBeUndefined();
+	});
+
+	it("lists the machines Open WebUI lets this user use, without templates", async () => {
+		const { calls, fetchImpl } = fakeOpenWebUi(() => ({
+			json: [
+				{ id: "solidpc-open-terminal", name: "solidpc" },
+				{ id: "solidpc-bench-app", name: "" },
+				{ id: "orchestrator:t1", name: "Orchestrated", template_id: "t1" },
+			],
+		}));
+		expect(await listRemoteMachines(CONFIG, fetchImpl)).toEqual([
+			{ name: "solidpc", machineId: "solidpc-open-terminal" },
+			{ name: "solidpc-bench-app", machineId: "solidpc-bench-app" },
+		]);
+		expect(calls[0].url.pathname).toBe("/api/v1/machines/");
+		const refused = fakeOpenWebUi(() => ({ status: 401, text: "no" }));
+		await expect(listRemoteMachines(CONFIG, refused.fetchImpl)).rejects.toThrow(
+			/refused the API key/,
+		);
+	});
+
+	it("asks Open WebUI again for a name the session does not know", async () => {
+		const { calls, fetchImpl } = fakeOpenWebUi(withWorkspace(() => done("hi")));
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+			discover: async () => [
+				...CONFIG.terminals,
+				{ name: "gpu-box", machineId: "solidpc-gpu" },
+			],
+		});
+		await tool(tools, "remote_run").execute(
+			{ terminal: "gpu-box", command: "nvidia-smi" },
+			context(),
+		);
+		expect(calls.at(-1)?.url.pathname).toBe(
+			"/api/v1/machines/solidpc-gpu/execute",
+		);
+	});
+});
+
+describe("remote_copy", () => {
+	it("is offered only when the host names a local workspace", () => {
+		expect(
+			createRemoteTerminalTools({ getConfig: () => CONFIG }).map(
+				(entry) => entry.name,
+			),
+		).not.toContain("remote_copy");
+		expect(
+			createRemoteTerminalTools({
+				getConfig: () => CONFIG,
+				getLocalRoot: () => "/x",
+			}).map((entry) => entry.name),
+		).toContain("remote_copy");
+	});
+
+	it("uploads a binary file as it is", async () => {
+		const root = await tempDir("up-file");
+		const bytes = new Uint8Array([0, 255, 1, 254, 10, 13]);
+		await writeFile(join(root, "app.bin"), bytes);
+		const { calls, fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) =>
+				call.url.pathname.endsWith("/files/upload")
+					? { json: { path: `${WORKSPACE}/bin/app.bin`, size: 6 } }
+					: done(),
+			),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+			getLocalRoot: () => root,
+		});
+		const result = await tool(tools, "remote_copy").execute(
+			{
+				terminal: "bench-app",
+				direction: "upload",
+				from: "app.bin",
+				to: "bin/app.bin",
+			},
+			context(),
+		);
+		expect(result).toContain(`uploaded app.bin to ${WORKSPACE}/bin/app.bin`);
+		const upload = calls.find((call) =>
+			call.url.pathname.endsWith("/files/upload"),
+		);
+		expect(upload?.url.searchParams.get("directory")).toBe(`${WORKSPACE}/bin`);
+		const file = upload?.form?.get("file") as File;
+		expect(file.name).toBe("app.bin");
+		expect(new Uint8Array(await file.arrayBuffer())).toEqual(bytes);
+		await rm(root, { recursive: true, force: true });
+	});
+
+	it("uploads a folder packed, without .git and node_modules, and unpacks it there", async () => {
+		const root = await tempDir("up-dir");
+		await mkdir(join(root, "proj/src"), { recursive: true });
+		await mkdir(join(root, "proj/.git"), { recursive: true });
+		await mkdir(join(root, "proj/node_modules/m"), { recursive: true });
+		await writeFile(join(root, "proj/src/main.c"), "int main(){}\n");
+		await writeFile(join(root, "proj/.git/HEAD"), "ref\n");
+		await writeFile(join(root, "proj/node_modules/m/i.js"), "x\n");
+		const { calls, fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) =>
+				call.url.pathname.endsWith("/files/upload")
+					? { json: { path: "p", size: 1 } }
+					: done(),
+			),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+			getLocalRoot: () => root,
+		});
+		const result = await tool(tools, "remote_copy").execute(
+			{ terminal: "bench-app", direction: "upload", from: "proj" },
+			context(),
+		);
+		expect(result).toMatch(/uploaded proj to .*\/proj: 1 file,/);
+		expect(result).toContain("left out 2 paths");
+		const upload = calls.find((call) =>
+			call.url.pathname.endsWith("/files/upload"),
+		);
+		const name = (upload?.form?.get("file") as File).name;
+		expect(name).toMatch(/^\.cerebriline-upload-[a-f0-9]{12}\.tar\.gz$/);
+		const unpack = calls.at(-1)?.body?.command as string;
+		expect(unpack).toContain(
+			`mkdir -p '${WORKSPACE}/proj' && tar -xzf '${WORKSPACE}/${name}' -C '${WORKSPACE}/proj'`,
+		);
+		expect(unpack).toContain(`rm -f '${WORKSPACE}/${name}'`);
+		// What was sent unpacks to the source without the excluded folders.
+		const check = await tempDir("up-check");
+		await unpackArchive(
+			new Uint8Array(await (upload?.form?.get("file") as File).arrayBuffer()),
+			check,
+		);
+		expect(await readFile(join(check, "src/main.c"), "utf8")).toBe(
+			"int main(){}\n",
+		);
+		await expect(readFile(join(check, ".git/HEAD"))).rejects.toThrow();
+		await expect(
+			readFile(join(check, "node_modules/m/i.js")),
+		).rejects.toThrow();
+		await rm(root, { recursive: true, force: true });
+		await rm(check, { recursive: true, force: true });
+	});
+
+	it("downloads a folder, refuses to replace files, and replaces them when asked", async () => {
+		const remoteSide = await tempDir("remote");
+		await mkdir(join(remoteSide, "out"), { recursive: true });
+		await writeFile(join(remoteSide, "out/result.json"), '{"score":1}');
+		const archive = (await packFolder(remoteSide, [])).archive;
+		const root = await tempDir("down");
+		const { calls, fetchImpl } = fakeOpenWebUi(
+			withWorkspace((call) => {
+				const command = String(call.body?.command ?? "");
+				if (command.startsWith("if [ -d")) return done("dir\n");
+				if (command.startsWith("tar -czf")) return done(`${archive.length}\n`);
+				if (call.url.pathname.endsWith("/files/view"))
+					return { bytes: archive };
+				return done();
+			}),
+		);
+		const tools = createRemoteTerminalTools({
+			getConfig: () => CONFIG,
+			fetchImpl,
+			getLocalRoot: () => root,
+		});
+		const first = await tool(tools, "remote_copy").execute(
+			{ terminal: "bench-app", direction: "download", from: "results" },
+			context(),
+		);
+		expect(first).toContain(
+			`downloaded ${WORKSPACE}/results to ${join(root, "results")}: 1 file`,
+		);
+		expect(await readFile(join(root, "results/out/result.json"), "utf8")).toBe(
+			'{"score":1}',
+		);
+		expect(calls.at(-1)?.body?.command).toMatch(
+			/^rm -f '.*\.cerebriline-download-[a-f0-9]{12}\.tar\.gz'$/,
+		);
+		await expect(
+			tool(tools, "remote_copy").execute(
+				{ terminal: "bench-app", direction: "download", from: "results" },
+				context(),
+			),
+		).rejects.toThrow(/already exist.*overwrite: true/);
+		const again = await tool(tools, "remote_copy").execute(
+			{
+				terminal: "bench-app",
+				direction: "download",
+				from: "results",
+				overwrite: true,
+			},
+			context(),
+		);
+		expect(again).toContain("replaced 1 existing file");
+		await rm(root, { recursive: true, force: true });
+		await rm(remoteSide, { recursive: true, force: true });
+	});
+
+	it("never reads or writes outside the local workspace", async () => {
+		const root = await tempDir("conf");
+		const outside = await tempDir("outside");
+		await symlink(outside, join(root, "escape"));
+		await expect(resolveLocalPath(root, "../x")).rejects.toThrow(
+			/outside the workspace/,
+		);
+		await expect(resolveLocalPath(root, "escape/file")).rejects.toThrow(
+			/outside the workspace/,
+		);
+		await expect(resolveLocalPath(root, "/etc/passwd")).rejects.toThrow(
+			/outside the workspace/,
+		);
+		expect(await resolveLocalPath(root, "new/dir/file")).toMatch(
+			/new\/dir\/file$/,
+		);
+		await rm(root, { recursive: true, force: true });
+		await rm(outside, { recursive: true, force: true });
+	});
+
+	it("does not write the links an archive carries", async () => {
+		const source = await tempDir("links");
+		await writeFile(join(source, "real.txt"), "ok");
+		await symlink("/etc/passwd", join(source, "link"));
+		const chunks: Buffer[] = [];
+		for await (const chunk of create(
+			{ gzip: true, cwd: source, portable: true },
+			["."],
+		) as unknown as AsyncIterable<Buffer>)
+			chunks.push(chunk);
+		const target = await tempDir("links-out");
+		const result = await unpackArchive(Buffer.concat(chunks), target);
+		expect(result).toMatchObject({ files: 1, skipped: 1 });
+		await expect(readFile(join(target, "link"))).rejects.toThrow();
+		await rm(source, { recursive: true, force: true });
+		await rm(target, { recursive: true, force: true });
 	});
 });

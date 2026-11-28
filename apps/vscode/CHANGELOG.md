@@ -22,6 +22,16 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   removed after 7 days (configurable). No second model is involved: Open
   WebUI only forwards the requests. See "Open Terminal" in the docs for
   setting up one or several machines.
+- **Remote terminals find your machines by themselves.** With the Open
+  WebUI address and key entered, every machine Open WebUI lets you use is
+  listed and offered, under its Open WebUI name; the tab can rename,
+  describe or hide one. A machine added in Open WebUI later appears without
+  touching the tab. The model can also name a machine by part of its ID.
+- **Copy files to and from a remote terminal.** `remote_copy` moves a file
+  or a whole folder, binaries included, between the local workspace and a
+  machine without the contents passing through the conversation. Uploads
+  leave out `.git` and `node_modules`; downloads never replace local files
+  unless asked.
 
 ### Fixes
 

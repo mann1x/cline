@@ -138,3 +138,89 @@ export function expiredRemoteWorkspaces(
 	const cutoff = now - retentionDays * 24 * 60 * 60 * 1000
 	return entries.filter((entry) => entry.deletedAt !== undefined && entry.deletedAt <= cutoff)
 }
+
+/** What Open WebUI last said about the machines this user can reach. */
+export interface DiscoveredRemoteTerminals {
+	/** Epoch millis of the last answer (or failure). */
+	at: number
+	machines: Array<{ name: string; machineId: string }>
+	/** Why the last refresh failed; the machines from before are kept. */
+	error?: string
+}
+
+export function parseDiscoveredRemoteTerminals(raw: string | undefined): DiscoveredRemoteTerminals {
+	let parsed: Record<string, unknown> | undefined
+	try {
+		parsed = raw ? record(JSON.parse(raw)) : undefined
+	} catch {
+		parsed = undefined
+	}
+	const machines = Array.isArray(parsed?.machines) ? parsed.machines : []
+	const result: DiscoveredRemoteTerminals = {
+		at: typeof parsed?.at === "number" ? parsed.at : 0,
+		machines: machines.flatMap((entry) => {
+			const item = record(entry)
+			const machineId = text(item?.machineId)
+			return machineId ? [{ name: text(item?.name) || machineId, machineId }] : []
+		}),
+	}
+	const error = text(parsed?.error)
+	if (error) result.error = error
+	return result
+}
+
+/** A terminal as the tools see it: Open WebUI's list with the tab's rows over it. */
+export interface EffectiveRemoteTerminal {
+	name: string
+	machineId: string
+	description?: string
+	enabled: boolean
+	/** `openwebui`: found there (the tab may rename, describe or switch it off); `manual`: only on the tab. */
+	source: "openwebui" | "manual"
+	/** Open WebUI's own name, for a renamed machine. */
+	discoveredName?: string
+	/** The tab's row for it, by position in the stored list, if there is one. */
+	storedIndex?: number
+}
+
+/**
+ * Every machine Open WebUI reports, named as there unless a row on the tab
+ * with the same machine ID renames it, describes it or switches it off; then
+ * the tab's rows for machines Open WebUI did not report.
+ */
+export function mergeRemoteTerminals(
+	stored: readonly StoredRemoteTerminal[],
+	discovered: DiscoveredRemoteTerminals["machines"],
+): EffectiveRemoteTerminal[] {
+	const byMachine = new Map(stored.flatMap((row, index) => (row.machineId ? [[row.machineId, { row, index }] as const] : [])))
+	const found = discovered.map((machine): EffectiveRemoteTerminal => {
+		const match = byMachine.get(machine.machineId)
+		const row = match?.row
+		const entry: EffectiveRemoteTerminal = {
+			name: row?.name || machine.name,
+			machineId: machine.machineId,
+			enabled: row?.enabled !== false,
+			source: "openwebui",
+			discoveredName: machine.name,
+		}
+		if (row?.description) entry.description = row.description
+		if (match) entry.storedIndex = match.index
+		return entry
+	})
+	const seen = new Set(discovered.map((machine) => machine.machineId))
+	const manual = stored.flatMap((row, index): EffectiveRemoteTerminal[] => {
+		if (seen.has(row.machineId)) return []
+		{
+			const entry: EffectiveRemoteTerminal = {
+				name: row.name,
+				machineId: row.machineId,
+				enabled: row.enabled !== false,
+				source: "manual",
+				storedIndex: index,
+			}
+			if (row.description) entry.description = row.description
+			return [entry]
+		}
+	})
+	return [...found, ...manual]
+}
